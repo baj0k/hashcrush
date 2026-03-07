@@ -1,0 +1,110 @@
+{% extends "layout.html" %}
+{% block header %}
+<br>
+<h1>Profile</h1>
+<br>
+Edit your profile.
+<br>
+<br>
+<br>
+{% endblock header %}
+{% block content %}
+    <div class="content-section">
+        <form method="POST" action="" enctype="multipart/form-data">
+            {{ form.hidden_tag() }}
+            <fieldset class="form-group">
+                <legend class="border-bottom mb-4">Account Info</legend> <p class="text-secondary">Username: {{ current_user.email_address }}</p>
+                <div class="form-group">
+                    {{ form.first_name.label(class="form-control-label") }}
+
+                    {% if form.first_name.errors %}
+                        {{ form.first_name(class="form-control form-control-lg is-invalid") }}
+                        <div class="invalid-feedback">
+                            {% for error in form.first_name.errors %}
+                                <span>{{ error }}</span>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        {{ form.first_name(class="form-control form-control-lg") }}
+                    {% endif %}
+                </div>
+                <div class="form-group">
+                    {{ form.last_name.label(class="form-control-label") }}
+
+                    {% if form.last_name.errors %}
+                        {{ form.last_name(class="form-control form-control-lg is-invalid") }}
+                        <div class="invalid-feedback">
+                            {% for error in form.last_name.errors %}
+                                <span>{{ error }}</span>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        {{ form.last_name(class="form-control form-control-lg") }}
+                    {% endif %}
+                </div>
+                <hr>
+                <p class="text-secondary">Change Password (optional)</p>
+                <div class="form-group">
+                    {{ form.current_password.label(class="form-control-label") }}
+                    {% if form.current_password.errors %}
+                        {{ form.current_password(class="form-control form-control-lg is-invalid") }}
+                        <div class="invalid-feedback">
+                            {% for error in form.current_password.errors %}
+                                <span>{{ error }}</span>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        {{ form.current_password(class="form-control form-control-lg") }}
+                    {% endif %}
+                </div>
+                <div class="form-group">
+                    {{ form.new_password.label(class="form-control-label") }}
+                    {% if form.new_password.errors %}
+                        {{ form.new_password(class="form-control form-control-lg is-invalid") }}
+                        <div class="invalid-feedback">
+                            {% for error in form.new_password.errors %}
+                                <span>{{ error }}</span>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        {{ form.new_password(class="form-control form-control-lg") }}
+                    {% endif %}
+                </div>
+                <div class="form-group">
+                    {{ form.confirm_new_password.label(class="form-control-label") }}
+                    {% if form.confirm_new_password.errors %}
+                        {{ form.confirm_new_password(class="form-control form-control-lg is-invalid") }}
+                        <div class="invalid-feedback">
+                            {% for error in form.confirm_new_password.errors %}
+                                <span>{{ error }}</span>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        {{ form.confirm_new_password(class="form-control form-control-lg") }}
+                    {% endif %}
+                </div>
+                <div class="form-group">
+                    <div class="form-outline">
+                        <label for="usr">User API Key:</label> 
+                        <div class="form-outline mb-3" style="width: 22rem">
+                            <div class="input-group"> 
+                                {% if current_user.api_key %}
+                                    <input class="form-control" id="formControlReadonly" type="text" value={{current_user.api_key}} aria-label="readonly input example" readonly/>
+                                {% else %}
+                                    <input class="form-control" id="formControlReadonly" type="text" value="No key set" aria-label="readonly input example" readonly/>
+                                {% endif %}
+                                <label class="form-label" for="formControlReadonly"></label>    
+                                <div class="input-group-append">
+                                    <a class="fa fa-refresh btn btn-warning fa-1x" href="/profile/generate_api_key" role="button" title=start></a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>                
+            </fieldset>
+            <div class="form-group">
+                {{ form.submit(class="btn btn-primary pull-right") }}
+            </div>
+        </form>
+    </div>
+{% endblock content %}

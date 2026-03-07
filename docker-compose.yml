@@ -1,0 +1,35 @@
+services:
+  app:
+    build: .
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    links:
+      - db
+    ports:
+      - "5000:5000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: "mysql:8-debian"
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    restart: always
+    cap_add:
+      - SYS_NICE
+    environment:
+      MYSQL_DATABASE: hashcrush
+      MYSQL_USER: hashcrush
+      MYSQL_PASSWORD: hashcrush
+      MYSQL_RANDOM_ROOT_PASSWORD: yes
+    ports:
+      - '3306:3306'
+    volumes:
+      - db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+volumes:
+  db:
+    driver: local

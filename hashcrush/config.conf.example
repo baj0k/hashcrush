@@ -1,0 +1,16 @@
+[database]
+host = localhost
+username = username
+password = password
+
+[app]
+# Optional: set a stable app secret key here (or via HASHCRUSH_SECRET_KEY env var).
+secret_key =
+# Optional: absolute path or command name for local hashcat binary.
+hashcat_bin = hashcat
+# Optional: hashcat --status timer interval in seconds.
+hashcat_status_timer = 5
+# Required: external wordlists root (for example /usr/share/seclists).
+wordlists_path = /usr/share/seclists
+# Required: external rules root (for example /usr/share/hashcat/rules).
+rules_path = /usr/share/hashcat/rules

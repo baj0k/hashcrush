@@ -1,0 +1,117 @@
+{% extends "layout.html"%}
+{% block header %}
+<br>
+<h1>Settings</h1>
+<br>
+<br>
+<br>
+<br>
+{% endblock header %}
+{% block content %}
+    <nav>
+        <div class="nav nav-tabs" id="nav-tab" role="tablist">
+            <a class="nav-link active" id="nav-hashcrush-tab" data-toggle="tab" href="#nav-hashcrush" role="tab" aria-controls="nav-hashcrush" aria-selected="true">HashCrush</a>
+            <a class="nav-link" id="nav-data-tab" data-toggle="tab" href="#nav-data" role="tab" aria-controls="nav-data" aria-selected="false">Data Management</a>
+            <a class="nav-link" id="nav-info-tab" data-toggle="tab" href="#nav-info" role="tab" aria-controls="nav-info" aria-selected="false">Information</a>
+        </div>
+    </nav>
+    <div class="tab-content" id="nav-tabContent">
+        <div class="tab-pane fade show active" id="nav-hashcrush" role="tabpanel" aria-labelledby="nav-hashcrush-tab">
+            <br>
+            <div class="content-section">
+                <form method="POST" action="">
+                    {{ HashCrushForm.hidden_tag() }}
+                    <fieldset class="form-group">
+                        <div class="form-group">
+                            {{ HashCrushForm.max_runtime_jobs.label(class="form-control-label") }}
+                            {% if HashCrushForm.max_runtime_jobs.errors %}
+                                {{ HashCrushForm.max_runtime_jobs(class="form-control form-control-lg is-invalid") }}
+                                <div class="invalid-feedback">
+                                    {% for error in HashCrushForm.max_runtime_jobs.errors %}
+                                        <span>{{ error }}</span>
+                                    {% endfor %}
+                                </div>
+                            {% else %}
+                                {{ HashCrushForm.max_runtime_jobs(class="form-control form-control-lg") }}
+                            {% endif %}
+                        </div>
+                        <div class="form-group">
+                            {{ HashCrushForm.max_runtime_tasks.label(class="form-control-label") }}
+                            {% if HashCrushForm.max_runtime_tasks.errors %}
+                                {{ HashCrushForm.max_runtime_tasks(class="form-control form-control-lg is-invalid") }}
+                                <div class="invalid-feedback">
+                                    {% for error in HashCrushForm.max_runtime_tasks.errors %}
+                                        <span>{{ error }}</span>
+                                    {% endfor %}
+                                </div>
+                            {% else %}
+                                {{ HashCrushForm.max_runtime_tasks(class="form-control form-control-lg") }}
+                            {% endif %}
+                        </div>
+                        <div class="form-group">
+                            <small class="text-muted">Job priority is always user-settable during job creation.</small>
+                        </div>
+                    </fieldset>
+                    <div class="form-group">
+                        {{ HashCrushForm.submit(class="btn btn-primary pull-right") }}
+                    </div>
+                </form>
+            </div>
+        </div>
+        <div class="tab-pane fade" id="nav-data" role="tabpanel" aria-labelledby="nav-data-tab">
+            <br>
+            <div class="content-section">
+                <p class="text-muted mb-3">
+                    Clearing temp data removes only generated files in <code>{{ temp_folder_path }}/</code>.
+                    It does not delete jobs, hash records, users, or other database data.
+                </p>
+                <table class="table">
+                    <tbody>
+                        <tr>
+                            <td>Temp Folder</td>
+                            <td><code>{{ temp_folder_path }}/</code></td>
+                        </tr>
+                        <tr>
+                            <td>Current Size</td>
+                            <td>{{ tmp_folder_size_human }} ({{ tmp_folder_size }} bytes)</td>
+                        </tr>
+                        <tr>
+                            <td>Action</td>
+                            <td>
+                                <form action="{{ url_for('settings.clear_temp_folder') }}" method="POST" class="d-inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button
+                                        class="btn btn-danger"
+                                        type="submit"
+                                        title="Clear Temp Folder"
+                                        onclick="return confirm('Delete all files in {{ temp_folder_path }}/ ?');"
+                                    >
+                                        <i class="fa fa-trash" aria-hidden="true"></i> Clear Temp Folder
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="tab-pane fade" id="nav-info" role="tabpanel" aria-labelledby="nav-info-tab">
+            <br>
+            <div class="content-section">
+                <dl>
+                    <dt>Application Version (Code):</dt>
+                    <dd>{{ application_version }}</dd>
+
+                    <dt>Database Schema Revision (Alembic):</dt>
+                    <dd>{% if database_version %}{{ database_version }}{% else %}Unavailable{% endif %}</dd>
+
+                    <dt>Python Runtime:</dt>
+                    <dd>{{ python_version }}</dd>
+                </dl>
+                <small class="text-muted">
+                    Database schema revision is read from the active database <code>alembic_version</code> table.
+                </small>
+            </div>
+        </div>
+    </div>
+{% endblock content %}

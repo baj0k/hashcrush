@@ -1,0 +1,784 @@
+{% extends "layout.html"%}
+{% block header %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@3.1.0/dist/chart.min.js"></script>
+
+<style>
+    .download_btn{
+        float: right;
+        color: gray;
+    }
+    .download_btn:hover{
+        color: #007bff;
+    }   
+    #config_options .content-section{
+        margin-right: 20px;
+    }
+    #config_options .btn{
+        padding:2px 5px;
+    }
+    #config_options{
+        margin-bottom: 20px;
+    }
+    #config_options .input-group-text{
+        background-color: white;
+        border: none;      
+    }
+    #toggle_icons{
+        color: #007bff;
+        font-size: 22px;
+    }
+    /*Remove default blue border*/
+    #config_options button:focus
+    {
+        outline:0px !important;
+        -webkit-appearance:none;
+        box-shadow: none !important;
+    }
+    /*Limit how big the dropdown can get with large amounts of data*/
+    .dropdown-menu{
+        max-height: 350px;
+        overflow-y: auto;    
+    }
+</style>
+
+<script>
+    var dict = { 1: "recovered_accounts", 2: "password_complexity", 3:"recovered_hashes", 4:"composition_makeup", 5:"passwords_count_len", 6:"top_10_passwords"};
+    var toggle = false;
+    extendChart();
+
+    function extendChart() { // add text to the middle of all doughnut charts
+        var originalDraw = Chart.controllers.doughnut.prototype.draw;
+        Chart.controllers.doughnut.prototype.draw = function (ease) {
+            originalDraw.call(this, ease);
+
+            const ctx = this.chart.ctx
+            const chartArea = this.chart.chartArea
+
+            //Font style
+            const fontStyle = 'normal'
+            //matching chart headers
+            const fontFamily = `-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,
+            'Noto Sans',sans-serif,'Apple Color Emoji','Segoe UI Emoji','Segoe UI Symbol','Noto Color Emoji'`
+            const fontSize = chartArea.right / 15
+            ctx.font = `${fontStyle} ${fontSize}px ${fontFamily}`
+            ctx.fillStyle = 'rgba(0,0,0,0.6)' //Text color
+
+            //Center text
+            ctx.textAlign = 'center'
+            ctx.textBaseline = 'middle'
+            var value = this.chart.options.percent ? this.chart.options.percent : "";             
+            ctx.fillText(value, (chartArea.right + chartArea.left) / 2, (chartArea.bottom + chartArea.top) / 2)
+            
+            //Set chart background color to white
+            ctx.globalCompositeOperation = 'destination-over';
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, this.chart.width, this.chart.height);
+        };
+    }
+
+    function chart_download(id) {       
+            var chart = doughNut;
+            document.getElementById(dict[id]).onclick = function () {
+            //The title is not part of the graph canvas so it would not show up in the image download 
+            //So we add a hidden title, and only show it when downloading the image. 
+            chart.options.animation.duration = 0;
+            chart.options.plugins.title.display = true;
+            chart.update();    
+            //Create a download link
+            var a = document.createElement('a');
+            a.href = chart.toBase64Image();
+            a.download = dict[id] + '.png';
+            a.click();         
+            //Hide the title again
+            chart.options.plugins.title.display = false;
+            chart.update();
+            //Turn back on animations 
+            chart.options.animation.duration = 1000;
+            chart.update();          
+        };
+    }
+
+    function get_chart(id){
+        document.getElementById(dict[id]).click();
+    }
+    
+    function chart_download_all(){
+        if(confirm("This will download all charts on the page")){
+            for(var i=1;i<=6;i++){
+                get_chart(i); 
+            } 
+        }   
+    }
+
+    function show_hide(){
+        if(toggle){
+            document.querySelectorAll('.download_btn').forEach(function(el) {
+                el.style.display = 'block';
+            });
+            document.getElementById("toggle_icons").style.color = "#007bff";         
+            toggle = false;
+        }
+        else{
+            document.querySelectorAll('.download_btn').forEach(function(el) {
+                el.style.display = 'none';
+            });
+            document.getElementById("toggle_icons").style.color = "gray";
+            toggle = true;
+        }
+    }
+
+</script>
+{% endblock header %}
+{% block content %}
+<br>
+<br>
+<div id="config_options" class="form-row">
+    <div class="col-auto mb-1"> 
+        <span>Customers &nbsp;</h4>
+        <div class="content-section btn btn-outline-secondary">
+            <div class="dropdown">
+                <button class="btn btn-default dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown"
+                    aria-haspopup="true" aria-expanded="false">
+                    {% if customer_id %}
+                        {% for customer in customers %}
+                            {% if customer.id|string() == customer_id|string() %}
+                                {{ customer.name }}
+                            {% endif %}
+                        {% endfor %}
+                    {% else %}
+                        All Customers
+                    {% endif %}
+                </button>
+                <div class="dropdown-menu">
+                    {% if customer_id %}
+                        <a class="dropdown-item" href="/analytics"> All Customers </a>
+                        <div class="dropdown-divider"></div>
+                    {% endif %}
+        
+                    {% for customer in customers %}  
+                        <a class="dropdown-item" href="/analytics?customer_id={{customer.id}}"> {{customer.name}} </a>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-auto mb-1">
+        <span>HashFiles &nbsp;</h4>
+        {% if customer_id is not none %}
+        <div class="content-section btn btn-outline-secondary">
+            <div class="dropdown">
+                <button class="btn btn-default dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown"
+                    aria-haspopup="true" aria-expanded="false">
+                    {% if hashfile_id %}
+                        {% for hashfile in hashfiles %}
+                            {% if hashfile.id|string() == hashfile_id|string() %}
+                                {{ hashfile.name }}
+                            {% endif %}
+                        {% endfor %}
+                    {% else %}
+                        All Hashfiles
+                    {% endif %}
+                </button>
+                <div class="dropdown-menu">
+                    {% if hashfile_id %}
+                        <a class="dropdown-item" href="/analytics?customer_id={{customer_id}}"> All Hashfiles </a>
+                        <div class="dropdown-divider"></div>
+                    {% endif %}
+                    {% for hashfile in hashfiles %}
+                        {% if customer_id %}
+                            {% if hashfile.customer_id|string() == customer_id|string() %}
+                                <a class="dropdown-item" href="/analytics?customer_id={{customer_id}}&hashfile_id={{hashfile.id}}"> {{hashfile.name}} </a>
+                            {% endif %}
+                        {% else %}
+                            <a class="dropdown-item" href="/analytics?customer_id={{customer_id}}&hashfile_id={{hashfile.id}}"> {{hashfile.name}} </a>
+                        {% endif %}
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="content-section btn btn-outline-secondary">
+            <div class="dropdown">
+                <button class="btn btn-default dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown"
+                aria-haspopup="true" aria-expanded="false">
+              N/A
+            </button>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+  
+    <div class="ml-auto mr-2">
+        <div class="input-group">
+           
+            <div class="dropdown btn btn-outline-secondary" aria-describedby="basic-addon1">
+                <button class="btn btn-default dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown"
+                    aria-haspopup="true" aria-expanded="false">Download Charts</button>
+                <div class="dropdown-menu">         
+                    <button class="dropdown-item" onclick="chart_download_all()">All Charts</button>
+                    <div class="dropdown-divider"></div>           
+                    <button class="dropdown-item" onclick=get_chart(1)>Recovered Accounts</button>
+                    <div class="dropdown-divider"></div>
+                    <button class="dropdown-item" onclick=get_chart(2)>Password Complexity</button>
+                    <div class="dropdown-divider"></div>
+                    <button class="dropdown-item" onclick=get_chart(3)>Recovered Hashes</button>                    
+                    <div class="dropdown-divider"></div>
+                    <button class="dropdown-item" onclick=get_chart(4)>Composition Makeup</button>
+                    <div class="dropdown-divider"></div>
+                    <button class="dropdown-item" onclick=get_chart(5)>Passwords Count by Length</button>
+                    <div class="dropdown-divider"></div>
+                    <button class="dropdown-item" onclick=get_chart(6)>Top 10 Passwords</button>
+                </div>
+            </div> 
+            <div class="input-group-append">
+                <span class="input-group-text" id="basic-addon1">
+                    <i id="toggle_icons" class="fa fa-eye-slash" role="button" onclick="show_hide()" title="Show/Hide Icons"></i>
+                </span>
+              </div>    
+          </div>
+      </div>
+    </div>
+</div>
+
+<div class="alert alert-info mb-4" role="alert">
+    <h6 class="mb-2">Analytics Definitions</h6>
+    <p class="mb-2">All metrics are scoped by the selected Customer and Hashfile filters.</p>
+    <ul class="mb-0">
+        <li><strong>Recovered Accounts</strong> counts account records (rows linked through <code>hashfile_hashes</code>). Recovered % = recovered / (recovered + unrecovered) * 100.</li>
+        <li><strong>Recovered Hashes</strong> uses unique values: recovered side is distinct recovered plaintexts, unrecovered side is distinct unrecovered ciphertexts.</li>
+        <li><strong>Password Complexity</strong> marks a recovered password as meeting complexity when length is at least 8 and at least 3 of 4 character classes exist: lower, upper, digit, symbol.</li>
+        <li><strong>Composition Makeup</strong> is derived from recovered passwords only and groups patterns using <code>?l</code>, <code>?u</code>, <code>?d</code>, and <code>?s</code>. The chart shows the top 4 groups and rolls up the rest into <em>Other</em>.</li>
+    </ul>
+</div>
+
+<!-- this layout is so jank, someone please help me-->
+
+<div class="container">
+    <div class="row">
+        <!-- spacer -->
+    </div>
+    <div class="row">
+        <div class="col" align="center">
+            <div class="card">
+               
+                <h5 class="card-header">Recovered Accounts
+                    <a id="recovered_accounts" class="fa fa-download download_btn" role="button" title="Download Chart"></a>
+                </h5>
+                <div class="card-body">
+                    <canvas id="TotalCrackedAccountHashes" width="300" height="300">
+                        <script>
+                            var vis1 = document.getElementById("TotalCrackedAccountHashes").getContext("2d");
+                            var doughNut = new Chart(vis1, {
+                                type: 'doughnut',
+                                data: {
+                                    labels: {{ fig1_labels | safe }},
+                            datasets: [{
+                                label: "my label",
+                                data: {{ fig1_values | safe }},
+                                backgroundColor: ['rgba(192, 0, 0, 0.5)', 'rgba(0, 128, 0, 0.5)']
+                                }]
+                            },
+                            options: { 
+                                percent: {{fig1_percent | safe}}, // Custom variable to store the value in the middle of the chart
+                                responsive: false,
+                                    plugins: {
+                                   
+                                    legend: {
+                                        position: 'bottom',
+                                    },
+                                    title: {
+                                        color: 'rgba(0,0,0,0.6)', //Text color
+                                        display: false,
+                                            text: 'Recovered Accounts',
+                                                font: {
+                                            size: 18,
+                                                family: 'Arial'
+                                        },
+                                        padding: {
+                                            top: 10,
+                                            bottom: 20
+                                        }
+                                    }
+                                },
+                                elements: {
+                                    center: {
+                                        text: 'Red is 2/3 of the total numbers',
+                                            color: '#FF6384', // Default is #000000
+                                                fontStyle: 'Arial', // Default is Arial
+                                                    sidePadding: 20, // Default is 20 (as a percentage)
+                                                        minFontSize: 25, // Default is 20 (in px), set to false and text will not wrap.
+                                                            lineHeight: 25 // Default is 25 (in px), used for when text wraps
+                                    }
+                                }
+                            }
+                        });
+                        chart_download(1);
+                        </script>
+                    </canvas>
+                </div>
+            </div>
+        </div>
+        <div class="col" align="center">
+            <div class="card">
+                <h5 class="card-header">Password Complexity
+                    <a id="password_complexity" class="fa fa-download download_btn" role="button" title="Download Chart"></a>
+                </h5>    
+                <div class="card-body">
+                    <canvas id="Complexity" width="300" height="300">
+                        <script>
+                            var ctx = document.getElementById("Complexity").getContext("2d");
+                            var doughNut = new Chart(ctx, {
+                                type: 'doughnut',
+                                data: {
+                                    labels: {{ fig2_labels | safe }},
+                            datasets: [{
+                                label: "my label",
+                                data: {{ fig2_values | safe }},
+                                backgroundColor: ['rgba(192, 0, 0, 0.5)', 'rgba(227, 108, 10, 0.5)', 'rgba(0, 128, 0, 0.5)']
+                                }]
+                            },
+                            options: {
+                                responsive: false,
+                                    plugins: {
+                                    legend: {
+                                        position: 'bottom',
+                                    },
+                                    title: {
+                                        color: 'rgba(0,0,0,0.6)', //Text color
+                                        display: false,
+                                            text: 'Password Complexity',
+                                                font: {
+                                            size: 18,
+                                                family: 'Arial'
+                                        },
+                                        padding: {
+                                            top: 10,
+                                            bottom: 10
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                        chart_download(2);
+                        </script>
+                    </canvas>
+                </div>
+            </div>
+
+        </div>
+    </div>
+    <div class="row">
+        <div class="col" align="center">
+            <br>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col" align="center">
+            <div class="card">
+                <h5 class="card-header">Recovered Hashes
+                    <a id="recovered_hashes" class="fa fa-download download_btn" role="button" title="Download Chart"></a>
+                </h5>
+                <div class="card-body">
+                    <canvas id="TotalCrackedHashes2" width="300" height="300">
+                        <script>
+                            var vis3 = document.getElementById("TotalCrackedHashes2").getContext("2d");
+                            var doughNut = new Chart(vis3, {
+                                type: 'doughnut',
+                                data: {
+                                    labels: {{ fig3_labels | safe }},
+                            datasets: [{
+                                label: "my label",
+                                data: {{ fig3_values | safe }},
+                                backgroundColor: ['rgba(192, 0, 0, 0.5)', 'rgba(0, 128, 0, 0.5)']
+                                }]
+                            },
+                            options: { 
+                                percent: {{fig3_percent | safe}}, // Custom variable to store the value in the middle of the chart
+                                responsive: false,
+                                    plugins: {
+                                   
+                                    legend: {
+                                        position: 'bottom',
+                                    },
+                                    title: {
+                                        color: 'rgba(0,0,0,0.6)', //Text color
+                                        display: false,
+                                            text: 'Recovered Hashes',
+                                                font: {
+                                            size: 18,
+                                                family: 'Arial'
+                                        },
+                                        padding: {
+                                            top: 10,
+                                            bottom: 20
+                                        }
+                                    }
+                                },
+                                elements: {
+                                    center: {
+                                        text: 'Red is 2/3 of the total numbers',
+                                            color: '#FF6384', // Default is #000000
+                                                fontStyle: 'Arial', // Default is Arial
+                                                    sidePadding: 20, // Default is 20 (as a percentage)
+                                                        minFontSize: 25, // Default is 20 (in px), set to false and text will not wrap.
+                                                            lineHeight: 25 // Default is 25 (in px), used for when text wraps
+                                    }
+                                }
+                            }
+                        });
+                        chart_download(3);
+                        </script>
+                    </canvas>
+                </div>
+            </div>
+        </div>
+        <div class="col" align="center">
+            <div class="card">
+                <h5 class="card-header">Composition Makeup
+                    <a id="composition_makeup" class="fa fa-download download_btn" role="button" title="Download Chart"></a>
+                </h5>
+                <div class="card-body">
+                    <canvas id="CharSet" width="300" height="300">
+                        <script>
+                            var ctx = document.getElementById("CharSet").getContext("2d");
+                            var doughNut = new Chart(ctx, {
+                                type: 'doughnut',
+                                data: {
+                                    labels: {{ fig4_labels | safe }},
+                            datasets: [{
+                                label: "my label",
+                                data: {{ fig4_values | safe }},
+                                backgroundColor: ['rgba(192, 0, 0, 0.5)',
+                                'rgba(227, 108, 10, 0.5)',
+                                'rgba(224, 202, 33, 0.5)',
+                                'rgba(0, 128, 0, 0.5)',
+                                'rgba(128, 128, 128, 0.5)',]
+                                    }]
+                                },
+                            options: {
+                                responsive: false,
+                                    plugins: {
+                                    legend: {
+                                        position: 'bottom',
+                                        },
+                                    title: {
+                                        color: 'rgba(0,0,0,0.6)', //Text color
+                                        display: false,
+                                            text: 'Composition Makeup',
+                                                font: {
+                                            size: 18,
+                                                family: 'Arial'
+                                        },
+                                        padding: {
+                                            top: 10,
+                                            bottom: 20
+                                        }
+                                    }
+                                }
+                            }
+                            });
+                            chart_download(4);
+                        </script>
+                    </canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col" align="center">
+            <br>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col" align="center">
+            <div class="card">
+                <h5 class="card-header">General Stats</h5>
+                <div class="card-body">
+                    <table class="table">
+                        <tbody>
+                            {% if customer_id %}
+                            <tr>
+                                <td>
+                                    Total Accounts:
+                                </td>
+                                <td>
+                                    {{ total_accounts }}
+                                </td>
+                            </tr>
+                            {% endif %}
+                            <tr>
+                                <td>
+                                    Total Unique Hashes:
+                                </td>
+                                <td>
+                                    {{ total_unique_hashes }}
+                                </td>
+                            </tr>
+                            {% if customer_id %}
+                            <tr>
+                                <td>
+                                    Total Runtime:
+                                </td>
+                                <td>
+                                    {% if total_runtime > 604800 %}
+                                        {{ (total_runtime/604800)|round|int }} week(s)<br>  
+                                    {% elif total_runtime > 86400 %}
+                                        {{ (total_runtime/86400)|round|int }} day(s)<br>    
+                                    {% elif total_runtime > 3600 %}
+                                        {{ (total_runtime/3600)|round|int }} hour(s)<br>
+                                    {% elif total_runtime > 60 %}
+                                        {{ (total_runtime/60)|round|int }} minute(s)<br>
+                                    {% elif total_runtime < 60 %}
+                                        < 1 minute<br>                                        
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endif %}
+                            <tr>
+                                <td>
+                                    Download Recovered:
+                                </td>
+                                <td>
+                                    {% if customer_id %}
+                                        {% if hashfile_id %}
+                                            <a class="btn btn-primary btn-sm" href="/analytics/download?type=found&customer_id={{customer_id}}&hashfile_id={{hashfile_id}}" role="button">Cracked</a> <br>
+                                        {% else %}
+                                            <a class="btn btn-primary btn-sm" href="/analytics/download?type=found&customer_id={{customer_id}}" role="button">Cracked</a> <br>
+                                        {% endif %}
+                                    {% else %}
+                                        <a class="btn btn-primary btn-sm" href="/analytics/download?type=found" role="button">Cracked</a> <br>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>
+                                    Download Unrecovered:
+                                </td>
+                                <td>
+                                    {% if customer_id %}
+                                        {% if hashfile_id %}
+                                            <a class="btn btn-primary btn-sm" href="/analytics/download?type=left&customer_id={{customer_id}}&hashfile_id={{hashfile_id}}" role="button">Uncracked</a> <br>
+                                        {% else %}
+                                            <a class="btn btn-primary btn-sm" href="/analytics/download?type=left&customer_id={{customer_id}}" role="button">Uncracked</a> <br>
+                                        {% endif %}
+                                    {% else %}
+                                        <a class="btn btn-primary btn-sm" href="/analytics/download?type=left" role="button">Uncracked</a> <br>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col" align="center">
+            <br>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col" align="center">
+            <div class="card">
+                <h5 class="card-header">Passwords Count by Length
+                    <a id="passwords_count_len" class="fa fa-download download_btn" role="button" title="Download Chart"></a>
+                </h5>
+                <div class="card-body">
+                    <canvas id="PasswordsCountByLength" width="1000" height="300">
+                        <script>
+                            var ctx = document.getElementById("PasswordsCountByLength").getContext("2d");
+                            var doughNut = new Chart(ctx, {
+                                type: 'bar',
+                                data: {
+                                    labels: {{ fig5_labels | safe }},
+                            datasets: [{
+                                label: "Password Counts by Lengths",
+                                data: {{ fig5_values | safe }},
+                                backgroundColor: ['rgba(0, 128, 0, 0.5)']
+                                    }]
+                                },
+                            plugins: [{
+                                beforeDraw: function(chart,args,options){
+                                        const c = chart.ctx
+                                        c.fillStyle = 'white';
+                                        c.fillRect(0, 0, chart.width, chart.height);
+                                   }
+                                }],
+                            options: {
+                                responsive: true, //Resizes the chart canvas when its container does
+                                    plugins: {
+                                    legend: {
+                                        display: false,
+                                        },
+                                    title: {
+                                        color: 'rgba(0,0,0,0.6)', //Text color
+                                        display: false,
+                                            text: 'Passwords Count by Length',
+                                                font: {
+                                            size: 18,
+                                                family: 'Arial'
+                                        },
+                                        padding: {
+                                            top: 10,
+                                            bottom: 20
+                                        }
+                                    }
+                                }
+                            }
+                            });
+                            chart_download(5);
+                        </script>
+                    </canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col" align="center">
+            <br>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col" align="center">
+            <div class="card">
+                <h5 class="card-header">Top 10 Passwords
+                    <a id="top_10_passwords" class="fa fa-download download_btn" role="button" title="Download Chart"></a>
+                </h5>
+                <div class="card-body">
+                    <canvas id="Top10Passwords" width="1000%" height="300">
+                        <script>
+                            var ctx = document.getElementById("Top10Passwords").getContext("2d");
+                            var doughNut = new Chart(ctx, {
+                                type: 'bar',
+                                data: {
+                                    labels: {{ fig6_labels | safe }},
+                            datasets: [{
+                                label: "Top 10 Passwords",
+                                data: {{ fig6_values | safe }},
+                                backgroundColor: ['rgba(0, 128, 0, 0.5)']
+                                    }]
+                                },
+                            plugins: [{
+                                beforeDraw: function(chart,args,options){
+                                        const c = chart.ctx
+                                        c.fillStyle = 'white';
+                                        c.fillRect(0, 0, chart.width, chart.height);
+                                   }
+                                }],
+                            options: {
+                                responsive: true, //Resizes the chart canvas when its container does
+                                    plugins: {
+                                    legend: {
+                                        display: false,
+                                        },
+                                    title: {
+                                        color: 'rgba(0,0,0,0.6)', //Text color
+                                        display: false,
+                                            text: 'Top 10 Passwords',
+                                                font: {
+                                            size: 18,
+                                                family: 'Arial'
+                                        },
+                                        padding: {
+                                            top: 10,
+                                            bottom: 20
+                                        }
+                                    }
+                                }
+                            }
+                            });
+                            chart_download(6);
+                        </script>
+                    </canvas>
+                </div>
+            </div>
+
+        </div>
+    </div>
+    <div class="row">
+        <div class="col" align="center">
+            <br>
+            <br>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col" align="center">
+            <div class="card">
+                <h5 class="card-header">Top 10 Masks</h5>
+                <div class="card-body">
+                    <table class="table">
+                        <tbody>
+                            <tr>
+                                <th scope="col">
+                                    Mask:
+                                </th>
+                                <th scope="col">
+                                    Total:
+                                </th>
+                                <th scope="col">
+                                    Percentage:
+                                </th>
+                            </tr>
+                            {% for entry in fig7_values %}
+                            <tr>
+                                <td>
+                                    {{entry}}
+                                </td>
+                                <td>
+                                    {{fig7_values[entry]}}
+                                </td>
+                                <td>
+                                    {{ (fig7_values[entry] / fig7_total * 100) | round(2) }}%
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+    </div>
+    <div class="row">
+        <div class="col" align="center">
+            <br>
+            <br>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col" align="center">
+            <div class="card">
+                <h5 class="card-header">Accounts Where The Password is The Same As The Username</h5>
+                <div class="card-body">
+                    <table class="table">
+                        <tbody>
+                            <tr>
+                            {% set pos = namespace(value=0) %}                         
+                            {% for entry in fig8_table %}
+                                {% set pos.value = pos.value + 1 %}
+                                <td>
+                                    {{entry}}
+                                </td>
+                                {% if pos.value % 3 == 0%}
+                                    </tr>
+                                    <tr>
+                                {% endif %}
+                            {% endfor %}      
+                            </tr>                    
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+    </div>    
+    <div class="row">
+        <div class="col" align="center">
+            <br>
+            <br>
+        </div>
+    </div>
+    {% endblock content %}
+
+
+

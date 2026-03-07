@@ -1,0 +1,38 @@
+# Ignore everything by default.
+*
+
+# Allow nested allowlist rules.
+!*/
+
+# Repository metadata and docs
+!.gitignore
+!.pylintrc
+!LICENSE
+!README.md
+!TODO.md
+
+# Project configuration and entry points
+!Dockerfile
+!docker-compose.yml
+!pyproject.toml
+!pytest.ini
+!requirements.txt
+!requirements-test.txt
+!setup.py
+!hashcrush.py
+
+# Application source and frontend assets
+!hashcrush/**/*.py
+!hashcrush/templates/**
+!hashcrush/static/**
+!hashcrush/config.conf.example
+
+# Database migrations
+!migrations/**/*.py
+!migrations/*.ini
+!migrations/*.mako
+
+# Tests and test fixtures/scripts
+!tests/**/*.py
+!tests/**/*.txt
+!tests/**/*.sh

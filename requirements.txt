@@ -1,0 +1,13 @@
+sqlalchemy==1.4.27
+flask
+flask-wtf
+email_validator
+flask-sqlalchemy
+mysql-connector-python
+bcrypt-flask
+flask-login
+flask-migrate
+flask-script
+flask-apscheduler
+WTForms-SQLAlchemy
+packaging

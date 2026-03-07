@@ -1,0 +1,60 @@
+import os
+import re
+
+import pytest
+from playwright.sync_api import expect
+
+
+@pytest.mark.e2e
+def test_job_creation_flow(page, live_server, login):
+    login()
+    customer_id = os.getenv("HASHCRUSH_E2E_CUSTOMER_ID")
+    hashfile_id = os.getenv("HASHCRUSH_E2E_HASHFILE_ID")
+    task_id = os.getenv("HASHCRUSH_E2E_TASK_ID")
+    task_name = os.getenv("HASHCRUSH_E2E_TASK_NAME")
+    if not all([customer_id, hashfile_id, task_id, task_name]):
+        pytest.skip(
+            "Set HASHCRUSH_E2E_CUSTOMER_ID, HASHCRUSH_E2E_HASHFILE_ID, "
+            "HASHCRUSH_E2E_TASK_ID, HASHCRUSH_E2E_TASK_NAME."
+        )
+    page.get_by_role("link", name="Jobs").click()
+    page.get_by_role("link", name="Create a New Job").click()
+    expect(page.get_by_role("heading", name="Create a new Job")).to_be_visible()
+
+    page.get_by_label("Job Name").fill("E2E Job")
+    if page.locator("#priority").count() > 0:
+        page.locator("#priority").select_option("3")
+    customer_option = page.locator(f"#customer_id option[value='{customer_id}']")
+    if customer_option.count() == 0:
+        page.locator("#customer_id").select_option("add_new")
+        customer_name = os.getenv("HASHCRUSH_E2E_CUSTOMER_NAME", "E2E Customer")
+        page.locator("#new_customer_div input[name='customer_name']").fill(
+            customer_name
+        )
+    else:
+        page.locator("#customer_id").select_option(str(customer_id))
+    page.get_by_role("button", name="Next").click()
+
+    expect(
+        page.get_by_role("heading", name=re.compile(r"Assign Hashes for"))
+    ).to_be_visible()
+    option = page.locator(
+        f"#nav-existing-hashfile #hashfile_id option[value='{hashfile_id}']"
+    )
+    if option.count() == 0:
+        pytest.skip("HASHCRUSH_E2E_HASHFILE_ID not present in existing hashfiles list.")
+    page.locator("#nav-existing-hashfile-tab").click()
+    page.locator("#nav-existing-hashfile #hashfile_id").select_option(
+        str(hashfile_id),
+        force=True,
+    )
+    page.locator("#nav-existing-hashfile button[type='submit']").click()
+    expect(page.get_by_role("heading", name="Tasks")).to_be_visible()
+    match = re.search(r"/jobs/(\d+)/tasks", page.url)
+    assert match, f"Unexpected tasks URL: {page.url}"
+    job_id = match.group(1)
+    page.goto(
+        f"{live_server}/jobs/{job_id}/assign_task/{task_id}",
+        wait_until="domcontentloaded",
+    )
+    expect(page.get_by_role("cell", name=task_name, exact=True)).to_be_visible()

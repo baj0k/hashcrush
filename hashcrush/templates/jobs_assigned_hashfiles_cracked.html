@@ -1,0 +1,63 @@
+{% extends "layout.html"%}
+{% block header %}
+<br>
+<h1>Local Check</h1>
+<br>
+The following hashes are already cracked in HashCrush's Local database!
+<br>
+<br>
+<br>
+{% endblock header %}
+{% block content %}
+    <article class="media content-section">
+        <div class="media-body">
+            <table class="table">
+                <thead>
+                  <tr>
+                    <th scope="col">Username</th>
+                    <th scope="col">Cipher Text</th>
+                    <th scope="col">Plaintext</th>          
+                  </tr>
+                </thead>
+                <tbody>
+                    {% if cracked_hashfiles_hashes|length > 0%}
+                        {% for entry in cracked_hashfiles_hashes %}
+                            <tr>
+                                <td>
+                                    {% if entry[1].username %}
+                                        {{entry[1].username | jinja_hex_decode}}
+                                    {% else %}
+                                        <i>None</i>
+                                    {% endif %}
+                                </td>
+
+                                <td>{{entry[0].ciphertext}}</td>
+                                <td>
+                                    {% if entry[0].plaintext %}
+                                        {{entry[0].plaintext | jinja_hex_decode}}
+                                    {% else %}
+                                        <i>None</i>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    {% else %}
+                            <tr>
+                                <td>
+                                    <i>none</i>
+                                </td>
+                                <td>
+                                    <i>none</i>
+                                </td>
+                                <td>
+                                    <i>none</i>
+                                </td>
+                            </tr>
+                    {% endif %}
+                </tbody>
+              </table>
+        </div>
+    </article>
+    <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_assigned_hashfile', job_id=job.id) }}">Back</a>
+    <a class="btn btn-primary pull-right" href="/jobs/{{job.id}}/tasks" role="button">Next</a>
+{% endblock content %}

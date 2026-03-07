@@ -1,0 +1,169 @@
+{% extends "layout.html"%}
+{% block header %}
+<br>
+<h1>Jobs</h1>
+<br>
+Jobs contain a series of tasks (hashcat commands). Jobs also have an associated list of hashes to crack.
+<a class="btn btn-success btn-sm mt-1 mb-1" href="{{ url_for('jobs.jobs_add') }}">Create a New Job</a>
+<br>
+<br>
+<br>
+{% endblock header %}
+{% block content %}
+    <article class="media content-section">
+        <div class="media-body">
+            <table class="table">
+                <thead>
+                  <tr>
+                    <th scope="col">Customer</th>
+                    <th scope="col">Name</th>
+                    <th scope="col">Hash File</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Owner</th>
+                    <th scope="col">Control</th>                   
+                  </tr>
+                </thead>
+                <tbody>
+                    {% for job in jobs%}
+                        <tr>
+                            <td>
+                                {% for customer in customers %}
+                                    {% if customer.id == job.customer_id %}
+                                        {{ customer.name }}
+                                    {% endif %}
+                                {% endfor %}
+                            </td>
+                            <td>{{ job.name }}</td>
+                            <td>
+                                {% for hashfile in hashfiles %}
+                                    {% if hashfile.id == job.hashfile_id %}
+                                        {{ hashfile.name }}
+                                    {% endif %}
+                                {% endfor %}
+                            </td>
+                            <td>{{ job.status }}</td>
+                            <td>
+                                {% for user in users %}
+                                    {% if user.id == job.owner_id %}
+                                        {{ user.first_name }} {{ user.last_name }}
+                                    {% endif %}
+                                {% endfor %}
+                            </td>
+                            <td>
+                                {% if job.status == 'Ready' %}
+                                    <a class="fa fa-play btn btn-success" href="/jobs/start/{{job.id}}" role="button" title=start></a>
+                                {% elif job.status == 'Queued' or job.status == 'Running' %}
+                                    <a class="fa fa-pause btn btn-warning" href="/jobs/pause/{{job.id}}" role="button" title=pause></a>
+                                    <a class="fa fa-stop btn btn-secondary" href="/jobs/stop/{{job.id}}" role="button" title=stop></a>
+                                {% elif job.status == 'Paused' %}
+                                    <a class="fa fa-play btn btn-success" href="/jobs/resume/{{job.id}}" role="button" title=resume></a>
+                                    <a class="fa fa-stop btn btn-secondary" href="/jobs/stop/{{job.id}}" role="button" title=stop></a>
+                                {% elif job.status == 'Completed' %}
+                                    <a class="fa fa-check btn btn-primary" href="#" role="button" title=Completed></a>
+                                {% elif job.status == 'Canceled' %}
+                                    <a class="fa fa-close btn btn-secondary" href="/jobs/start/{{job.id}}" role="button" title=Canceled></a>
+                                {% endif %}
+                                {% if job.status != 'Incomplete' %}
+                                    <a class="fa fa-pie-chart btn btn-warning" href="/analytics?customer_id={{job.customer_id}}&hashfile_id={{job.hashfile_id}}" role="button" title=Analytics></a>
+                                    <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{job.id}}" title=Info></button>
+                                {% endif %}
+                                {% if job.status != 'Running' and job.status != 'Queued' and job.status != 'Paused' %}
+                                    <a class="fa fa-edit btn btn-warning" href="/jobs/{{job.id}}/assigned_hashfile/" role="button" title=Edit></a>
+                                {% endif %}
+                                <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{job.id}}" title=Delete></button>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+              </table>
+        </div>
+    </article>
+    {% for job in jobs %}
+    <!-- InfoModal -->
+    <div class="modal fade" id="infoModal{{job.id}}" tabindex="-1" aria-labelledby="infoModal{{job.id}}Label" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+            <h5 class="modal-title" id="infoModal{{job.id}}Label">Info: {{job.name}}</h5>
+            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                <span aria-hidden="true">&times;</span>
+            </button>
+            </div>
+            <div class="modal-body">
+                <table class="table">
+                    <thead>
+                      <tbody>
+                          <tr>
+                            <th scope="row">Associated Tasks</th>
+                            <td>
+                                {% for job_task in job_tasks %}
+                                    {% if job_task.job_id == job.id %}
+                                        {% for task in tasks %}
+                                            {% if task.id == job_task.task_id%}
+                                                {{ task.name }} <br>
+                                            {% endif %}
+                                        {% endfor %}
+                                    {% endif %}
+                                {% endfor %}
+                            </td>
+                          </tr>
+                          <tr>
+                            <th scope="row">Creation Date</th>
+                            <td>
+                                {{job.created_at}}
+                            </td>
+                          </tr>
+                          <tr>                              
+                            <th scope="row">Started At</th>
+                            <td>
+                                {% if job.started_at %}
+                                    {{job.started_at}}
+                                {% else %}
+                                    Not started
+                                {% endif %}
+                            </td>
+                            </tr>   
+                            <th scope="row">Ended At</th>
+                            <td>
+                                {% if job.ended_at %}
+                                    {{job.ended_at}}
+                                {% else %}
+                                    N/A
+                                {% endif %}
+                            </td>
+                          </tr>
+                      </tbody>
+                  </table>
+            </div>
+            <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
+            </div>
+        </div>
+        </div>
+    </div>
+    {% endfor %}
+    {% for job in jobs %}
+    <!-- DeleteModal -->
+    <div class="modal fade" id="deleteModal{{job.id}}" tabindex="-1" aria-labelledby="deleteModal{{job.id}}Label" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+            <h5 class="modal-title" id="deleteModal{{job.id}}Label">Delete: {{job.name}} ?</h5>
+            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                <span aria-hidden="true">&times;</span>
+            </button>
+            </div>
+            <div class="modal-body">
+            This will permanently delete the job. Are you sure you want to continue?
+            </div>
+            <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
+            <form action="{{ url_for('jobs.jobs_delete', job_id=job.id) }}" method="POST">
+                <input class="btn btn-danger" type="submit" value="Delete">
+            </form>
+            </div>
+        </div>
+        </div>
+    </div>
+    {% endfor %}
+{% endblock content %}

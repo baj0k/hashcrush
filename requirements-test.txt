@@ -1,0 +1,5 @@
+pytest==9.0.2
+pytest-playwright==0.7.2
+pytest-base-url==2.1.0
+playwright==1.58.0
+ruff==0.9.7

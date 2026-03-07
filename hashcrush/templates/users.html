@@ -1,0 +1,190 @@
+{% extends "layout.html"%}
+{% block header %}
+<br>
+<h1>Users</h1>
+<br>
+These are the awesome people that use HashCrush.
+<a class="btn btn-success btn-sm mt-1 mb-1" href="{{ url_for('users.users_add') }}">Add</a>
+<br>
+<br>
+<br>
+{% endblock header %}
+{% block content %}
+    <article class="media content-section">
+        <div class="media-body">
+            <table class="table">
+                <thead>
+                  <tr>
+                    <th scope="col">First</th>
+                    <th scope="col">Last</th>
+                    <th scope="col">Username</th>
+                    <th scope="col">Role</th>
+                    <th scope="col">Last Login</th>
+                    <th scope="col">Control</th>
+                  </tr>
+                </thead>
+                <tbody>
+                    {% for user in users %}
+                        <tr>
+                            <td>{{ user.first_name }}</td>
+                            <td>{{ user.last_name }}</td>
+                            <td>{{ user.email_address }}</td>
+                            <td>
+                                {% if user.admin %}
+                                    Admin
+                                {% else %}
+                                    User
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if user.last_login_utc %}
+                                        {{ user.last_login_utc.strftime('%a, %b. %d %Y %I:%M:%S %Z') }}
+                                {% else %}
+                                        <i>Never</i>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{user.id}}" title=Info></button>
+                                <button type="button" class="fa fa-undo btn btn-warning" data-toggle="modal" data-target="#resetModal{{user.id}}" title='Reset Password'></button>
+                                <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{user.id}}" title=Delete></button>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+              </table>
+        </div>
+    </article>
+    {% for user in users %}
+    <!-- Info Modal -->
+        <div class="modal fade" id="infoModal{{user.id}}" tabindex="-1" aria-labelledby="infoModal{{user.id}}Label" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                <h5 class="modal-title" id="infoModal{{user.id}}Label">Info: {{user.email_address}}</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+                </div>
+                <div class="modal-body">
+                    <table class="table">
+                        <thead>
+                            <tbody>
+                                <tr>
+                                    <th scope="row">Associated Jobs</th>
+                                    <td>
+                                        {% for job in jobs %}
+                                            {% if job.owner_id == user.id %}
+                                                {{ job.name }} <br>
+                                            {% endif %}
+                                        {% endfor %}
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th scope="row">Associated Wordlists</th>
+                                    <td>
+                                        {% for wordlist in wordlists %}
+                                            {% if wordlist.owner_id == user.id %}
+                                                {{ wordlist.name }} <br>
+                                            {% endif %}
+                                        {% endfor %}
+                                    </td>
+                                </tr>
+                                <tr>                              
+                                    <th scope="row">Associated Rules</th>
+                                    <td>
+                                        {% for rule in rules %}
+                                            {% if rule.owner_id == user.id %}
+                                                {{ rule.name }} <br>
+                                            {% endif %}
+                                        {% endfor %}
+                                    </td>
+                                </tr>
+                                <tr>  
+                                    <th scope="row">Associated Tasks</th>
+                                    <td>
+                                        {% for task in tasks %}
+                                            {% if task.owner_id == user.id %}
+                                                {{ task.name }} <br>
+                                            {% endif %}
+                                        {% endfor %}
+                                    </td>
+                                </tr>
+                                </tr>
+                                <tr>   
+                                    <th scope="row">Associated Task Groups</th>
+                                    <td>
+                                        {% for task_group in task_groups %}
+                                            {% if task_group.owner_id == user.id %}
+                                                {{ task_group.name }} <br>
+                                            {% endif %}
+                                        {% endfor %}
+                                    </td>
+                                </tr>                                
+                            </tbody>
+                      </table>
+                </div>
+                <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+                </div>
+            </div>
+            </div>
+        </div>
+    {% endfor %}
+    {% for user in users %}
+    <!-- Reset Modal -->
+        <div class="modal fade" id="resetModal{{user.id}}" tabindex="-1" aria-labelledby="resetModal{{user.id}}Label" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                <h5 class="modal-title" id="resetModal{{user.id}}Label">Set Password: {{user.email_address}}</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+                </div>
+                <form action="{{ url_for('users.admin_reset', user_id=user.id) }}" method="POST">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="modal-body">
+                        <p>Set a temporary password for this user. They should change it in Profile after login.</p>
+                        <div class="form-group">
+                            <label for="new_password_{{user.id}}">Temporary Password</label>
+                            <input id="new_password_{{user.id}}" class="form-control" type="password" name="new_password" minlength="14" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="confirm_password_{{user.id}}">Confirm Password</label>
+                            <input id="confirm_password_{{user.id}}" class="form-control" type="password" name="confirm_password" minlength="14" required>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <input class="btn btn-primary" type="submit" value="Set Password">
+                    </div>
+                </form>
+            </div>
+            </div>
+        </div>
+    {% endfor %}
+    {% for user in users %}
+        <!-- DeleteModal -->
+        <div class="modal fade" id="deleteModal{{user.id}}" tabindex="-1" aria-labelledby="deleteModal{{user.id}}Label" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                <h5 class="modal-title" id="deleteModal{{user.id}}Label">Delete: {{user.email_address}} ?</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+                </div>
+                <div class="modal-body">
+                This will permanently delete the account. Are you sure you want to continue?
+                </div>
+                <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
+                <form action="{{ url_for('users.users_delete', user_id=user.id) }}" method="POST">
+                    <input class="btn btn-danger" type="submit" value="Delete">
+                </form>
+                </div>
+            </div>
+            </div>
+        </div>
+    {% endfor %}
+{% endblock content %}
