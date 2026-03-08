@@ -1,7 +1,8 @@
 """Flask routes to handle Analytics"""
+import io
 import operator
 import re
-from flask import Blueprint, render_template, request, redirect, send_from_directory
+from flask import Blueprint, render_template, request, redirect, send_file
 from flask_login import login_required
 from hashcrush.models import Domains, HashfileHashes, Hashes, Hashfiles
 from hashcrush.models import db
@@ -471,22 +472,29 @@ def analytics_download_hashes():
         cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='1').all()
         uncracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='0').all()
 
-    with open('hashcrush/control/tmp/' + filename, 'w') as outfile:
-        if export_type == 'found':
-            for entry in cracked_hashes:
-                if entry[1].username:
-                    outfile.write(str(bytes.fromhex(entry[1].username).decode('latin-1')) + ":" + str(entry[0].ciphertext) + ':' + str(_decoded_plaintext(entry[0].plaintext)) + "\n")
-                else:
-                    outfile.write(str(entry[0].ciphertext) + ':' + str(_decoded_plaintext(entry[0].plaintext)) + "\n")
+    output = io.StringIO()
+    if export_type == 'found':
+        for entry in cracked_hashes:
+            if entry[1].username:
+                output.write(str(bytes.fromhex(entry[1].username).decode('latin-1')) + ":" + str(entry[0].ciphertext) + ':' + str(_decoded_plaintext(entry[0].plaintext)) + "\n")
+            else:
+                output.write(str(entry[0].ciphertext) + ':' + str(_decoded_plaintext(entry[0].plaintext)) + "\n")
 
-        if export_type == 'left':
-            for entry in uncracked_hashes:
-                if entry[1].username:
-                    outfile.write(str(bytes.fromhex(entry[1].username).decode('latin-1')) + ":" + str(entry[0].ciphertext) + "\n")
-                else:
-                    outfile.write(str(entry[0].ciphertext) + "\n")
+    if export_type == 'left':
+        for entry in uncracked_hashes:
+            if entry[1].username:
+                output.write(str(bytes.fromhex(entry[1].username).decode('latin-1')) + ":" + str(entry[0].ciphertext) + "\n")
+            else:
+                output.write(str(entry[0].ciphertext) + "\n")
 
-    return send_from_directory('control/tmp', filename, as_attachment=True)
+    buffer = io.BytesIO(output.getvalue().encode('utf-8'))
+    buffer.seek(0)
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=filename,
+        mimetype='text/plain; charset=utf-8',
+    )
 
 def format_display(number):
     """Function to commas to the number after every thousand places"""

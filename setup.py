@@ -15,6 +15,7 @@ DEFAULT_HASHCAT_BIN = '/usr/bin/hashcat'
 DEFAULT_HASHCAT_STATUS_TIMER = 5
 DEFAULT_WORDLISTS_PATH = '/usr/share/seclists/Passwords'
 DEFAULT_RULES_PATH = '/usr/share/hashcat/rules'
+DEFAULT_RUNTIME_PATH = '/tmp/hashcrush-runtime'
 
 
 def _read_existing_app_value(config_path: str, key: str) -> str | None:
@@ -42,11 +43,11 @@ def _prompt_existing_directory(prompt: str, default: str | None) -> str:
         return resolved
 
 
-def _ensure_runtime_directories(project_root: str) -> None:
+def _ensure_runtime_directories(project_root: str, runtime_root: str) -> None:
     runtime_dirs = (
-        os.path.join(project_root, 'hashcrush', 'control', 'tmp'),
-        os.path.join(project_root, 'hashcrush', 'control', 'hashes'),
-        os.path.join(project_root, 'hashcrush', 'control', 'outfiles'),
+        os.path.join(runtime_root, 'tmp'),
+        os.path.join(runtime_root, 'hashes'),
+        os.path.join(runtime_root, 'outfiles'),
         os.path.join(project_root, 'hashcrush', 'ssl'),
     )
     for runtime_dir in runtime_dirs:
@@ -63,6 +64,7 @@ def _write_config_atomic(
     hashcat_status_timer: int,
     wordlists_path: str,
     rules_path: str,
+    runtime_path: str,
 ) -> None:
     parser = ConfigParser()
     parser['database'] = {
@@ -76,6 +78,7 @@ def _write_config_atomic(
         'hashcat_status_timer': str(hashcat_status_timer),
         'wordlists_path': wordlists_path,
         'rules_path': rules_path,
+        'runtime_path': runtime_path,
     }
 
     config_dir = os.path.dirname(config_path) or '.'
@@ -182,6 +185,7 @@ config_exists = os.path.exists(CONFIG_PATH)
 existing_hashcat_bin = _read_existing_app_value(CONFIG_PATH, 'hashcat_bin')
 existing_wordlists_path = _read_existing_app_value(CONFIG_PATH, 'wordlists_path')
 existing_rules_path = _read_existing_app_value(CONFIG_PATH, 'rules_path')
+existing_runtime_path = _read_existing_app_value(CONFIG_PATH, 'runtime_path')
 
 wordlists_default = (
     os.getenv('HASHCRUSH_WORDLISTS_PATH')
@@ -203,6 +207,19 @@ rules_path = _prompt_existing_directory(
     'Enter path to the hashcat rules root',
     rules_default,
 )
+
+runtime_default = (
+    os.getenv('HASHCRUSH_RUNTIME_PATH')
+    or existing_runtime_path
+    or DEFAULT_RUNTIME_PATH
+)
+runtime_path = input(
+    f'Enter path for runtime temp/artifact storage [{runtime_default}]: '
+).strip()
+if len(runtime_path) == 0:
+    runtime_path = runtime_default
+runtime_path = os.path.abspath(os.path.expanduser(runtime_path))
+os.makedirs(runtime_path, exist_ok=True)
 
 if config_exists and existing_hashcat_bin:
     preserve_hashcat_bin = input(
@@ -242,6 +259,7 @@ _write_config_atomic(
     DEFAULT_HASHCAT_STATUS_TIMER,
     wordlists_path,
     rules_path,
+    runtime_path,
 )
 print(f'Writing hashcrush config at: {CONFIG_PATH}')
 print('Generated a new app secret_key and stored it in config.')
@@ -249,6 +267,7 @@ print(f'Set hashcat_bin={hashcat_bin}')
 print(f'Set hashcat_status_timer={DEFAULT_HASHCAT_STATUS_TIMER}')
 print(f"Set wordlists_path={wordlists_path or '(app default)'}")
 print(f"Set rules_path={rules_path or '(app default)'}")
+print(f"Set runtime_path={runtime_path}")
 
 # TODO POSSIBLE IMPROVEMENT There's probably a better way to do this:
 print('Building database schema')
@@ -259,7 +278,7 @@ subprocess.run(['flask', 'db', 'upgrade'], check=True, env=env)
 # Generating SSL Certs
 print('Generating SSL Certificates')
 project_root = os.path.abspath(os.path.dirname(__file__))
-_ensure_runtime_directories(project_root)
+_ensure_runtime_directories(project_root, runtime_path)
 
 ssl_cert_path = os.path.join(project_root, 'hashcrush', 'ssl', 'cert.pem')
 ssl_key_path = os.path.join(project_root, 'hashcrush', 'ssl', 'key.pem')

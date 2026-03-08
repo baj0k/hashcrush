@@ -7,10 +7,14 @@ from sqlalchemy import text
 import hashcrush
 from hashcrush.models import Settings
 from hashcrush.models import db
+from hashcrush.utils.utils import get_runtime_subdir
 
 
 settings = Blueprint('settings', __name__)
-TEMP_FOLDER_PATH = os.path.join('hashcrush', 'control', 'tmp')
+
+
+def _temp_folder_path() -> str:
+    return get_runtime_subdir('tmp')
 
 
 def _format_bytes(size_bytes: int) -> str:
@@ -28,11 +32,12 @@ def _format_bytes(size_bytes: int) -> str:
 
 def _temp_folder_size_bytes() -> int:
     """Calculate total bytes for regular files in the temp folder."""
-    if not os.path.isdir(TEMP_FOLDER_PATH):
+    temp_folder_path = _temp_folder_path()
+    if not os.path.isdir(temp_folder_path):
         return 0
 
     total = 0
-    for entry in os.scandir(TEMP_FOLDER_PATH):
+    for entry in os.scandir(temp_folder_path):
         if not entry.is_file(follow_symlinks=False):
             continue
         try:
@@ -59,7 +64,8 @@ def settings_list():
             db.session.add(settings)
             db.session.commit()
 
-        os.makedirs(TEMP_FOLDER_PATH, exist_ok=True)
+        temp_folder_path = _temp_folder_path()
+        os.makedirs(temp_folder_path, exist_ok=True)
         tmp_folder_size = _temp_folder_size_bytes()
         tmp_folder_size_human = _format_bytes(tmp_folder_size)
 
@@ -74,7 +80,7 @@ def settings_list():
             settings=settings,
             tmp_folder_size=tmp_folder_size,
             tmp_folder_size_human=tmp_folder_size_human,
-            temp_folder_path=TEMP_FOLDER_PATH,
+            temp_folder_path=temp_folder_path,
             application_version=hashcrush.__version__,
             database_version=database_version,
             python_version=f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}',
@@ -90,12 +96,13 @@ def clear_temp_folder():
     if not current_user.admin:
         abort(403)
 
-    os.makedirs(TEMP_FOLDER_PATH, exist_ok=True)
+    temp_folder_path = _temp_folder_path()
+    os.makedirs(temp_folder_path, exist_ok=True)
     removed_files = 0
     removed_bytes = 0
     failed_files = 0
 
-    for entry in os.scandir(TEMP_FOLDER_PATH):
+    for entry in os.scandir(temp_folder_path):
         if not entry.is_file(follow_symlinks=False):
             continue
         try:

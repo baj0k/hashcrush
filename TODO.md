@@ -23,41 +23,6 @@
   - File: `hashcrush/utils/utils.py` (`update_dynamic_wordlist`).
   - Done when: dynamic wordlists for non-admin users include only plaintexts from hashes they are allowed to access.
 
-### Functional Bugs
-- [ ] `P1-BUG-01` Fix wordlist route logic and authorization bugs.
-  - File: `hashcrush/wordlists/routes.py`.
-  - Done when: dynamic delete path has proper `return`, dynamic update enforces owner/admin authorization.
-
-- [ ] `P1-BUG-02 (New)` Add consistent null/object-not-found handling to avoid internal server errors.
-  - Files: all mutating route modules (for example `jobs_delete`, `tasks_delete`, `rules_delete`, `wordlists_delete`).
-  - Done when: invalid IDs return `404` or safe redirect with error flash, not `500`.
-
-- [ ] `P1-BUG-04` Investigate and fix user profile internal server error.
-  - Files: `hashcrush/users/routes.py`, `hashcrush/templates/profile.html`, related model constraints.
-  - Done when: profile page loads and updates reliably under normal/admin users.
-
-### Filesystem and Runtime Hygiene
-- [ ] `P1-FS-01` Eliminate temp-file leakage in download flows.
-  - Files: `hashcrush/analytics/routes.py`.
-  - Done when: downloads stream in-memory or use guaranteed post-response cleanup.
-
-- [ ] `P1-FS-02` Move job runtime artifacts out of project files and enforce cleanup.
-  - Files: `hashcrush/executor/service.py`, `hashcrush/utils/utils.py`, `hashcrush/jobs/routes.py`, `hashcrush/models.py`.
-  - Done when: `control/{tmp,outfiles,hashes}` is ephemeral and cleaned after job completion/startup fallback cleanup.
-
-- [ ] `P1-CONF-01` Externalize rules/masks/wordlists paths via config and setup flow.
-  - Files: `setup.py`, `hashcrush/config.py`, `hashcrush/setup/__init__.py`, route modules using control paths.
-  - Done when: paths are configurable, preserved on setup rerun, and no project-local path assumptions remain.
-
-### Database Constraints and Query Performance
-- [ ] `P1-DB-01` Add indexes/constraints for hot paths.
-  - Files: `hashcrush/models.py`, `migrations/versions/0001_single_node_baseline.py`.
-  - Required: index on `hashfile_hashes.hashfile_id`, composite index for queue scheduling (`status`, `priority`, `id`).
-
-- [ ] `P1-DB-02 (New)` Add missing foreign keys and sensible cascade behavior.
-  - Files: `hashcrush/models.py`, migrations.
-  - Target tables: `hashfile_hashes`, `job_tasks`, `hashfiles` ownership/domain references.
-
 ### Security Hardening
 - [ ] `P1-SEC-02 (New)` Prevent admin lockout scenarios.
   - Files: `hashcrush/users/routes.py`.
@@ -70,8 +35,6 @@
 - [ ] `P1-SEC-04 (New)` Enforce secure session cookie settings in production.
   - Files: app config/bootstrap.
   - Done when: `Secure`, `HttpOnly`, and `SameSite` are explicitly configured for deployed mode.
-
-## P2 - Medium Priority
 
 ### Validation, Dependencies, and Tests
 - [ ] `P2-VAL-01` Refactor hash validators from `readlines()` to streaming line-by-line parsing.
@@ -96,4 +59,3 @@
 
 ## P3 - Product and UX Backlog (Decision-Driven)
 - [ ] `P3-PROD-12 (New)` Implement task/task-group import/export inside the app using JSON.
-

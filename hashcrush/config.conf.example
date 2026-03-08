@@ -14,3 +14,5 @@ hashcat_status_timer = 5
 wordlists_path = /usr/share/seclists/Passwords
 # Required: external rules root (for example /usr/share/hashcat/rules).
 rules_path = /usr/share/hashcat/rules
+# Optional: runtime artifact root (tmp/hashes/outfiles). Default uses system temp.
+runtime_path = /tmp/hashcrush-runtime

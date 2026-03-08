@@ -19,15 +19,18 @@ from hashcrush.utils.utils import (
     build_hashcat_argv,
     encode_plaintext_for_storage,
     get_md5_hash,
+    get_runtime_subdir,
     update_dynamic_wordlist,
     update_job_task_status,
 )
 
 
-def _ensure_control_dirs(root_path: str) -> None:
-    control_path = os.path.join(root_path, "control")
-    os.makedirs(os.path.join(control_path, "hashes"), exist_ok=True)
-    os.makedirs(os.path.join(control_path, "outfiles"), exist_ok=True)
+def _ensure_runtime_dirs() -> tuple[str, str]:
+    hashes_dir = get_runtime_subdir("hashes")
+    outfiles_dir = get_runtime_subdir("outfiles")
+    os.makedirs(hashes_dir, exist_ok=True)
+    os.makedirs(outfiles_dir, exist_ok=True)
+    return hashes_dir, outfiles_dir
 
 
 def _parse_hashcat_status(filepath: str) -> dict[str, str]:
@@ -41,6 +44,8 @@ def _parse_hashcat_status(filepath: str) -> dict[str, str]:
                 status["Time_Started"] = line.split(": ", 1)[-1].rstrip()
             elif line.startswith("Time.Estimated."):
                 status["Time_Estimated"] = line.split(".: ", 1)[-1].rstrip()
+            elif line.startswith("Status"):
+                status["Status"] = line.split(": ", 1)[-1].rstrip()
             elif line.startswith("Recovered."):
                 status["Recovered"] = line.split(": ", 1)[-1].rstrip()
             elif line.startswith("Input.Mode."):
@@ -56,6 +61,25 @@ def _parse_hashcat_status(filepath: str) -> dict[str, str]:
     return status
 
 
+def _is_successful_hashcat_exit(return_code: int | None, status: dict[str, str]) -> bool:
+    """Return True when hashcat exit/result indicates normal task completion."""
+    if return_code == 0:
+        return True
+
+    if return_code != 1:
+        return False
+
+    normalized_status = str(status.get("Status", "")).strip().lower()
+    if normalized_status in {"exhausted", "cracked"}:
+        return True
+
+    progress = str(status.get("Progress", "")).strip()
+    if "100.00%" in progress:
+        return True
+
+    return False
+
+
 def _log_status_snapshot(job_task_id: int, status: dict[str, str], prefix: str) -> None:
     """Write a concise status snapshot to logs."""
     if not status:
@@ -66,9 +90,10 @@ def _log_status_snapshot(job_task_id: int, status: dict[str, str], prefix: str) 
         )
         return
     current_app.logger.info(
-        "%s job_task id=%s recovered=%s speed=%s eta=%s progress=%s",
+        "%s job_task id=%s status=%s recovered=%s speed=%s eta=%s progress=%s",
         prefix,
         job_task_id,
+        status.get("Status", "n/a"),
         status.get("Recovered", "n/a"),
         status.get("Speed #", "n/a"),
         status.get("Time_Estimated", "n/a"),
@@ -82,6 +107,7 @@ class ActiveTask:
     process: subprocess.Popen
     output_file: TextIO
     output_path: str
+    hash_path: str
     crack_path: str
     last_progress_log_at: float
 
@@ -130,6 +156,7 @@ class LocalExecutorService:
 
     def _tick(self) -> None:
         if not self._recovered_once:
+            self._cleanup_runtime_artifacts()
             self._recover_orphaned_tasks()
             self._recovered_once = True
 
@@ -202,8 +229,11 @@ class LocalExecutorService:
         if not job_task:
             return
 
+        hash_path = ""
+        crack_path = ""
+        output_path = ""
         try:
-            argv, crack_path, output_path = self._prepare_execution(job_task)
+            argv, hash_path, crack_path, output_path = self._prepare_execution(job_task)
             output_file = open(output_path, "w", encoding="utf-8", errors="ignore")
             process = subprocess.Popen(
                 argv,
@@ -213,6 +243,7 @@ class LocalExecutorService:
             )
         except Exception:
             current_app.logger.exception("Failed to start local job_task id=%s", job_task.id)
+            self._remove_files(hash_path, crack_path, output_path)
             update_job_task_status(job_task.id, "Canceled")
             return
 
@@ -224,12 +255,13 @@ class LocalExecutorService:
             process=process,
             output_file=output_file,
             output_path=output_path,
+            hash_path=hash_path,
             crack_path=crack_path,
             last_progress_log_at=0.0,
         )
         current_app.logger.info("Started local job_task id=%s pid=%s", job_task.id, process.pid)
 
-    def _prepare_execution(self, job_task: JobTasks) -> tuple[list[str], str, str]:
+    def _prepare_execution(self, job_task: JobTasks) -> tuple[list[str], str, str, str]:
         job = Jobs.query.get(job_task.job_id)
         task = Tasks.query.get(job_task.task_id)
         if not job:
@@ -244,20 +276,20 @@ class LocalExecutorService:
             if wordlist and str(wordlist.type).lower() == "dynamic":
                 update_dynamic_wordlist(wordlist.id)
 
-        _ensure_control_dirs(current_app.root_path)
-        self._write_hashfile(job.id, task.id, job.hashfile_id)
+        hashes_dir, outfiles_dir = _ensure_runtime_dirs()
+        hash_path = self._write_hashfile(job.id, task.id, job.hashfile_id, hashes_dir)
 
         argv = build_hashcat_argv(
             job_id=job.id,
             task_id=task.id,
             hashcat_bin=current_app.config.get("HASHCAT_BIN"),
         )
-        crack_path = os.path.join(current_app.root_path, "control", "outfiles", f"hc_cracked_{job.id}_{task.id}.txt")
-        output_path = os.path.join(current_app.root_path, "control", "outfiles", f"hcoutput_{job.id}_{job_task.id}.txt")
-        return argv, crack_path, output_path
+        crack_path = os.path.join(outfiles_dir, f"hc_cracked_{job.id}_{task.id}.txt")
+        output_path = os.path.join(outfiles_dir, f"hcoutput_{job.id}_{job_task.id}.txt")
+        return argv, hash_path, crack_path, output_path
 
-    def _write_hashfile(self, job_id: int, task_id: int, hashfile_id: int) -> None:
-        target = os.path.join(current_app.root_path, "control", "hashes", f"hashfile_{job_id}_{task_id}.txt")
+    def _write_hashfile(self, job_id: int, task_id: int, hashfile_id: int, hashes_dir: str) -> str:
+        target = os.path.join(hashes_dir, f"hashfile_{job_id}_{task_id}.txt")
         rows = (
             db.session.query(Hashes.ciphertext)
             .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
@@ -268,6 +300,7 @@ class LocalExecutorService:
         with open(target, "w", encoding="utf-8", errors="ignore") as file_object:
             for row in rows:
                 file_object.write(f"{row.ciphertext}\n")
+        return target
 
     def _monitor_active_task(self) -> None:
         active = self._active
@@ -315,7 +348,7 @@ class LocalExecutorService:
             db.session.commit()
         _log_status_snapshot(job_task.id, final_status_snapshot, prefix="Final status")
 
-        if return_code == 0 and job_task.status not in ("Paused", "Canceled"):
+        if _is_successful_hashcat_exit(return_code, final_status_snapshot) and job_task.status not in ("Paused", "Canceled"):
             imported_count = self._import_crack_file_for_task(job_task, active.crack_path)
             current_app.logger.info(
                 "Completed local job_task id=%s return_code=%s imported_hashes=%s",
@@ -358,11 +391,13 @@ class LocalExecutorService:
 
         job_task = JobTasks.query.get(active.job_task_id)
         if not job_task:
+            self._remove_files(active.output_path, active.crack_path, active.hash_path)
             return
 
         job_task.worker_pid = None
         db.session.commit()
         update_job_task_status(job_task.id, final_status)
+        self._remove_files(active.output_path, active.crack_path, active.hash_path)
 
     def _import_crack_file_for_task(self, job_task: JobTasks, crack_path: str) -> int:
         if not os.path.exists(crack_path):
@@ -415,3 +450,36 @@ class LocalExecutorService:
                 imported_count += 1
         db.session.commit()
         return imported_count
+
+    def _cleanup_runtime_artifacts(self) -> None:
+        """Remove stale runtime artifacts from previous runs."""
+        hashes_dir, outfiles_dir = _ensure_runtime_dirs()
+        removed = 0
+
+        for directory, prefixes in (
+            (hashes_dir, ("hashfile_",)),
+            (outfiles_dir, ("hcoutput_", "hc_cracked_")),
+        ):
+            for filename in os.listdir(directory):
+                file_path = os.path.join(directory, filename)
+                if (not os.path.isfile(file_path)) or (not filename.startswith(prefixes)):
+                    continue
+                try:
+                    os.remove(file_path)
+                    removed += 1
+                except OSError:
+                    current_app.logger.warning("Failed to remove stale runtime artifact: %s", file_path)
+
+        if removed:
+            current_app.logger.info("Removed %s stale runtime artifact(s).", removed)
+
+    @staticmethod
+    def _remove_files(*paths: str) -> None:
+        for path in paths:
+            if not path:
+                continue
+            try:
+                if os.path.isfile(path):
+                    os.remove(path)
+            except OSError:
+                current_app.logger.warning("Failed to remove runtime artifact: %s", path)

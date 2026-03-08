@@ -1,5 +1,6 @@
 """Manage parsing of config.conf and loading into the Flask Config."""
 import os
+import tempfile
 from configparser import ConfigParser
 
 file_config = ConfigParser()
@@ -63,6 +64,7 @@ class Config:
 
     _default_wordlists_path = '/usr/share/seclists/Passwords'
     _default_rules_path = '/usr/share/hashcat/rules'
+    _default_runtime_path = os.path.join(tempfile.gettempdir(), 'hashcrush-runtime')
 
     WORDLISTS_PATH = _normalize_dir_path(
         os.getenv('HASHCRUSH_WORDLISTS_PATH')
@@ -73,6 +75,11 @@ class Config:
         os.getenv('HASHCRUSH_RULES_PATH')
         or file_config.get('app', 'rules_path', fallback=_default_rules_path),
         _default_rules_path,
+    )
+    RUNTIME_PATH = _normalize_dir_path(
+        os.getenv('HASHCRUSH_RUNTIME_PATH')
+        or file_config.get('app', 'runtime_path', fallback=_default_runtime_path),
+        _default_runtime_path,
     )
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False

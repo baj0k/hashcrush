@@ -6,7 +6,7 @@
 1. Python 3.10+
 2. MySQL running locally
 3. Administrative privileges for local MySQL bootstrap during setup.py
-4. Hashcat
+4. Hashcat configured with drivers required by your hardware
 
 ## Installation
 #### 1) Setup MySQL

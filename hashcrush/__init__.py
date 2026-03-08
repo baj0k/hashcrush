@@ -2,6 +2,7 @@ import logging
 import datetime
 import os
 import sys
+import tempfile
 
 from flask import Flask
 from flask import request
@@ -15,12 +16,17 @@ from logging.config import dictConfig as loggingDictConfig
 __version__ = '0.9.97'
 
 
-def _ensure_runtime_directories(root_path: str) -> None:
-    """Create local runtime directories required by file IO paths."""
+def _ensure_runtime_directories(root_path: str, runtime_root: str | None = None) -> None:
+    """Create runtime directories required by file IO paths."""
+    runtime_base = (
+        os.path.abspath(os.path.expanduser(runtime_root))
+        if runtime_root
+        else os.path.join(root_path, 'control')
+    )
     runtime_dirs = (
-        os.path.join(root_path, 'control', 'tmp'),
-        os.path.join(root_path, 'control', 'hashes'),
-        os.path.join(root_path, 'control', 'outfiles'),
+        os.path.join(runtime_base, 'tmp'),
+        os.path.join(runtime_base, 'hashes'),
+        os.path.join(runtime_base, 'outfiles'),
         os.path.join(root_path, 'ssl'),
     )
     for runtime_dir in runtime_dirs:
@@ -182,6 +188,7 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     app.config.setdefault('ENABLE_LOCAL_EXECUTOR', True)
     app.config.setdefault('SKIP_RUNTIME_BOOTSTRAP', False)
     app.config.setdefault('AUTO_MIGRATE_PLAINTEXT_STORAGE', True)
+    app.config.setdefault('RUNTIME_PATH', os.path.join(tempfile.gettempdir(), 'hashcrush-runtime'))
 
     if testing:
         app.config['TESTING'] = True
@@ -193,7 +200,7 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
         app.config['SKIP_RUNTIME_BOOTSTRAP'] = True
 
     if not app.config.get('SKIP_RUNTIME_BOOTSTRAP'):
-        _ensure_runtime_directories(app.root_path)
+        _ensure_runtime_directories(app.root_path, app.config.get('RUNTIME_PATH'))
 
     from hashcrush.models import db
     db.init_app(app)

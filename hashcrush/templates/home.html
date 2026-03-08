@@ -59,12 +59,15 @@
                                         <th scope="col">Task Name</th>
                                         <th scope="col">Status</th>
                                         <th scope="col">Rate</th>
+                                        <th scope="col">% Done</th>
+                                        <th scope="col">ETA</th>
                                         <th scope="col">Control</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {% for job_task in job_tasks %}
                                         {% if job_task.job_id == job.id %}
+                                            {% set runtime = job_task_runtime_progress.get(job_task.id) %}
                                             <tr>
                                                 <td>
                                                     {% for task in tasks %}
@@ -75,6 +78,20 @@
                                                 </td>
                                                 <td>{{ job_task.status }}</td>
                                                 <td>{{ job_task.benchmark or '' }}</td>
+                                                <td>
+                                                    {% if runtime %}
+                                                        {{ runtime.percent_done }}
+                                                    {% else %}
+                                                        N/A
+                                                    {% endif %}
+                                                </td>
+                                                <td>
+                                                    {% if runtime %}
+                                                        {{ runtime.eta }}
+                                                    {% else %}
+                                                        N/A
+                                                    {% endif %}
+                                                </td>
                                                 <td>
                                                     {% if job_task.status == 'Running' %}
                                                         <a class="fa fa-stop btn btn-secondary" href="/job_task/stop/{{job_task.id}}" role="button" title="stop"></a>
@@ -122,11 +139,14 @@
                                     <tr>
                                         <th scope="col">Task Name</th>
                                         <th scope="col">Status</th>
+                                        <th scope="col">% Done</th>
+                                        <th scope="col">ETA</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {% for job_task in job_tasks %}
                                         {% if job_task.job_id == job.id %}
+                                            {% set runtime = job_task_runtime_progress.get(job_task.id) %}
                                             <tr>
                                                 <td>
                                                     {% for task in tasks %}
@@ -136,6 +156,20 @@
                                                     {% endfor %}
                                                 </td>
                                                 <td>{{ job_task.status }}</td>
+                                                <td>
+                                                    {% if runtime %}
+                                                        {{ runtime.percent_done }}
+                                                    {% else %}
+                                                        N/A
+                                                    {% endif %}
+                                                </td>
+                                                <td>
+                                                    {% if runtime %}
+                                                        {{ runtime.eta }}
+                                                    {% else %}
+                                                        N/A
+                                                    {% endif %}
+                                                </td>
                                             </tr>
                                         {% endif %}
                                     {% endfor %}

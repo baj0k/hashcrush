@@ -2,13 +2,14 @@
 import os
 import secrets
 import json
+import re
 from datetime import datetime
 from flask import Blueprint, render_template, redirect, flash, url_for, current_app, request
 from flask_login import login_required, current_user
 from sqlalchemy import func, case
 from hashcrush.jobs.forms import JobsForm, JobsNewHashFileForm, JobSummaryForm
 from hashcrush.models import Jobs, Domains, Hashfiles, Users, HashfileHashes, Hashes, JobTasks, Tasks, TaskGroups
-from hashcrush.utils.utils import save_file, import_hashfilehashes, build_hashcat_command, validate_pwdump_hashfile, validate_netntlm_hashfile, validate_kerberos_hashfile, validate_shadow_hashfile, validate_user_hash_hashfile, validate_hash_only_hashfile
+from hashcrush.utils.utils import save_file, import_hashfilehashes, build_hashcat_command, validate_pwdump_hashfile, validate_netntlm_hashfile, validate_kerberos_hashfile, validate_shadow_hashfile, validate_user_hash_hashfile, validate_hash_only_hashfile, get_runtime_subdir
 from hashcrush.models import db
 
 
@@ -48,6 +49,31 @@ def _get_assignable_hashfile(job: Jobs, raw_hashfile_id) -> Hashfiles | None:
 
     return query.first()
 
+
+def _parse_jobtask_progress(progress_payload: str | None) -> tuple[str | None, str | None]:
+    """Extract percent done and ETA from persisted JobTask.progress JSON."""
+    if not progress_payload:
+        return None, None
+
+    try:
+        parsed = json.loads(progress_payload)
+    except (TypeError, ValueError):
+        return None, None
+
+    if not isinstance(parsed, dict):
+        return None, None
+
+    eta_value = str(parsed.get('Time_Estimated') or '').strip() or None
+    progress_value = str(parsed.get('Progress') or '').strip()
+
+    percent_value = None
+    if progress_value:
+        match = re.search(r'\((\d+(?:\.\d+)?)%\)', progress_value)
+        if match:
+            percent_value = f"{match.group(1)}%"
+
+    return percent_value, eta_value
+
 @jobs.route("/jobs", methods=['GET', 'POST'])
 @login_required
 def jobs_list():
@@ -58,7 +84,36 @@ def jobs_list():
     hashfiles = Hashfiles.query.all()
     job_tasks = JobTasks.query.all()
     tasks = Tasks.query.all()
-    return render_template('jobs.html', title='Jobs', jobs=jobs, domains=domains, users=users, hashfiles=hashfiles, job_tasks=job_tasks, tasks=tasks)
+
+    # Surface latest active task telemetry per job for jobs table (ETA + % done).
+    status_rank = {'Running': 0, 'Importing': 1, 'Paused': 2, 'Queued': 3}
+    job_runtime_progress: dict[int, dict[str, str]] = {}
+    for job_task in job_tasks:
+        if job_task.status not in status_rank:
+            continue
+
+        percent_done, eta = _parse_jobtask_progress(job_task.progress)
+        existing = job_runtime_progress.get(job_task.job_id)
+        if existing and existing['rank'] <= status_rank[job_task.status]:
+            continue
+
+        job_runtime_progress[job_task.job_id] = {
+            'percent_done': percent_done or 'N/A',
+            'eta': eta or 'N/A',
+            'rank': status_rank[job_task.status],
+        }
+
+    return render_template(
+        'jobs.html',
+        title='Jobs',
+        jobs=jobs,
+        domains=domains,
+        users=users,
+        hashfiles=hashfiles,
+        job_tasks=job_tasks,
+        tasks=tasks,
+        job_runtime_progress=job_runtime_progress,
+    )
 
 @jobs.route("/jobs/add", methods=['GET', 'POST'])
 @login_required
@@ -96,7 +151,7 @@ def jobs_add():
 def jobs_assigned_hashfile(job_id):
     """Function to manage assigning hashfile to job"""
 
-    job = Jobs.query.get(job_id)
+    job = Jobs.query.get_or_404(job_id)
     if not _can_manage_job(job):
         flash('You do not have rights to modify this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
@@ -134,49 +189,51 @@ def jobs_assigned_hashfile(job_id):
 
     if jobs_new_hashfile_form.validate_on_submit():
 
-        hashfile_path = ""
-        if jobs_new_hashfile_form.hashfile.data:
-            # User submitted a file upload
-            hashfile_path = save_file('control/tmp', jobs_new_hashfile_form.hashfile.data)
-        elif jobs_new_hashfile_form.hashfilehashes.data:
-            # User submitted copied/pasted hashes
-            # Going to have to save a file manually instead of using save_file since save_file requires form data to be passed and we're not collecting that object for this tab
+        runtime_tmp_dir = get_runtime_subdir('tmp')
+        os.makedirs(runtime_tmp_dir, exist_ok=True)
 
+        hashfile_path = ''
+        if jobs_new_hashfile_form.hashfile.data:
+            # User submitted a file upload.
+            hashfile_path = save_file(runtime_tmp_dir, jobs_new_hashfile_form.hashfile.data)
+        elif jobs_new_hashfile_form.hashfilehashes.data:
+            # User submitted copied/pasted hashes.
             if len(jobs_new_hashfile_form.name.data) == 0:
                 flash('You must assign a name to the hashfile', 'danger')
                 return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job_id))
 
             random_hex = secrets.token_hex(8)
-            hashfile_path = os.path.join(current_app.root_path, 'control', 'tmp', random_hex)
-            with open(hashfile_path, 'w+') as hashfilehashes_file:
+            hashfile_path = os.path.join(runtime_tmp_dir, random_hex)
+            with open(hashfile_path, 'w+', encoding='utf-8') as hashfilehashes_file:
                 hashfilehashes_file.write(jobs_new_hashfile_form.hashfilehashes.data)
 
         if len(hashfile_path) > 0:
-            if jobs_new_hashfile_form.file_type.data == 'pwdump':
-                has_problem = validate_pwdump_hashfile(hashfile_path, jobs_new_hashfile_form.pwdump_hash_type.data)
-                hash_type = jobs_new_hashfile_form.pwdump_hash_type.data
-            elif jobs_new_hashfile_form.file_type.data == 'NetNTLM':
-                has_problem = validate_netntlm_hashfile(hashfile_path)
-                hash_type = jobs_new_hashfile_form.netntlm_hash_type.data
-            elif jobs_new_hashfile_form.file_type.data == 'kerberos':
-                has_problem = validate_kerberos_hashfile(hashfile_path, jobs_new_hashfile_form.kerberos_hash_type.data)
-                hash_type = jobs_new_hashfile_form.kerberos_hash_type.data
-            elif jobs_new_hashfile_form.file_type.data == 'shadow':
-                has_problem = validate_shadow_hashfile(hashfile_path, jobs_new_hashfile_form.shadow_hash_type.data)
-                hash_type = jobs_new_hashfile_form.shadow_hash_type.data
-            elif jobs_new_hashfile_form.file_type.data == 'user_hash':
-                has_problem = validate_user_hash_hashfile(hashfile_path)
-                hash_type = jobs_new_hashfile_form.hash_type.data
-            elif jobs_new_hashfile_form.file_type.data == 'hash_only':
-                has_problem = validate_hash_only_hashfile(hashfile_path, jobs_new_hashfile_form.hash_type.data)
-                hash_type = jobs_new_hashfile_form.hash_type.data
-            else:
-                has_problem = 'Invalid File Format'
+            try:
+                if jobs_new_hashfile_form.file_type.data == 'pwdump':
+                    has_problem = validate_pwdump_hashfile(hashfile_path, jobs_new_hashfile_form.pwdump_hash_type.data)
+                    hash_type = jobs_new_hashfile_form.pwdump_hash_type.data
+                elif jobs_new_hashfile_form.file_type.data == 'NetNTLM':
+                    has_problem = validate_netntlm_hashfile(hashfile_path)
+                    hash_type = jobs_new_hashfile_form.netntlm_hash_type.data
+                elif jobs_new_hashfile_form.file_type.data == 'kerberos':
+                    has_problem = validate_kerberos_hashfile(hashfile_path, jobs_new_hashfile_form.kerberos_hash_type.data)
+                    hash_type = jobs_new_hashfile_form.kerberos_hash_type.data
+                elif jobs_new_hashfile_form.file_type.data == 'shadow':
+                    has_problem = validate_shadow_hashfile(hashfile_path, jobs_new_hashfile_form.shadow_hash_type.data)
+                    hash_type = jobs_new_hashfile_form.shadow_hash_type.data
+                elif jobs_new_hashfile_form.file_type.data == 'user_hash':
+                    has_problem = validate_user_hash_hashfile(hashfile_path)
+                    hash_type = jobs_new_hashfile_form.hash_type.data
+                elif jobs_new_hashfile_form.file_type.data == 'hash_only':
+                    has_problem = validate_hash_only_hashfile(hashfile_path, jobs_new_hashfile_form.hash_type.data)
+                    hash_type = jobs_new_hashfile_form.hash_type.data
+                else:
+                    has_problem = 'Invalid File Format'
 
-            if has_problem:
-                flash(has_problem, 'danger')
-                return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job_id))
-            else:
+                if has_problem:
+                    flash(has_problem, 'danger')
+                    return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job_id))
+
                 hashfile_name = jobs_new_hashfile_form.name.data
                 if not hashfile_name and jobs_new_hashfile_form.hashfile.data:
                     hashfile_name = jobs_new_hashfile_form.hashfile.data.filename
@@ -185,19 +242,24 @@ def jobs_assigned_hashfile(job_id):
                 db.session.add(hashfile)
                 db.session.commit()
 
-                # Parse Hashfile
-                if not import_hashfilehashes(   hashfile_id=hashfile.id,
-                                                hashfile_path=hashfile_path,
-                                                file_type=jobs_new_hashfile_form.file_type.data,
-                                                hash_type=hash_type
-                                                ):
-                    return ('Something went wrong. Check the filetype / hashtype and try again.')
+                if not import_hashfilehashes(
+                    hashfile_id=hashfile.id,
+                    hashfile_path=hashfile_path,
+                    file_type=jobs_new_hashfile_form.file_type.data,
+                    hash_type=hash_type,
+                ):
+                    flash('Failed importing hashfile. Check file format/hash type and retry.', 'danger')
+                    return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job_id))
 
-                # Temporary upload cleanup is handled separately.
                 job.hashfile_id = hashfile.id
                 db.session.commit()
-
-            return redirect(str(hashfile.id))
+                return redirect(str(hashfile.id))
+            finally:
+                if os.path.isfile(hashfile_path):
+                    try:
+                        os.remove(hashfile_path)
+                    except OSError:
+                        current_app.logger.warning('Failed to remove temporary hash upload file: %s', hashfile_path)
 
     elif request.method == 'POST' and request.form.get('hashfile_id'):
         selected_hashfile = _get_assignable_hashfile(job, request.form.get('hashfile_id'))
@@ -233,7 +295,7 @@ def jobs_assigned_hashfile(job_id):
 def jobs_assigned_hashfile_cracked(job_id, hashfile_id):
     """Function to show instacrack results"""
 
-    job = Jobs.query.get(job_id)
+    job = Jobs.query.get_or_404(job_id)
     if not _can_manage_job(job):
         flash('You do not have rights to view this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
@@ -255,7 +317,7 @@ def jobs_assigned_hashfile_cracked(job_id, hashfile_id):
 @login_required
 def jobs_list_tasks(job_id):
     """Function to list tasks for a given job"""    
-    job = Jobs.query.get(job_id)
+    job = Jobs.query.get_or_404(job_id)
     if not _can_manage_job(job):
         flash('You do not have rights to view this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
@@ -271,10 +333,12 @@ def jobs_list_tasks(job_id):
 @login_required
 def jobs_assigned_task(job_id, task_id):
     """Function to assign task to job"""
-    job = Jobs.query.get(job_id)
+    job = Jobs.query.get_or_404(job_id)
     if not _can_manage_job(job):
         flash('You do not have rights to modify this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
+
+    Tasks.query.get_or_404(task_id)
 
     exists = JobTasks.query.filter_by(job_id=job_id, task_id=task_id).first()
     if exists:
@@ -291,14 +355,20 @@ def jobs_assigned_task(job_id, task_id):
 def jobs_assign_task_group(job_id, task_group_id):
     """Function to assign task group to job"""
 
-    job = Jobs.query.get(job_id)
+    job = Jobs.query.get_or_404(job_id)
     if not _can_manage_job(job):
         flash('You do not have rights to modify this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
-    task_group = TaskGroups.query.get(task_group_id)
+    task_group = TaskGroups.query.get_or_404(task_group_id)
+    try:
+        task_group_entries = json.loads(task_group.tasks)
+    except (TypeError, ValueError):
+        task_group_entries = []
 
-    for task_group_entry in json.loads(task_group.tasks):
+    for task_group_entry in task_group_entries:
+        if not Tasks.query.get(task_group_entry):
+            continue
         job_task = JobTasks(job_id=job_id, task_id=task_group_entry, status='Not Started')
         db.session.add(job_task)
     db.session.commit()
@@ -309,35 +379,35 @@ def jobs_assign_task_group(job_id, task_group_id):
 @login_required
 def jobs_move_task_up(job_id, task_id):
     """Function to move assigned task up on task list for job"""
-    job = Jobs.query.get(job_id)
+    job = Jobs.query.get_or_404(job_id)
     if not _can_manage_job(job):
         flash('You do not have rights to modify this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
     job_tasks = JobTasks.query.filter_by(job_id=job_id).all()
+    if not job_tasks:
+        flash('No tasks assigned to this job.', 'warning')
+        return redirect("/jobs/"+str(job_id)+"/tasks")
 
-    # Rebuild task ordering so sequence is preserved without requiring contiguous IDs.
-    temp_jobtasks = []
-    new_jobtasks = []
+    ordered_task_ids = [entry.task_id for entry in job_tasks]
+    if task_id not in ordered_task_ids:
+        flash('Task is not assigned to this job.', 'warning')
+        return redirect("/jobs/"+str(job_id)+"/tasks")
 
-    for entry in job_tasks:
-        temp_jobtasks.append(str(entry.task_id))
-
-    if temp_jobtasks[0] == str(task_id):
+    element_index = ordered_task_ids.index(task_id)
+    if element_index == 0:
         flash('Task is already at the top', 'warning')
         return redirect("/jobs/"+str(job_id)+"/tasks")
 
-    element_index = temp_jobtasks.index(str(task_id))
-    temp_value = temp_jobtasks[element_index - 1]
-    temp_jobtasks[element_index - 1] = str(task_id)
-    temp_jobtasks[element_index] = str(temp_value)
-
-    new_jobtasks = temp_jobtasks
+    ordered_task_ids[element_index - 1], ordered_task_ids[element_index] = (
+        ordered_task_ids[element_index],
+        ordered_task_ids[element_index - 1],
+    )
 
     JobTasks.query.filter_by(job_id=job_id).delete()
     db.session.commit()
 
-    for entry in new_jobtasks:
+    for entry in ordered_task_ids:
         job_task = JobTasks(job_id=job_id, task_id=entry, status='Not Started')
         db.session.add(job_task)
     db.session.commit()
@@ -348,37 +418,35 @@ def jobs_move_task_up(job_id, task_id):
 @login_required
 def jobs_move_task_down(job_id, task_id):
     """Function to move assigned task down on task list for job"""
-    job = Jobs.query.get(job_id)
+    job = Jobs.query.get_or_404(job_id)
     if not _can_manage_job(job):
         flash('You do not have rights to modify this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
     job_tasks = JobTasks.query.filter_by(job_id=job_id).all()
+    if not job_tasks:
+        flash('No tasks assigned to this job.', 'warning')
+        return redirect("/jobs/"+str(job_id)+"/tasks")
 
-    # Rebuild task ordering so sequence is preserved without requiring contiguous IDs.
-    temp_jobtasks = []
-    new_jobtasks = []
+    ordered_task_ids = [entry.task_id for entry in job_tasks]
+    if task_id not in ordered_task_ids:
+        flash('Task is not assigned to this job.', 'warning')
+        return redirect("/jobs/"+str(job_id)+"/tasks")
 
-    for entry in job_tasks:
-        temp_jobtasks.append(str(entry.task_id))
-
-    if temp_jobtasks[-1] == str(task_id):
+    element_index = ordered_task_ids.index(task_id)
+    if element_index == len(ordered_task_ids) - 1:
         flash('Task is already at the bottom', 'warning')
         return redirect("/jobs/"+str(job_id)+"/tasks")
 
-    for index in range(len(temp_jobtasks)):
-        if int(index+1) <= len(temp_jobtasks):
-            if  temp_jobtasks[int(index)] == str(task_id):
-                new_jobtasks.append(temp_jobtasks[int(index+1)])
-                new_jobtasks.append(str(task_id))
-                del temp_jobtasks[int(index+1)]
-            else:
-                new_jobtasks.append(temp_jobtasks[int(index)])
+    ordered_task_ids[element_index], ordered_task_ids[element_index + 1] = (
+        ordered_task_ids[element_index + 1],
+        ordered_task_ids[element_index],
+    )
 
     JobTasks.query.filter_by(job_id=job_id).delete()
     db.session.commit()
 
-    for entry in new_jobtasks:
+    for entry in ordered_task_ids:
         job_task = JobTasks(job_id=job_id, task_id=entry, status='Not Started')
         db.session.add(job_task)
     db.session.commit()
@@ -389,12 +457,16 @@ def jobs_move_task_down(job_id, task_id):
 @login_required
 def jobs_remove_task(job_id, task_id):
     """Function to remove task from task list on job"""
-    job = Jobs.query.get(job_id)
+    job = Jobs.query.get_or_404(job_id)
     if not _can_manage_job(job):
         flash('You do not have rights to modify this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
     job_task = JobTasks.query.filter_by(job_id=job_id, task_id=task_id).first()
+    if not job_task:
+        flash('Task is not assigned to this job.', 'warning')
+        return redirect("/jobs/"+str(job_id)+"/tasks")
+
     db.session.delete(job_task)
     db.session.commit()
 
@@ -404,7 +476,7 @@ def jobs_remove_task(job_id, task_id):
 @login_required
 def jobs_remove_all_tasks(job_id):
     """Function to remove all tasks from job"""
-    job = Jobs.query.get(job_id)
+    job = Jobs.query.get_or_404(job_id)
     if not _can_manage_job(job):
         flash('You do not have rights to modify this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
@@ -418,8 +490,8 @@ def jobs_remove_all_tasks(job_id):
 def jobs_delete(job_id):
     """Function to delete job"""
 
-    job = Jobs.query.get(job_id)
-    if current_user.admin or job.owner_id == current_user.id:
+    job = Jobs.query.get_or_404(job_id)
+    if _can_manage_job(job):
         JobTasks.query.filter_by(job_id=job_id).delete()
 
         db.session.delete(job)
@@ -434,7 +506,7 @@ def jobs_delete(job_id):
 @login_required
 def jobs_summary(job_id):
     """Function to present job summary"""    
-    job = Jobs.query.get(job_id)
+    job = Jobs.query.get_or_404(job_id)
     if not _can_manage_job(job):
         flash('You do not have rights to view this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
@@ -448,6 +520,9 @@ def jobs_summary(job_id):
     form = JobSummaryForm()
     tasks = Tasks.query.all()
     hashfile = Hashfiles.query.get(job.hashfile_id)
+    if not hashfile:
+        flash('You must assign a valid hashfile before reviewing summary.', 'danger')
+        return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job.id))
     domain = Domains.query.get(job.domain_id)
     cracked_cnt = db.session.query(Hashes).outerjoin(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile.id).count()
     hash_total = db.session.query(Hashes).outerjoin(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(HashfileHashes.hashfile_id==hashfile.id).count()
@@ -472,58 +547,56 @@ def jobs_summary(job_id):
 def jobs_start(job_id):
     """Function to start job"""
 
-    job = Jobs.query.get(job_id)
+    job = Jobs.query.get_or_404(job_id)
     job_tasks = JobTasks.query.filter_by(job_id = job_id).all()
 
-    if job and job_tasks:
-        if current_user.admin or job.owner_id == current_user.id:
-            job.status = 'Queued'
-            job.queued_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            for job_task in job_tasks:
-                job_task.status = 'Queued'
-                job_task.priority = job.priority
-                try:
-                    job_task.command = build_hashcat_command(job.id, job_task.task_id)
-                except ValueError as e:
-                    db.session.rollback()
-                    flash(str(e), 'danger')
-                    return redirect(url_for('jobs.jobs_summary', job_id=job.id))
+    if not _can_manage_job(job):
+        flash('You do not have rights to start this job!', 'danger')
+        return redirect(url_for('jobs.jobs_list'))
 
-            db.session.commit()
-            flash('Job has been Started!', 'success')
-            return redirect(url_for('main.home'))
-        else:
-            flash('You do not have rights to start this job!', 'danger')
-            return redirect(url_for('jobs.jobs_list'))
-    else:
+    if not job_tasks:
         flash('Error in starting job', 'danger')
         return redirect(url_for('jobs.jobs_list'))
+
+    job.status = 'Queued'
+    job.queued_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    for job_task in job_tasks:
+        job_task.status = 'Queued'
+        job_task.priority = job.priority
+        try:
+            job_task.command = build_hashcat_command(job.id, job_task.task_id)
+        except ValueError as e:
+            db.session.rollback()
+            flash(str(e), 'danger')
+            return redirect(url_for('jobs.jobs_summary', job_id=job.id))
+
+    db.session.commit()
+    flash('Job has been Started!', 'success')
+    return redirect(url_for('main.home'))
 
 @jobs.route("/jobs/stop/<int:job_id>", methods=['GET'])
 @login_required
 def jobs_stop(job_id):
     """Function to stop a job"""
 
-    job = Jobs.query.get(job_id)
+    job = Jobs.query.get_or_404(job_id)
     job_tasks = JobTasks.query.filter_by(job_id = job_id).all()
 
-    if job:
-        if current_user.admin or job.owner_id == current_user.id:
-            if job.status in ('Running', 'Queued', 'Paused'):
-                job.status = 'Canceled'
-                job.ended_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    if not _can_manage_job(job):
+        flash('You do not have rights to stop this job!', 'danger')
+        return redirect(url_for('jobs.jobs_list'))
 
-                for job_task in job_tasks:
-                    job_task.status = 'Canceled'
-                    job_task.worker_pid = None
-                db.session.commit()
-                flash('Job has been stopped!', 'success')
-            else:
-                flash('Job is not actively running.', 'danger')
-        else:
-            flash('You do not have rights to stop this job!', 'danger')
+    if job.status in ('Running', 'Queued', 'Paused'):
+        job.status = 'Canceled'
+        job.ended_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        for job_task in job_tasks:
+            job_task.status = 'Canceled'
+            job_task.worker_pid = None
+        db.session.commit()
+        flash('Job has been stopped!', 'success')
     else:
-        flash('Error in stopping job', 'danger')
+        flash('Job is not actively running.', 'danger')
     return redirect(url_for('jobs.jobs_list'))
 
 @jobs.route("/jobs/pause/<int:job_id>", methods=['GET'])
@@ -531,12 +604,8 @@ def jobs_stop(job_id):
 def jobs_pause(job_id):
     """Pause a running or queued job."""
 
-    job = Jobs.query.get(job_id)
+    job = Jobs.query.get_or_404(job_id)
     job_tasks = JobTasks.query.filter_by(job_id=job_id).all()
-
-    if not job:
-        flash('Error in pausing job', 'danger')
-        return redirect(url_for('jobs.jobs_list'))
 
     if not _can_manage_job(job):
         flash('You do not have rights to pause this job!', 'danger')
@@ -560,12 +629,8 @@ def jobs_pause(job_id):
 def jobs_resume(job_id):
     """Resume a paused job."""
 
-    job = Jobs.query.get(job_id)
+    job = Jobs.query.get_or_404(job_id)
     job_tasks = JobTasks.query.filter_by(job_id=job_id).all()
-
-    if not job:
-        flash('Error in resuming job', 'danger')
-        return redirect(url_for('jobs.jobs_list'))
 
     if not _can_manage_job(job):
         flash('You do not have rights to resume this job!', 'danger')

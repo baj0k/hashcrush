@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import pytest
+from sqlalchemy import inspect
 
 from hashcrush import create_app
 from hashcrush.models import (
@@ -213,6 +214,20 @@ def test_runtime_bootstrap_creates_required_directories(tmp_path):
 
 
 @pytest.mark.security
+def test_runtime_bootstrap_uses_configured_runtime_root(tmp_path):
+    from hashcrush import _ensure_runtime_directories
+
+    root_path = tmp_path / "app-root"
+    runtime_path = tmp_path / "custom-runtime"
+    _ensure_runtime_directories(str(root_path), str(runtime_path))
+
+    assert (runtime_path / "tmp").is_dir()
+    assert (runtime_path / "hashes").is_dir()
+    assert (runtime_path / "outfiles").is_dir()
+    assert (root_path / "ssl").is_dir()
+
+
+@pytest.mark.security
 def test_setup_defaults_no_longer_seeds_rules_or_wordlists():
     from hashcrush import setup_defaults_if_needed
 
@@ -404,6 +419,168 @@ def test_executor_import_stores_plaintext_in_hex_format(tmp_path):
 
 
 @pytest.mark.security
+def test_hashcat_exit_code_one_is_success_when_status_indicates_exhausted(tmp_path):
+    from hashcrush.executor.service import _is_successful_hashcat_exit, _parse_hashcat_status
+
+    output_path = tmp_path / "hashcat_status.txt"
+    output_path.write_text(
+        "Status...........: Exhausted\n"
+        "Recovered........: 0/1000 (0.00%) Digests (total), 0/1000 (0.00%) Digests (new)\n"
+        "Progress.........: 7737809375/7737809375 (100.00%)\n",
+        encoding="utf-8",
+    )
+
+    status = _parse_hashcat_status(str(output_path))
+    assert status.get("Status") == "Exhausted"
+    assert _is_successful_hashcat_exit(1, status) is True
+
+
+@pytest.mark.security
+def test_hashcat_exit_code_one_without_completion_signal_is_failure():
+    from hashcrush.executor.service import _is_successful_hashcat_exit
+
+    status = {"Status": "Aborted", "Progress": "1/10 (10.00%)"}
+    assert _is_successful_hashcat_exit(1, status) is False
+
+
+@pytest.mark.security
+def test_jobs_list_displays_eta_and_percent_done_for_active_job():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="Telemetry Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="telemetry.txt", domain_id=domain.id, owner_id=admin.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        task = Tasks(
+            name="telemetry-task",
+            hc_attackmode="maskmode",
+            owner_id=admin.id,
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a?a",
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        job = Jobs(
+            name="telemetry-job",
+            status="Running",
+            domain_id=domain.id,
+            owner_id=admin.id,
+            hashfile_id=hashfile.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        progress_payload = json.dumps(
+            {
+                "Time_Estimated": "ETA_TEST_VALUE",
+                "Progress": "127063228416/735091890625 (17.29%)",
+            }
+        )
+        db.session.add(
+            JobTasks(
+                job_id=job.id,
+                task_id=task.id,
+                status="Running",
+                progress=progress_payload,
+            )
+        )
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get("/jobs")
+        assert response.status_code == 200
+        assert b"% Done" in response.data
+        assert b"ETA" in response.data
+        assert b"17.29%" in response.data
+        assert b"ETA_TEST_VALUE" in response.data
+
+
+@pytest.mark.security
+def test_dashboard_displays_eta_and_percent_done_columns_for_tasks():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="Dashboard Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        task = Tasks(
+            name="dashboard-task",
+            hc_attackmode="maskmode",
+            owner_id=admin.id,
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a?a",
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        running_job = Jobs(
+            name="dashboard-running",
+            status="Running",
+            domain_id=domain.id,
+            owner_id=admin.id,
+        )
+        queued_job = Jobs(
+            name="dashboard-queued",
+            status="Queued",
+            domain_id=domain.id,
+            owner_id=admin.id,
+        )
+        db.session.add_all([running_job, queued_job])
+        db.session.commit()
+
+        running_progress = json.dumps(
+            {
+                "Time_Estimated": "DASHBOARD_ETA",
+                "Progress": "500/1000 (50.00%)",
+            }
+        )
+        db.session.add(
+            JobTasks(
+                job_id=running_job.id,
+                task_id=task.id,
+                status="Running",
+                progress=running_progress,
+            )
+        )
+        db.session.add(
+            JobTasks(
+                job_id=queued_job.id,
+                task_id=task.id,
+                status="Queued",
+                progress=None,
+            )
+        )
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get("/")
+        assert response.status_code == 200
+        assert b"% Done" in response.data
+        assert b"ETA" in response.data
+        assert b"50.00%" in response.data
+        assert b"DASHBOARD_ETA" in response.data
+
+
+@pytest.mark.security
 def test_jobs_assigned_hashfile_validates_domain_and_visibility():
     app = _build_app()
     with app.app_context():
@@ -528,7 +705,18 @@ def test_domains_delete_removes_inactive_jobs_and_orphans():
         db.session.add(inactive_job)
         db.session.commit()
 
-        db.session.add(JobTasks(job_id=inactive_job.id, task_id=1, status="Completed"))
+        cleanup_task = Tasks(
+            name="cleanup-task",
+            hc_attackmode="maskmode",
+            owner_id=admin.id,
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a",
+        )
+        db.session.add(cleanup_task)
+        db.session.commit()
+
+        db.session.add(JobTasks(job_id=inactive_job.id, task_id=cleanup_task.id, status="Completed"))
         db.session.commit()
 
         domain_id = domain.id
@@ -547,3 +735,69 @@ def test_domains_delete_removes_inactive_jobs_and_orphans():
         assert Hashfiles.query.get(hashfile_id) is None
         assert HashfileHashes.query.filter_by(hashfile_id=hashfile_id).count() == 0
         assert Hashes.query.get(orphan_hash_id) is None
+
+
+@pytest.mark.security
+def test_settings_page_renders_without_csrf_template_failure():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get("/settings")
+        assert response.status_code == 200
+        assert b"csrf_token" in response.data
+
+
+@pytest.mark.security
+def test_wordlist_and_job_mutation_routes_return_404_for_invalid_ids():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response_wordlist_delete = client.post("/wordlists/delete/999999")
+        assert response_wordlist_delete.status_code == 404
+
+        response_wordlist_update = client.get("/wordlists/update/999999")
+        assert response_wordlist_update.status_code == 404
+
+        response_job_delete = client.post("/jobs/delete/999999")
+        assert response_job_delete.status_code == 404
+
+
+@pytest.mark.security
+def test_database_constraints_and_indexes_exist_on_core_link_tables():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        inspector = inspect(db.engine)
+
+        hashfile_hashes_indexes = {entry["name"] for entry in inspector.get_indexes("hashfile_hashes")}
+        assert "ix_hashfile_hashes_hashfile_id" in hashfile_hashes_indexes
+        assert "ix_hashfile_hashes_hash_id" in hashfile_hashes_indexes
+
+        job_tasks_indexes = {entry["name"] for entry in inspector.get_indexes("job_tasks")}
+        assert "ix_job_tasks_status_priority_id" in job_tasks_indexes
+
+        hashfile_hashes_fks = {
+            (tuple(entry["constrained_columns"]), entry["referred_table"])
+            for entry in inspector.get_foreign_keys("hashfile_hashes")
+        }
+        assert (("hash_id",), "hashes") in hashfile_hashes_fks
+        assert (("hashfile_id",), "hashfiles") in hashfile_hashes_fks
+
+        job_tasks_fks = {
+            (tuple(entry["constrained_columns"]), entry["referred_table"])
+            for entry in inspector.get_foreign_keys("job_tasks")
+        }
+        assert (("job_id",), "jobs") in job_tasks_fks
+        assert (("task_id",), "tasks") in job_tasks_fks

@@ -4,6 +4,7 @@ import secrets
 import hashlib
 import re
 import shlex
+import tempfile
 from datetime import datetime
 import _md5
 from flask import current_app
@@ -12,6 +13,20 @@ from hashcrush.models import Rules, Wordlists, Hashfiles, HashfileHashes, Hashes
 from werkzeug.utils import secure_filename
 
 _PLAINTEXT_HEX_PATTERN = re.compile(r'^[0-9a-f]+$')
+
+
+def get_runtime_root_path() -> str:
+    """Return absolute runtime root path for ephemeral task artifacts."""
+    configured = current_app.config.get('RUNTIME_PATH')
+    if configured:
+        return os.path.abspath(os.path.expanduser(str(configured)))
+    # Backward-compatible fallback when config does not define runtime_path.
+    return os.path.join(tempfile.gettempdir(), 'hashcrush-runtime')
+
+
+def get_runtime_subdir(name: str) -> str:
+    """Return absolute path to a runtime subdirectory."""
+    return os.path.join(get_runtime_root_path(), name)
 
 
 def is_plaintext_hex_encoded(value: str | None) -> bool:
@@ -124,7 +139,7 @@ def save_file(path, form_file):
     random_hex = secrets.token_hex(8)
     original_name = secure_filename(os.path.basename(form_file.filename or 'upload.txt')) or 'upload.txt'
     file_name = f'{random_hex}_{original_name}'
-    target_dir = os.path.join(current_app.root_path, path)
+    target_dir = path if os.path.isabs(path) else os.path.join(current_app.root_path, path)
     os.makedirs(target_dir, exist_ok=True)
     file_path = os.path.join(target_dir, file_name)
     form_file.save(file_path)
@@ -314,12 +329,13 @@ def build_hashcat_argv(job_id, task_id, hashcat_bin=None):
     rules_file = Rules.query.get(task.rule_id) if task.rule_id else None
     wordlist = Wordlists.query.get(task.wl_id) if task.wl_id else None
 
-    control_dir = os.path.join(current_app.root_path, 'control')
-    os.makedirs(os.path.join(control_dir, 'hashes'), exist_ok=True)
-    os.makedirs(os.path.join(control_dir, 'outfiles'), exist_ok=True)
+    hashes_dir = get_runtime_subdir('hashes')
+    outfiles_dir = get_runtime_subdir('outfiles')
+    os.makedirs(hashes_dir, exist_ok=True)
+    os.makedirs(outfiles_dir, exist_ok=True)
 
-    target_file = os.path.join(control_dir, 'hashes', f'hashfile_{job.id}_{task.id}.txt')
-    crack_file = os.path.join(control_dir, 'outfiles', f'hc_cracked_{job.id}_{task.id}.txt')
+    target_file = os.path.join(hashes_dir, f'hashfile_{job.id}_{task.id}.txt')
+    crack_file = os.path.join(outfiles_dir, f'hc_cracked_{job.id}_{task.id}.txt')
     session = f'job{job.id}_task{task.id}'
     hashcat_bin_path = hashcat_bin or current_app.config.get('HASHCAT_BIN', 'hashcat')
     try:

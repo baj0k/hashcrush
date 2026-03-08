@@ -51,8 +51,8 @@ def upgrade():
         sa.Column("runtime", sa.Integer(), nullable=True),
         sa.Column("domain_id", sa.Integer(), nullable=False),
         sa.Column("owner_id", sa.Integer(), nullable=False),
-        sa.ForeignKeyConstraint(["domain_id"], ["domains.id"]),
-        sa.ForeignKeyConstraint(["owner_id"], ["users.id"]),
+        sa.ForeignKeyConstraint(["domain_id"], ["domains.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["owner_id"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
 
@@ -70,8 +70,9 @@ def upgrade():
         sa.Column("hashfile_id", sa.Integer(), nullable=True),
         sa.Column("domain_id", sa.Integer(), nullable=False),
         sa.Column("owner_id", sa.Integer(), nullable=False),
-        sa.ForeignKeyConstraint(["domain_id"], ["domains.id"]),
-        sa.ForeignKeyConstraint(["owner_id"], ["users.id"]),
+        sa.ForeignKeyConstraint(["domain_id"], ["domains.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["hashfile_id"], ["hashfiles.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(["owner_id"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
 
@@ -145,9 +146,12 @@ def upgrade():
         sa.Column("hash_id", sa.Integer(), nullable=False),
         sa.Column("username", sa.String(length=256), nullable=True),
         sa.Column("hashfile_id", sa.Integer(), nullable=False),
+        sa.ForeignKeyConstraint(["hash_id"], ["hashes.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["hashfile_id"], ["hashfiles.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(op.f("ix_hashfile_hashes_hash_id"), "hashfile_hashes", ["hash_id"], unique=False)
+    op.create_index(op.f("ix_hashfile_hashes_hashfile_id"), "hashfile_hashes", ["hashfile_id"], unique=False)
     op.create_index(op.f("ix_hashfile_hashes_username"), "hashfile_hashes", ["username"], unique=False)
 
     op.create_table(
@@ -162,14 +166,19 @@ def upgrade():
         sa.Column("progress", sa.String(length=6000), nullable=True),
         sa.Column("benchmark", sa.String(length=20), nullable=True),
         sa.Column("worker_pid", sa.Integer(), nullable=True),
+        sa.ForeignKeyConstraint(["job_id"], ["jobs.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["task_id"], ["tasks.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
+    op.create_index("ix_job_tasks_status_priority_id", "job_tasks", ["status", "priority", "id"], unique=False)
 
 
 def downgrade():
+    op.drop_index("ix_job_tasks_status_priority_id", table_name="job_tasks")
     op.drop_table("job_tasks")
 
     op.drop_index(op.f("ix_hashfile_hashes_username"), table_name="hashfile_hashes")
+    op.drop_index(op.f("ix_hashfile_hashes_hashfile_id"), table_name="hashfile_hashes")
     op.drop_index(op.f("ix_hashfile_hashes_hash_id"), table_name="hashfile_hashes")
     op.drop_table("hashfile_hashes")
 

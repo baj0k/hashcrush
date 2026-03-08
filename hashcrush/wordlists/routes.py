@@ -201,7 +201,7 @@ def wordlists_add():
 def wordlists_delete(wordlist_id):
     """Function to delete wordlist record"""
 
-    wordlist = Wordlists.query.get(wordlist_id)
+    wordlist = Wordlists.query.get_or_404(wordlist_id)
     if current_user.admin or wordlist.owner_id == current_user.id:
 
         # prevent deletion of dynamic list
@@ -210,11 +210,10 @@ def wordlists_delete(wordlist_id):
             return redirect(url_for('wordlists.wordlists_list'))
 
         # Check if associated with a Task
-        tasks = Tasks.query.all()
-        for task in tasks:
-            if task.wl_id == wordlist_id:
-                flash('Failed. Wordlist is associated to one or more tasks', 'danger')
-                return redirect(url_for('wordlists.wordlists_list'))
+        task = Tasks.query.filter_by(wl_id=wordlist_id).first()
+        if task:
+            flash('Failed. Wordlist is associated to one or more tasks', 'danger')
+            return redirect(url_for('wordlists.wordlists_list'))
 
         db.session.delete(wordlist)
         db.session.commit()
@@ -229,10 +228,15 @@ def wordlists_delete(wordlist_id):
 def dynamicwordlist_update(wordlist_id):
     """Function to update dynamic wordlist"""
 
-    wordlist = Wordlists.query.get(wordlist_id)
-    if wordlist.type == 'dynamic':
-        update_dynamic_wordlist(wordlist_id)
-        flash('Updated Dynamic Wordlist', 'success')
-    else:
+    wordlist = Wordlists.query.get_or_404(wordlist_id)
+    if not (current_user.admin or wordlist.owner_id == current_user.id):
+        flash('Unauthorized Action!', 'danger')
+        return redirect(url_for('wordlists.wordlists_list'))
+
+    if wordlist.type != 'dynamic':
         flash('Invalid wordlist', 'danger')
+        return redirect(url_for('wordlists.wordlists_list'))
+
+    update_dynamic_wordlist(wordlist_id)
+    flash('Updated Dynamic Wordlist', 'success')
     return redirect(url_for('wordlists.wordlists_list'))

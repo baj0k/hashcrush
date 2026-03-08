@@ -19,12 +19,15 @@ Jobs contain a series of tasks (hashcat commands). Jobs also have an associated 
                     <th scope="col">Name</th>
                     <th scope="col">Hash File</th>
                     <th scope="col">Status</th>
+                    <th scope="col">% Done</th>
+                    <th scope="col">ETA</th>
                     <th scope="col">Owner</th>
                     <th scope="col">Control</th>                   
                   </tr>
                 </thead>
                 <tbody>
                     {% for job in jobs%}
+                        {% set runtime = job_runtime_progress.get(job.id) %}
                         <tr>
                             <td>
                                 {% for domain in domains %}
@@ -42,6 +45,20 @@ Jobs contain a series of tasks (hashcat commands). Jobs also have an associated 
                                 {% endfor %}
                             </td>
                             <td>{{ job.status }}</td>
+                            <td>
+                                {% if runtime %}
+                                    {{ runtime.percent_done }}
+                                {% else %}
+                                    N/A
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if runtime %}
+                                    {{ runtime.eta }}
+                                {% else %}
+                                    N/A
+                                {% endif %}
+                            </td>
                             <td>
                                 {% for user in users %}
                                     {% if user.id == job.owner_id %}

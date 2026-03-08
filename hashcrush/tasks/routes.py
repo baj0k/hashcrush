@@ -1,4 +1,5 @@
 """Flask routes to handle Tasks"""
+import json
 from flask import Blueprint, render_template, redirect, url_for, flash
 from flask_login import login_required, current_user
 from hashcrush.tasks.forms import TasksForm
@@ -79,7 +80,7 @@ def tasks_add():
 def task_edit(task_id):
     """Function to edit task"""
 
-    task = Tasks.query.get(task_id)
+    task = Tasks.query.get_or_404(task_id)
 
     # Check whether the task is currently assigned to any active job task.
     affected_jobs = JobTasks.query.filter_by(task_id=task_id).all()
@@ -163,19 +164,22 @@ def task_edit(task_id):
 def tasks_delete(task_id):
     """Function to delete task"""
 
-    task = Tasks.query.get(task_id)
+    task = Tasks.query.get_or_404(task_id)
     task_groups = TaskGroups.query.all()
     if current_user.admin or task.owner_id == current_user.id:
 
         # Check if associated with JobTask (which implies its associated with a job)
-        jobtasks = JobTasks.query.all()
-        for jobtask in jobtasks:
-            if jobtask.task_id == task_id:
-                flash('Can not delete. Task is associated to one or more jobs.', 'danger')
-                return redirect(url_for('tasks.tasks_list'))
+        jobtask = JobTasks.query.filter_by(task_id=task_id).first()
+        if jobtask:
+            flash('Can not delete. Task is associated to one or more jobs.', 'danger')
+            return redirect(url_for('tasks.tasks_list'))
 
         for task_group in task_groups:
-            if str(task_id) in task_group.tasks:
+            try:
+                task_ids = json.loads(task_group.tasks)
+            except (TypeError, ValueError):
+                task_ids = []
+            if task_id in task_ids:
                 flash('Can not delete. The Task is associated to one or more Task Groups.', 'danger')
                 return redirect(url_for('tasks.tasks_list'))
 

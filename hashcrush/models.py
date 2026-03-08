@@ -41,16 +41,20 @@ class Jobs(db.Model):
     status = db.Column(db.String(20), nullable=False)           # Running, Paused, Completed, Queued, Canceled, Ready, Incomplete
     started_at = db.Column(db.DateTime, nullable=True)          # These defaults should be changed
     ended_at = db.Column(db.DateTime, nullable=True)            # These defaults should be changed
-    hashfile_id = db.Column(db.Integer, nullable=True)
-    domain_id = db.Column(db.Integer, db.ForeignKey('domains.id'), nullable=False)
-    owner_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    hashfile_id = db.Column(db.Integer, db.ForeignKey('hashfiles.id', ondelete='SET NULL'), nullable=True)
+    domain_id = db.Column(db.Integer, db.ForeignKey('domains.id', ondelete='CASCADE'), nullable=False)
+    owner_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
 
 class JobTasks(db.Model):
     """Class object to represent JobTasks"""
 
+    __table_args__ = (
+        db.Index('ix_job_tasks_status_priority_id', 'status', 'priority', 'id'),
+    )
+
     id = db.Column(db.Integer, primary_key=True)
-    job_id = db.Column(db.Integer, nullable=False)
-    task_id = db.Column(db.Integer, nullable=False)
+    job_id = db.Column(db.Integer, db.ForeignKey('jobs.id', ondelete='CASCADE'), nullable=False)
+    task_id = db.Column(db.Integer, db.ForeignKey('tasks.id', ondelete='CASCADE'), nullable=False)
     priority = db.Column(db.Integer, nullable=False, default=3)
     command = db.Column(db.String(1024))
     status = db.Column(db.String(50), nullable=False)       # Running, Paused, Not Started, Completed, Queued, Canceled, Importing
@@ -72,16 +76,16 @@ class Hashfiles(db.Model):
     name = db.Column(db.String(256), nullable=False)        # can probably be reduced
     uploaded_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     runtime = db.Column(db.Integer, default=0)
-    domain_id = db.Column(db.Integer, db.ForeignKey('domains.id'), nullable=False)
-    owner_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    domain_id = db.Column(db.Integer, db.ForeignKey('domains.id', ondelete='CASCADE'), nullable=False)
+    owner_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
 
 class HashfileHashes(db.Model):
     """Class object to represent HashfileHashes"""
 
     id = db.Column(db.Integer, primary_key=True)
-    hash_id = db.Column(db.Integer, nullable=False, index=True)
+    hash_id = db.Column(db.Integer, db.ForeignKey('hashes.id', ondelete='CASCADE'), nullable=False, index=True)
     username = db.Column(db.String(256), nullable=True, default=None, index=True)
-    hashfile_id = db.Column(db.Integer, nullable=False)
+    hashfile_id = db.Column(db.Integer, db.ForeignKey('hashfiles.id', ondelete='CASCADE'), nullable=False, index=True)
 
 class Rules(db.Model):
     id = db.Column(db.Integer, primary_key=True)
