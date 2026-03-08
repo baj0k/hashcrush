@@ -12,6 +12,10 @@ secret_key =
 hashcat_bin = hashcat
 # Optional: hashcat --status timer interval in seconds.
 hashcat_status_timer = 5
+# Optional: hashfile validator limits.
+hashfile_max_line_length = 50000
+hashfile_max_total_lines = 1000000
+hashfile_max_total_bytes = 1073741824
 # Required: external wordlists root (for example /usr/share/seclists/Passwords).
 wordlists_path = /usr/share/seclists/Passwords
 # Required: external rules root (for example /usr/share/hashcat/rules).
@@ -21,3 +25,12 @@ runtime_path = /tmp/hashcrush-runtime
 # Optional: SSL cert/key file paths (or set HASHCRUSH_SSL_CERT_PATH / HASHCRUSH_SSL_KEY_PATH).
 ssl_cert_path = /etc/hashcrush/ssl/cert.pem
 ssl_key_path = /etc/hashcrush/ssl/key.pem
+# Optional: login brute-force throttle controls.
+auth_throttle_enabled = true
+auth_throttle_max_attempts = 5
+auth_throttle_window_seconds = 300
+auth_throttle_lockout_seconds = 900
+# Optional: session cookie hardening controls.
+session_cookie_secure = true
+session_cookie_httponly = true
+session_cookie_samesite = Lax

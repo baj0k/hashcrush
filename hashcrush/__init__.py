@@ -228,6 +228,21 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     if config_overrides:
         app.config.update(config_overrides)
 
+    # Secure cookies by default in non-debug deployments.
+    if app.config.get('SESSION_COOKIE_SECURE') is None:
+        app.config['SESSION_COOKIE_SECURE'] = (not app.config.get('TESTING')) and (not app.debug)
+    app.config['SESSION_COOKIE_HTTPONLY'] = bool(app.config.get('SESSION_COOKIE_HTTPONLY', True))
+    if app.config.get('SESSION_COOKIE_SAMESITE') not in {'Lax', 'Strict', 'None'}:
+        app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    if (
+        (not app.config.get('TESTING'))
+        and (not app.debug)
+        and (not app.config.get('SESSION_COOKIE_SECURE'))
+    ):
+        app.logger.warning(
+            'SECURITY WARNING: SESSION_COOKIE_SECURE is disabled outside testing/debug.'
+        )
+
     _warn_insecure_configuration(app)
 
     if _is_flask_db_command():

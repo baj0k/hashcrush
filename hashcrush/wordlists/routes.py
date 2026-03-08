@@ -237,6 +237,10 @@ def dynamicwordlist_update(wordlist_id):
         flash('Invalid wordlist', 'danger')
         return redirect(url_for('wordlists.wordlists_list'))
 
-    update_dynamic_wordlist(wordlist_id)
+    update_dynamic_wordlist(
+        wordlist_id,
+        requesting_user_id=current_user.id,
+        include_all=bool(current_user.admin),
+    )
     flash('Updated Dynamic Wordlist', 'success')
     return redirect(url_for('wordlists.wordlists_list'))

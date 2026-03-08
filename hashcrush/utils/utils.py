@@ -7,12 +7,70 @@ import shlex
 import tempfile
 from datetime import datetime
 import _md5
-from flask import current_app
+from flask import current_app, has_app_context
 from hashcrush.models import db
 from hashcrush.models import Rules, Wordlists, Hashfiles, HashfileHashes, Hashes, Tasks, Jobs, JobTasks
 from werkzeug.utils import secure_filename
 
 _PLAINTEXT_HEX_PATTERN = re.compile(r'^[0-9a-f]+$')
+DEFAULT_HASHFILE_MAX_LINE_LENGTH = 50_000
+DEFAULT_HASHFILE_MAX_TOTAL_LINES = 1_000_000
+DEFAULT_HASHFILE_MAX_TOTAL_BYTES = 1024 * 1024 * 1024
+
+
+def _get_hashfile_validation_limit(config_key: str, default: int, minimum: int = 1) -> int:
+    if not has_app_context():
+        return default
+    value = current_app.config.get(config_key, default)
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    if parsed < minimum:
+        return default
+    return parsed
+
+
+def _iter_hashfile_lines(hashfile_path: str):
+    max_line_length = _get_hashfile_validation_limit(
+        'HASHFILE_MAX_LINE_LENGTH',
+        DEFAULT_HASHFILE_MAX_LINE_LENGTH,
+    )
+    max_total_bytes = _get_hashfile_validation_limit(
+        'HASHFILE_MAX_TOTAL_BYTES',
+        DEFAULT_HASHFILE_MAX_TOTAL_BYTES,
+    )
+    max_total_lines = _get_hashfile_validation_limit(
+        'HASHFILE_MAX_TOTAL_LINES',
+        DEFAULT_HASHFILE_MAX_TOTAL_LINES,
+    )
+
+    total_bytes = 0
+    with open(hashfile_path, 'rb') as file:
+        for line_number, raw_line in enumerate(file, start=1):
+            if line_number > max_total_lines:
+                raise ValueError(
+                    f'Error: Hashfile has too many lines ({line_number:,}). '
+                    f'Max lines is {max_total_lines:,}.'
+                )
+            total_bytes += len(raw_line)
+            if total_bytes > max_total_bytes:
+                raise ValueError(
+                    f'Error: Hashfile is too large ({total_bytes:,} bytes). '
+                    f'Max size is {max_total_bytes:,} bytes.'
+                )
+            if len(raw_line) > max_line_length:
+                raise ValueError(
+                    'Error line '
+                    + str(line_number)
+                    + ' is too long. Line length: '
+                    + str(len(raw_line))
+                    + '. Max length is '
+                    + f'{max_line_length:,}'
+                    + ' chars.'
+                )
+
+            yield line_number, raw_line.decode('utf-8', errors='replace')
 
 
 def get_runtime_root_path() -> str:
@@ -274,17 +332,25 @@ def import_hashfilehashes(hashfile_id, hashfile_path, file_type, hash_type):
     db.session.commit()
     return True
 
-def update_dynamic_wordlist(wordlist_id):
+def update_dynamic_wordlist(wordlist_id, requesting_user_id: int | None = None, include_all: bool = False):
     """Function to update dynamic wordlist"""
 
     wordlist = Wordlists.query.get(wordlist_id)
-    plaintext_rows = (
+    if not wordlist:
+        return False
+
+    plaintext_query = (
         db.session.query(Hashes.plaintext)
+        .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+        .join(Hashfiles, HashfileHashes.hashfile_id == Hashfiles.id)
         .filter(Hashes.cracked.is_(True))
         .filter(Hashes.plaintext.isnot(None))
-        .distinct()
-        .all()
     )
+    if not include_all:
+        owner_scope = requesting_user_id if requesting_user_id is not None else wordlist.owner_id
+        plaintext_query = plaintext_query.filter(Hashfiles.owner_id == owner_scope)
+
+    plaintext_rows = plaintext_query.distinct().all()
 
     # Do we delete the original file, or overwrite it?
     # if we overwrite, what happens if the new content has fewer lines than the previous file.
@@ -306,6 +372,7 @@ def update_dynamic_wordlist(wordlist_id):
     # update last update
     wordlist.last_updated = datetime.today()
     db.session.commit()
+    return True
 
 def build_hashcat_argv(job_id, task_id, hashcat_bin=None):
     """Build a safe argv list for launching hashcat without a shell."""
@@ -490,207 +557,160 @@ def update_job_task_status(jobtask_id, status):
 def validate_pwdump_hashfile(hashfile_path, hash_type):
     """Function to validate if hashfile submitted is a pwdump format"""
 
-    file = open(hashfile_path, 'r')
-    lines = file.readlines()
-    line_number = 0
-
-    for line in lines:
-        line_number += 1
-
-        # Skip entries that are just newlines
-        if len(line) > 50000:
-            return 'Error line ' + str(line_number) + ' is too long. Line length: ' + str(len(line)) + '. Max length is 50,000 chars.'
-        if len(line) > 0:
+    try:
+        for line_number, line in _iter_hashfile_lines(hashfile_path):
+            line = line.rstrip('\r\n')
+            if len(line) == 0:
+                continue
             if ':' not in line:
                 return 'Error line ' + str(line_number) + ' is missing a : character. Pwdump file should include usernames.'
-            # This is slow af :(
-            colon_cnt = 0
-            for char in line:
-                if char == ':':
-                    colon_cnt += 1
+            colon_cnt = line.count(':')
             if colon_cnt < 6:
                 return 'Error line ' + str(line_number) + '. File does not appear to be be in a pwdump format.'
             if hash_type == '1000':
-                if len(line.split(':')[3]) != 32:
+                line_parts = line.split(':')
+                if len(line_parts) < 4 or len(line_parts[3]) != 32:
                     return 'Error line ' + str(line_number) + ' has an invalid number of characters (' + str(len(line.rstrip())) + ') should be 32'
             else:
                 return 'Sorry. The only Hash Type we support for PWDump files is NTLM'
+    except ValueError as error:
+        return str(error)
     return False
 
 def validate_netntlm_hashfile(hashfile_path):
     """Function to validate if hashfile submitted is a netntlm format"""
 
-    file = open(hashfile_path, 'r')
-    lines = file.readlines()
-    line_number = 0
-
-    # Do a whole file check if file_type is NetNTLM
-    # If duplicate usernames exists return error
-    # we could probably wrap this into the for loop below
-
-    list_of_username_and_computers = []
-    for line in lines:
-        username_computer = (line.split(':')[0] + ':' + line.split(':')[2]).lower()
-        if username_computer in list_of_username_and_computers:
-            return 'Error: Duplicate usernames / computer found in hashfiles (' + str(username_computer) + '). Please only submit unique usernames / computer.'
-        list_of_username_and_computers.append(username_computer)
-
-    for line in lines:
-        line_number += 1
-
-        # Skip entries that are just newlines
-        if len(line) > 50000:
-            return 'Error line ' + str(line_number) + ' is too long. Line length: ' + str(len(line)) + '. Max length is 50,000 chars.'
-        if len(line) > 0:
+    list_of_username_and_computers = set()
+    try:
+        for line_number, line in _iter_hashfile_lines(hashfile_path):
+            line = line.rstrip('\r\n')
+            if len(line) == 0:
+                continue
             if ':' not in line:
                 return 'Error line ' + str(line_number) + ' is missing a : character. NetNTLM file should include usernames.'
-            # This is slow af :(
-            colon_cnt = 0
-            for char in line:
-                if char == ':':
-                    colon_cnt += 1
+            colon_cnt = line.count(':')
             if colon_cnt < 5:
                 return 'Error line ' + str(line_number) + '. File does not appear to be be in a NetNTLM format.'
+
+            line_parts = line.split(':')
+            username_computer = (line_parts[0] + ':' + line_parts[2]).lower()
+            if username_computer in list_of_username_and_computers:
+                return 'Error: Duplicate usernames / computer found in hashfiles (' + str(username_computer) + '). Please only submit unique usernames / computer.'
+            list_of_username_and_computers.add(username_computer)
+    except ValueError as error:
+        return str(error)
     return False
 
 def validate_kerberos_hashfile(hashfile_path, hash_type):
     """Function to validate if hashfile submitted is a kerberos format"""
-
-    file = open(hashfile_path, 'r')
-    lines = file.readlines()
-    line_number = 0
-
-    for line in lines:
-        line_number += 1
-
-        # Skip entries that are just newlines
-        if len(line) > 50000:
-            return 'Error line ' + str(line_number) + ' is too long. Line length: ' + str(len(line)) + '. Max length is 50,000 chars.'
-        if len(line) > 0:
+    try:
+        for line_number, line in _iter_hashfile_lines(hashfile_path):
+            line = line.rstrip('\r\n')
+            if len(line) == 0:
+                continue
             if '$' not in line:
                 return 'Error line ' + str(line_number) + ' is missing a $ character. kerberos file should include these.'
-            dollar_cnt = 0
-            # This is slow af :(
-            for char in line:
-                if char == '$':
-                    dollar_cnt += 1
+            dollar_cnt = line.count('$')
+            line_parts = line.split('$')
 
             if hash_type == '7500':
                 if dollar_cnt != 6:
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 23, AS-REQ Pre-Auth (1)'
-                if line.split('$')[1] != 'krb5pa':
+                if line_parts[1] != 'krb5pa':
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 23, AS-REQ Pre-Auth (2)'
-                if line.split('$')[2] != '23':
+                if line_parts[2] != '23':
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 23, AS-REQ Pre-Auth (3)'
             elif hash_type == '13100':
                 if dollar_cnt != 7 and dollar_cnt != 8:
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 23, TGS-REP (1)'
-                if line.split('$')[1] != 'krb5tgs':
+                if line_parts[1] != 'krb5tgs':
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 23, TGS-REP (2)'
-                if line.split('$')[2] != '23':
+                if line_parts[2] != '23':
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 23, TGS-REP (3)'
             elif hash_type == '18200':
                 if dollar_cnt != 4 and dollar_cnt != 5:
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 23, AS-REP (1)'
-                if line.split('$')[1] != 'krb5asrep':
+                if line_parts[1] != 'krb5asrep':
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 23, AS-REP (2)'
-                if line.split('$')[2] != '23':
+                if line_parts[2] != '23':
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 23, AS-REP (3)'
             elif hash_type == '19600':
                 if dollar_cnt != 6 and dollar_cnt != 7:
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 17, TGS-REP (AES128-CTS-HMAC-SHA1-96) (1)'
-                if line.split('$')[1] != 'krb5tgs':
+                if line_parts[1] != 'krb5tgs':
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 17, TGS-REP (AES128-CTS-HMAC-SHA1-96) (2)'
-                if line.split('$')[2] != '17':
+                if line_parts[2] != '17':
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 17, TGS-REP (AES128-CTS-HMAC-SHA1-96) (3)'
             elif hash_type == '19700':
                 if dollar_cnt != 6 and dollar_cnt != 7:
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 18, TGS-REP (AES256-CTS-HMAC-SHA1-96) (1)'
-                if line.split('$')[1] != 'krb5tgs':
+                if line_parts[1] != 'krb5tgs':
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 18, TGS-REP (AES256-CTS-HMAC-SHA1-96) (2)'
-                if line.split('$')[2] != '18':
+                if line_parts[2] != '18':
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 18, TGS-REP (AES256-CTS-HMAC-SHA1-96) (3)'
             elif hash_type == '19800':
                 if dollar_cnt != 5 and dollar_cnt != 6:
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 17, Pre-Auth (1)'
-                if line.split('$')[1] != 'krb5pa':
+                if line_parts[1] != 'krb5pa':
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 17, Pre-Auth (2)'
-                if line.split('$')[2] != '17':
+                if line_parts[2] != '17':
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 17, Pre-Auth (3)'
             elif hash_type == '19900':
                 if dollar_cnt != 5 and dollar_cnt != 6:
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 18, Pre-Auth (1)'
-                if line.split('$')[1] != 'krb5pa':
+                if line_parts[1] != 'krb5pa':
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 18, Pre-Auth (2)'
-                if line.split('$')[2] != '18':
+                if line_parts[2] != '18':
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Kerberos 5, etype 18, Pre-Auth (3)'
             else:
                 return 'Sorry. The only suppported Hash Types are: 7500, 13100, 18200, 19600, 19700, 19800 and 19900.'
+    except ValueError as error:
+        return str(error)
     return False
 
 def validate_shadow_hashfile(hashfile_path, hash_type):
     """Function to validate if hashfile submitted is a shadow format"""
-
-    file = open(hashfile_path, 'r')
-    lines = file.readlines()
-    line_number = 0
-
-    for line in lines:
-        line_number += 1
-
-        # Skip entries that are just newlines
-        if len(line) > 50000:
-            return 'Error line ' + str(line_number) + ' is too long. Line length: ' + str(len(line)) + '. Max length is 50,000 chars.'
-        if len(line) > 0:
+    try:
+        for line_number, line in _iter_hashfile_lines(hashfile_path):
+            line = line.rstrip('\r\n')
+            if len(line) == 0:
+                continue
             if ':' not in line:
                 return 'Error line ' + str(line_number) + ' is missing a : character. shadow file should include usernames.'
             if hash_type == '1800':
-                dollar_cnt = 0
-                for char in line:
-                    if char == '$':
-                        dollar_cnt+=1
+                dollar_cnt = line.count('$')
                 if dollar_cnt != 3:
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Sha512 Crypt from a shadow file.'
                 if '$6$' not in line:
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Sha512 Crypt from a shadow file.'
+    except ValueError as error:
+        return str(error)
     return False
 
 def validate_user_hash_hashfile(hashfile_path):
     """Function to validate if hashfile submitted is a user:hash format"""
-
-    file = open(hashfile_path, 'r')
-    lines = file.readlines()
-    line_number = 0
-
-    for line in lines:
-        line_number += 1
-
-        # Skip entries that are just newlines
-        if len(line) > 50000:
-            return 'Error line ' + str(line_number) + ' is too long. Line length: ' + str(len(line)) + '. Max length is 50,000 chars.'
-        if len(line) > 0:
+    try:
+        for line_number, line in _iter_hashfile_lines(hashfile_path):
+            line = line.rstrip('\r\n')
+            if len(line) == 0:
+                continue
             if ':' not in line:
                 return 'Error line ' + str(line_number) + ' is missing a : character. user:hash file should have just ONE of these'
+    except ValueError as error:
+        return str(error)
 
-    return
+    return False
 
 # Dumb way of doing this, we return with an error message if we have an issue with the hashfile
 # and return false if hashfile is okay. :/ Should be the otherway around :shrug emoji:
 def validate_hash_only_hashfile(hashfile_path, hash_type):
     """Function to validate if hashfile submitted is a hash only format"""
 
-    file = open(hashfile_path, 'r')
-    lines = file.readlines()
-
-    line_number = 0
-    # for line in file,
-    for line in lines:
-        line_number += 1
-
-        # Skip entries that are just newlines
-        if len(line) > 50000:
-            return 'Error line ' + str(line_number) + ' is too long. Line length: ' + str(len(line)) + '. Max length is 50,000 chars.'
-        if len(line) > 0:
+    try:
+        for line_number, line in _iter_hashfile_lines(hashfile_path):
+            line = line.rstrip('\r\n')
+            if len(line) == 0:
+                continue
 
             # Check hash types
             if hash_type in ('0', '22', '1000'):
@@ -709,10 +729,7 @@ def validate_hash_only_hashfile(hashfile_path, hash_type):
                 if ':' not in line:
                     return 'Error line ' + str(line_number) + ' is missing a : character. Domain Cached Credentials (DCC), MS Cache hashes should have one'
             if hash_type == '1800':
-                dollar_cnt = 0
-                for char in line:
-                    if char == '$':
-                        dollar_cnt+=1
+                dollar_cnt = line.count('$')
                 if dollar_cnt != 3:
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Sha512 Crypt.'
                 if '$6$' not in line:
@@ -720,13 +737,8 @@ def validate_hash_only_hashfile(hashfile_path, hash_type):
             if hash_type == '2100':
                 if '$' not in line:
                     return 'Error line ' + str(line_number) + ' is missing a $ character. DCC2 Hashes should have these'
-                dollar_cnt = 0
-                hash_cnt = 0
-                for char in line:
-                    if char == '$':
-                        dollar_cnt += 1
-                    if char == '#':
-                        hash_cnt += 1
+                dollar_cnt = line.count('$')
+                hash_cnt = line.count('#')
                 if dollar_cnt != 2:
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: DCC2 MS Cache'
                 if hash_cnt != 2:
@@ -740,10 +752,7 @@ def validate_hash_only_hashfile(hashfile_path, hash_type):
             if hash_type == '3200':
                 if '$' not in line:
                     return 'Error line ' + str(line_number) + ' is missing a $ character. bcrypt Hashes should have these.'
-                dollar_cnt = 0
-                for char in line:
-                    if char == '$':
-                        dollar_cnt += 1
+                dollar_cnt = line.count('$')
                 if dollar_cnt != 3:
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: bcrypt'
             if hash_type == '5700':
@@ -752,10 +761,7 @@ def validate_hash_only_hashfile(hashfile_path, hash_type):
             if hash_type == '7100':
                 if '$' not in line:
                     return 'Error line ' + str(line_number) + ' is missing a $ character. Mac OSX 10.8+ ($ml$) hashes should have these.'
-                dollar_cnt = 0
-                for char in line:
-                    if char == '$':
-                        dollar_cnt += 1
+                dollar_cnt = line.count('$')
                 if dollar_cnt != 2:
                     return 'Error line ' + str(line_number) + '. Doesnt appear to be of the type: Mac OSX 10.8+ ($ml$)'
             if hash_type in ('9400', '9500', '9600'):
@@ -763,12 +769,11 @@ def validate_hash_only_hashfile(hashfile_path, hash_type):
                     return 'Error line ' + str(line_number) + ' is missing a $ character. Office hashes require 2.'
                 if '*' not in line:
                     return 'Error line ' + str(line_number) + ' is missing a * character. Office hashes require 6.'
-                star_cnt = 0
-                for char in line:
-                    if char == '*':
-                        star_cnt +=1
+                star_cnt = line.count('*')
                 if star_cnt != 7:
-                    return 'Error line ' + str(line_number) + '. Does not appear to be of the type office.'              
+                    return 'Error line ' + str(line_number) + '. Does not appear to be of the type office.'
+    except ValueError as error:
+        return str(error)
 
     return False
 

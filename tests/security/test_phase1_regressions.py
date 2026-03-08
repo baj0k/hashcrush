@@ -1,3 +1,4 @@
+from configparser import ConfigParser
 import importlib.util
 import json
 from pathlib import Path
@@ -6,6 +7,7 @@ import pytest
 from sqlalchemy import inspect
 
 from hashcrush import create_app
+from hashcrush.config import sanitize_config_input
 from hashcrush.models import (
     Domains,
     Hashes,
@@ -22,19 +24,28 @@ from hashcrush.models import (
     db,
 )
 from hashcrush.users.routes import bcrypt
+from hashcrush.utils.utils import (
+    encode_plaintext_for_storage,
+    validate_hash_only_hashfile,
+    validate_netntlm_hashfile,
+    validate_user_hash_hashfile,
+)
 
 
-def _build_app():
+def _build_app(extra_overrides: dict | None = None):
+    base_overrides = {
+        "SECRET_KEY": "phase1-test-secret",
+        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
+        "SQLALCHEMY_TRACK_MODIFICATIONS": False,
+        "WTF_CSRF_ENABLED": False,
+        "AUTO_SETUP_DEFAULTS": False,
+        "ENABLE_SCHEDULER": False,
+    }
+    if extra_overrides:
+        base_overrides.update(extra_overrides)
     return create_app(
         testing=True,
-        config_overrides={
-            "SECRET_KEY": "phase1-test-secret",
-            "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
-            "SQLALCHEMY_TRACK_MODIFICATIONS": False,
-            "WTF_CSRF_ENABLED": False,
-            "AUTO_SETUP_DEFAULTS": False,
-            "ENABLE_SCHEDULER": False,
-        },
+        config_overrides=base_overrides,
     )
 
 
@@ -135,6 +146,16 @@ def test_cli_resolve_ssl_context_rejects_missing_files(tmp_path):
 
     with pytest.raises(RuntimeError, match="SSL certificate file not found"):
         cli_module._resolve_ssl_context(_App())
+
+
+@pytest.mark.security
+def test_sanitize_config_input_handles_delete_backspace_artifacts():
+    raw_value = "hj\x7f\x7f\x7f\x7fhashcrush"
+    cleaned = sanitize_config_input(raw_value)
+    assert cleaned == "hashcrush"
+
+    mixed = "ab\x08c\x01\x02d"
+    assert sanitize_config_input(mixed) == "acd"
 
 
 @pytest.mark.security
@@ -785,6 +806,314 @@ def test_settings_page_renders_without_csrf_template_failure():
         response = client.get("/settings")
         assert response.status_code == 200
         assert b"csrf_token" in response.data
+        assert b"database.host" in response.data
+        assert b"app.hashcat_bin" in response.data
+        assert b"Default When Empty" in response.data
+
+
+@pytest.mark.security
+def test_settings_hashcrush_config_update_persists_values(tmp_path):
+    config_path = tmp_path / "config.conf"
+    config_path.write_text(
+        "[database]\n"
+        "host = old-db-host\n"
+        "username = old-db-user\n"
+        "password = old-db-pass\n\n"
+        "[app]\n"
+        "hashcat_bin = hashcat\n"
+        "hashcat_status_timer = 5\n",
+        encoding="utf-8",
+    )
+
+    app = _build_app({"HASHCRUSH_CONFIG_PATH": str(config_path)})
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/settings/hashcrush_config",
+            data={
+                "cfg__database__host": "new-db-host",
+                "cfg__database__username": "new-db-user",
+                "cfg__database__password": "hj\x7f\x7fhashcrush",
+                "cfg__app__hashcat_bin": "/usr/bin/hashcat",
+                "cfg__app__hashcat_status_timer": "10",
+                "cfg__app__runtime_path": "/tmp/hashcrush-runtime-custom",
+            },
+        )
+        assert response.status_code == 302
+
+        parser = ConfigParser(interpolation=None)
+        parser.read(config_path)
+
+        assert parser.get("database", "host") == "new-db-host"
+        assert parser.get("database", "username") == "new-db-user"
+        assert parser.get("database", "password") == "hashcrush"
+        assert parser.get("app", "hashcat_bin") == "/usr/bin/hashcat"
+        assert parser.get("app", "hashcat_status_timer") == "10"
+        assert parser.get("app", "runtime_path") == "/tmp/hashcrush-runtime-custom"
+
+
+@pytest.mark.security
+def test_login_throttle_blocks_repeated_failures():
+    app = _build_app(
+        {
+            "AUTH_THROTTLE_ENABLED": True,
+            "AUTH_THROTTLE_MAX_ATTEMPTS": 2,
+            "AUTH_THROTTLE_WINDOW_SECONDS": 300,
+            "AUTH_THROTTLE_LOCKOUT_SECONDS": 60,
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+
+        first = client.post("/login", data={"username": "admin", "password": "wrong-password"})
+        assert first.status_code == 200
+
+        second = client.post("/login", data={"username": "admin", "password": "wrong-password"})
+        assert second.status_code == 200
+
+        blocked = client.post("/login", data={"username": "admin", "password": "wrong-password"})
+        assert blocked.status_code == 429
+        assert blocked.headers.get("Retry-After") is not None
+
+        blocked_valid = client.post(
+            "/login",
+            data={"username": "admin", "password": "test-admin-password"},
+        )
+        assert blocked_valid.status_code == 429
+
+
+@pytest.mark.security
+def test_login_throttle_can_be_disabled():
+    app = _build_app(
+        {
+            "AUTH_THROTTLE_ENABLED": False,
+            "AUTH_THROTTLE_MAX_ATTEMPTS": 1,
+            "AUTH_THROTTLE_WINDOW_SECONDS": 300,
+            "AUTH_THROTTLE_LOCKOUT_SECONDS": 60,
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+
+        first = client.post("/login", data={"username": "admin", "password": "wrong-password"})
+        second = client.post("/login", data={"username": "admin", "password": "wrong-password"})
+        assert first.status_code == 200
+        assert second.status_code == 200
+
+
+@pytest.mark.security
+def test_hashfile_validator_rejects_overlong_lines(tmp_path):
+    app = _build_app({"HASHFILE_MAX_LINE_LENGTH": 10})
+    with app.app_context():
+        db.create_all()
+
+        path = tmp_path / "long-line.txt"
+        path.write_text("12345678901\n", encoding="utf-8")
+        error = validate_hash_only_hashfile(str(path), "0")
+        assert isinstance(error, str)
+        assert "too long" in error.lower()
+
+
+@pytest.mark.security
+def test_hashfile_validator_rejects_oversized_files(tmp_path):
+    app = _build_app({"HASHFILE_MAX_TOTAL_BYTES": 10})
+    with app.app_context():
+        db.create_all()
+
+        path = tmp_path / "oversized.txt"
+        path.write_text("0123456789abcdef\n", encoding="utf-8")
+        error = validate_user_hash_hashfile(str(path))
+        assert isinstance(error, str)
+        assert "too large" in error.lower()
+
+
+@pytest.mark.security
+def test_hashfile_validator_rejects_too_many_lines(tmp_path):
+    app = _build_app({"HASHFILE_MAX_TOTAL_LINES": 2})
+    with app.app_context():
+        db.create_all()
+
+        path = tmp_path / "too-many-lines.txt"
+        path.write_text(
+            "0123456789abcdef0123456789abcdef\n"
+            "fedcba9876543210fedcba9876543210\n"
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+            encoding="utf-8",
+        )
+        error = validate_hash_only_hashfile(str(path), "0")
+        assert isinstance(error, str)
+        assert "too many lines" in error.lower()
+
+
+@pytest.mark.security
+def test_netntlm_validator_still_rejects_duplicate_user_host(tmp_path):
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+
+        path = tmp_path / "duplicate-netntlm.txt"
+        path.write_text(
+            "alice::WORKSTATION:1122334455667788:99aabbccddeeff00:0101000000000000\n"
+            "alice::WORKSTATION:ffeeddccbbaa9988:0011223344556677:0101000000000000\n",
+            encoding="utf-8",
+        )
+        error = validate_netntlm_hashfile(str(path))
+        assert isinstance(error, str)
+        assert "duplicate" in error.lower()
+
+
+@pytest.mark.security
+def test_dynamic_wordlist_update_is_scoped_to_requesting_user_data(tmp_path):
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        owner = _seed_user("owner-user", password="owner-user-password", admin=False)
+        other = _seed_user("other-user", password="other-user-password", admin=False)
+        _seed_settings()
+
+        domain = Domains(name="ScopeDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        owner_hashfile = Hashfiles(name="owner.txt", domain_id=domain.id, owner_id=owner.id)
+        other_hashfile = Hashfiles(name="other.txt", domain_id=domain.id, owner_id=other.id)
+        db.session.add(owner_hashfile)
+        db.session.add(other_hashfile)
+        db.session.commit()
+
+        owner_hash = Hashes(
+            sub_ciphertext="11111111111111111111111111111111",
+            ciphertext="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            hash_type=1000,
+            cracked=True,
+            plaintext=encode_plaintext_for_storage("owner-secret"),
+        )
+        other_hash = Hashes(
+            sub_ciphertext="22222222222222222222222222222222",
+            ciphertext="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            hash_type=1000,
+            cracked=True,
+            plaintext=encode_plaintext_for_storage("other-secret"),
+        )
+        db.session.add(owner_hash)
+        db.session.add(other_hash)
+        db.session.commit()
+
+        db.session.add(HashfileHashes(hash_id=owner_hash.id, hashfile_id=owner_hashfile.id))
+        db.session.add(HashfileHashes(hash_id=other_hash.id, hashfile_id=other_hashfile.id))
+        db.session.commit()
+
+        dynamic_wordlist_path = tmp_path / "dynamic-wordlist.txt"
+        dynamic_wordlist = Wordlists(
+            name="dynamic-owner",
+            owner_id=owner.id,
+            type="dynamic",
+            path=str(dynamic_wordlist_path),
+            size=0,
+            checksum="0" * 64,
+        )
+        db.session.add(dynamic_wordlist)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, owner)
+
+        response = client.post(f"/wordlists/update/{dynamic_wordlist.id}")
+        assert response.status_code == 302
+
+        contents = dynamic_wordlist_path.read_text(encoding="utf-8")
+        assert "owner-secret" in contents
+        assert "other-secret" not in contents
+
+
+@pytest.mark.security
+def test_task_group_assigned_tasks_blocks_non_owner_access():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        owner = _seed_user("tg-owner", password="owner-user-password", admin=False)
+        attacker = _seed_user("tg-attacker", password="attacker-user-password", admin=False)
+        _seed_settings()
+
+        task_group = TaskGroups(name="owner-group", owner_id=owner.id, tasks=json.dumps([]))
+        db.session.add(task_group)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, attacker)
+
+        response = client.get(f"/task_groups/assigned_tasks/{task_group.id}")
+        assert response.status_code == 302
+
+
+@pytest.mark.security
+def test_task_group_mutation_blocks_non_owner():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        owner = _seed_user("tg-owner", password="owner-user-password", admin=False)
+        attacker = _seed_user("tg-attacker", password="attacker-user-password", admin=False)
+        _seed_settings()
+
+        task = Tasks(
+            name="owner-task",
+            hc_attackmode="maskmode",
+            owner_id=owner.id,
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a?a",
+        )
+        task_group = TaskGroups(name="owner-group", owner_id=owner.id, tasks=json.dumps([]))
+        db.session.add(task)
+        db.session.add(task_group)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, attacker)
+
+        response = client.post(
+            f"/task_groups/assigned_tasks/{task_group.id}/add_task/{task.id}"
+        )
+        assert response.status_code == 302
+
+        db.session.refresh(task_group)
+        assert json.loads(task_group.tasks) == []
+
+
+@pytest.mark.security
+def test_production_session_cookie_defaults_are_hardened():
+    app = create_app(
+        testing=False,
+        config_overrides={
+            "SECRET_KEY": "phase1-test-secret",
+            "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
+            "SQLALCHEMY_TRACK_MODIFICATIONS": False,
+            "AUTO_SETUP_DEFAULTS": False,
+            "ENABLE_SCHEDULER": False,
+            "ENABLE_LOCAL_EXECUTOR": False,
+            "SKIP_RUNTIME_BOOTSTRAP": True,
+            "AUTO_MIGRATE_PLAINTEXT_STORAGE": False,
+            "SESSION_COOKIE_SECURE": None,
+        },
+    )
+
+    assert app.config["SESSION_COOKIE_SECURE"] is True
+    assert app.config["SESSION_COOKIE_HTTPONLY"] is True
+    assert app.config["SESSION_COOKIE_SAMESITE"] == "Lax"
 
 
 @pytest.mark.security
@@ -806,6 +1135,109 @@ def test_wordlist_and_job_mutation_routes_return_404_for_invalid_ids():
 
         response_job_delete = client.post("/jobs/delete/999999")
         assert response_job_delete.status_code == 404
+
+
+@pytest.mark.security
+def test_users_delete_blocks_last_admin_account():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(f"/users/delete/{admin.id}")
+        assert response.status_code == 302
+        assert Users.query.get(admin.id) is not None
+        assert Users.query.filter_by(admin=True).count() == 1
+
+
+@pytest.mark.security
+def test_users_delete_blocks_self_delete_even_when_other_admin_exists():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_user("admin2", password="test-admin-password-2", admin=True)
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(f"/users/delete/{admin.id}")
+        assert response.status_code == 302
+        assert Users.query.get(admin.id) is not None
+        assert Users.query.filter_by(admin=True).count() == 2
+
+
+@pytest.mark.security
+def test_users_delete_allows_deleting_other_admin_when_not_last_admin():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        other_admin = _seed_user("admin2", password="test-admin-password-2", admin=True)
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(f"/users/delete/{other_admin.id}")
+        assert response.status_code == 302
+        assert Users.query.get(other_admin.id) is None
+        assert Users.query.filter_by(admin=True).count() == 1
+
+
+@pytest.mark.security
+def test_admin_reset_blocks_self_reset_flow():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+        original_hash = admin.password
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            f"/admin_reset_password/{admin.id}",
+            data={
+                "new_password": "different-password-123",
+                "confirm_password": "different-password-123",
+            },
+        )
+        assert response.status_code == 302
+
+        db.session.refresh(admin)
+        assert admin.password == original_hash
+
+
+@pytest.mark.security
+def test_admin_reset_still_updates_other_user_password():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        target_user = _seed_user("target-user", password="old-user-password", admin=False)
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            f"/admin_reset_password/{target_user.id}",
+            data={
+                "new_password": "new-user-password-123",
+                "confirm_password": "new-user-password-123",
+            },
+        )
+        assert response.status_code == 302
+
+        db.session.refresh(target_user)
+        assert bcrypt.check_password_hash(target_user.password, "new-user-password-123")
 
 
 @pytest.mark.security

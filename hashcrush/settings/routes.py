@@ -1,10 +1,12 @@
 """Flask routes to handle Settings"""
+from configparser import ConfigParser
 import os
 import sys
-from flask import Blueprint, render_template, abort, url_for, flash, redirect
+from flask import Blueprint, render_template, abort, url_for, flash, redirect, request, current_app
 from flask_login import login_required, current_user
 from sqlalchemy import text
 import hashcrush
+from hashcrush.config import sanitize_config_input
 from hashcrush.models import Settings
 from hashcrush.models import db
 from hashcrush.utils.utils import get_runtime_subdir
@@ -12,9 +14,203 @@ from hashcrush.utils.utils import get_runtime_subdir
 
 settings = Blueprint('settings', __name__)
 
+HASHCRUSH_CONFIG_FIELDS = [
+    {
+        'section': 'database',
+        'key': 'host',
+        'label': 'Database Host',
+        'env_name': 'HASHCRUSH_DB_HOST',
+        'default_display': 'Required (no default).',
+    },
+    {
+        'section': 'database',
+        'key': 'username',
+        'label': 'Database Username',
+        'env_name': 'HASHCRUSH_DB_USERNAME',
+        'default_display': 'Required (no default).',
+    },
+    {
+        'section': 'database',
+        'key': 'password',
+        'label': 'Database Password',
+        'env_name': 'HASHCRUSH_DB_PASSWORD',
+        'default_display': 'Required (no default).',
+    },
+    {
+        'section': 'app',
+        'key': 'secret_key',
+        'label': 'Flask Secret Key',
+        'env_name': 'HASHCRUSH_SECRET_KEY',
+        'default_display': 'Required (no default).',
+    },
+    {
+        'section': 'app',
+        'key': 'hashcat_bin',
+        'label': 'Hashcat Binary Path',
+        'env_name': 'HASHCRUSH_HASHCAT_BIN',
+        'default_display': 'hashcat',
+    },
+    {
+        'section': 'app',
+        'key': 'hashcat_status_timer',
+        'label': 'Hashcat Status Timer (seconds)',
+        'env_name': 'HASHCRUSH_HASHCAT_STATUS_TIMER',
+        'default_display': '5',
+    },
+    {
+        'section': 'app',
+        'key': 'hashfile_max_line_length',
+        'label': 'Hashfile Max Line Length',
+        'env_name': 'HASHCRUSH_HASHFILE_MAX_LINE_LENGTH',
+        'default_display': '50000',
+    },
+    {
+        'section': 'app',
+        'key': 'hashfile_max_total_lines',
+        'label': 'Hashfile Max Total Lines',
+        'env_name': 'HASHCRUSH_HASHFILE_MAX_TOTAL_LINES',
+        'default_display': '1000000',
+    },
+    {
+        'section': 'app',
+        'key': 'hashfile_max_total_bytes',
+        'label': 'Hashfile Max Total Bytes',
+        'env_name': 'HASHCRUSH_HASHFILE_MAX_TOTAL_BYTES',
+        'default_display': '1073741824',
+    },
+    {
+        'section': 'app',
+        'key': 'wordlists_path',
+        'label': 'Wordlists Directory',
+        'env_name': 'HASHCRUSH_WORDLISTS_PATH',
+        'default_display': '/usr/share/seclists/Passwords',
+    },
+    {
+        'section': 'app',
+        'key': 'rules_path',
+        'label': 'Rules Directory',
+        'env_name': 'HASHCRUSH_RULES_PATH',
+        'default_display': '/usr/share/hashcat/rules',
+    },
+    {
+        'section': 'app',
+        'key': 'runtime_path',
+        'label': 'Runtime Directory',
+        'env_name': 'HASHCRUSH_RUNTIME_PATH',
+        'default_display': '/tmp/hashcrush-runtime',
+    },
+    {
+        'section': 'app',
+        'key': 'ssl_cert_path',
+        'label': 'TLS Certificate Path',
+        'env_name': 'HASHCRUSH_SSL_CERT_PATH',
+        'default_display': '(project)/hashcrush/ssl/cert.pem',
+    },
+    {
+        'section': 'app',
+        'key': 'ssl_key_path',
+        'label': 'TLS Key Path',
+        'env_name': 'HASHCRUSH_SSL_KEY_PATH',
+        'default_display': '(project)/hashcrush/ssl/key.pem',
+    },
+    {
+        'section': 'app',
+        'key': 'auth_throttle_enabled',
+        'label': 'Auth Throttle Enabled',
+        'env_name': 'HASHCRUSH_AUTH_THROTTLE_ENABLED',
+        'default_display': 'true',
+    },
+    {
+        'section': 'app',
+        'key': 'auth_throttle_max_attempts',
+        'label': 'Auth Throttle Max Attempts',
+        'env_name': 'HASHCRUSH_AUTH_THROTTLE_MAX_ATTEMPTS',
+        'default_display': '5',
+    },
+    {
+        'section': 'app',
+        'key': 'auth_throttle_window_seconds',
+        'label': 'Auth Throttle Window Seconds',
+        'env_name': 'HASHCRUSH_AUTH_THROTTLE_WINDOW_SECONDS',
+        'default_display': '300',
+    },
+    {
+        'section': 'app',
+        'key': 'auth_throttle_lockout_seconds',
+        'label': 'Auth Throttle Lockout Seconds',
+        'env_name': 'HASHCRUSH_AUTH_THROTTLE_LOCKOUT_SECONDS',
+        'default_display': '900',
+    },
+    {
+        'section': 'app',
+        'key': 'session_cookie_secure',
+        'label': 'Session Cookie Secure',
+        'env_name': 'HASHCRUSH_SESSION_COOKIE_SECURE',
+        'default_display': 'Auto-enabled in non-debug/non-testing deployments.',
+    },
+    {
+        'section': 'app',
+        'key': 'session_cookie_httponly',
+        'label': 'Session Cookie HttpOnly',
+        'env_name': 'HASHCRUSH_SESSION_COOKIE_HTTPONLY',
+        'default_display': 'true',
+    },
+    {
+        'section': 'app',
+        'key': 'session_cookie_samesite',
+        'label': 'Session Cookie SameSite',
+        'env_name': 'HASHCRUSH_SESSION_COOKIE_SAMESITE',
+        'default_display': 'Lax',
+    },
+]
+
 
 def _temp_folder_path() -> str:
     return get_runtime_subdir('tmp')
+
+
+def _hashcrush_config_path() -> str:
+    configured = (
+        current_app.config.get('HASHCRUSH_CONFIG_PATH')
+        or os.getenv('HASHCRUSH_CONFIG_PATH')
+        or 'hashcrush/config.conf'
+    )
+    return os.path.abspath(os.path.expanduser(str(configured)))
+
+
+def _load_hashcrush_config(config_path: str) -> ConfigParser:
+    parser = ConfigParser(interpolation=None)
+    parser.read(config_path)
+    return parser
+
+
+def _resolve_field_default(field: dict) -> str:
+    if field['key'] == 'ssl_cert_path':
+        return os.path.join(current_app.root_path, 'ssl', 'cert.pem')
+    if field['key'] == 'ssl_key_path':
+        return os.path.join(current_app.root_path, 'ssl', 'key.pem')
+    return str(field['default_display'])
+
+
+def _hashcrush_config_rows(parser: ConfigParser) -> list[dict[str, str | bool]]:
+    rows: list[dict[str, str | bool]] = []
+    for field in HASHCRUSH_CONFIG_FIELDS:
+        section = field['section']
+        key = field['key']
+        env_name = field['env_name']
+        rows.append(
+            {
+                'section': section,
+                'key': key,
+                'label': field['label'],
+                'form_name': f'cfg__{section}__{key}',
+                'value': sanitize_config_input(parser.get(section, key, fallback='')),
+                'default_display': _resolve_field_default(field),
+                'env_name': env_name,
+                'env_active': bool((os.getenv(env_name) or '').strip()),
+            }
+        )
+    return rows
 
 
 def _format_bytes(size_bytes: int) -> str:
@@ -74,6 +270,10 @@ def settings_list():
         except Exception:
             database_version = None
 
+        config_path = _hashcrush_config_path()
+        config_parser = _load_hashcrush_config(config_path)
+        config_rows = _hashcrush_config_rows(config_parser)
+
         return render_template(
             'settings.html',
             title='settings',
@@ -84,9 +284,62 @@ def settings_list():
             application_version=hashcrush.__version__,
             database_version=database_version,
             python_version=f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}',
+            config_path=config_path,
+            config_file_exists=os.path.isfile(config_path),
+            config_rows=config_rows,
         )
 
     abort(403)
+
+
+@settings.route('/settings/hashcrush_config', methods=['POST'])
+@login_required
+def update_hashcrush_config():
+    """Save editable hashcrush/config.conf values from settings UI."""
+    if not current_user.admin:
+        abort(403)
+
+    config_path = _hashcrush_config_path()
+    config_parser = _load_hashcrush_config(config_path)
+
+    for field in HASHCRUSH_CONFIG_FIELDS:
+        section = field['section']
+        if not config_parser.has_section(section):
+            config_parser.add_section(section)
+
+    for field in HASHCRUSH_CONFIG_FIELDS:
+        section = field['section']
+        key = field['key']
+        form_name = f'cfg__{section}__{key}'
+
+        if form_name not in request.form:
+            continue
+
+        submitted_value = sanitize_config_input(request.form.get(form_name)).strip()
+        if submitted_value:
+            config_parser.set(section, key, submitted_value)
+        elif config_parser.has_option(section, key):
+            config_parser.remove_option(section, key)
+
+    for section in ('database', 'app'):
+        if config_parser.has_section(section) and not config_parser.items(section):
+            config_parser.remove_section(section)
+
+    try:
+        config_directory = os.path.dirname(config_path)
+        if config_directory:
+            os.makedirs(config_directory, exist_ok=True)
+        with open(config_path, 'w', encoding='utf-8') as config_file:
+            config_parser.write(config_file)
+    except OSError as error:
+        flash(f'Failed to save config file at "{config_path}": {error}', 'danger')
+        return redirect(url_for('settings.settings_list') + '#nav-hashcrush')
+
+    flash(
+        f'Updated configuration values in "{config_path}". Restart HashCrush to apply all changes.',
+        'success',
+    )
+    return redirect(url_for('settings.settings_list') + '#nav-hashcrush')
 
 
 @settings.route('/settings/clear_temp', methods=['POST'])
