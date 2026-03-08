@@ -16,6 +16,7 @@ DEFAULT_HASHCAT_STATUS_TIMER = 5
 DEFAULT_WORDLISTS_PATH = '/usr/share/seclists/Passwords'
 DEFAULT_RULES_PATH = '/usr/share/hashcat/rules'
 DEFAULT_RUNTIME_PATH = '/tmp/hashcrush-runtime'
+DEFAULT_SSL_DIR = '/etc/hashcrush/ssl'
 
 
 def _read_existing_app_value(config_path: str, key: str) -> str | None:
@@ -43,6 +44,37 @@ def _prompt_existing_directory(prompt: str, default: str | None) -> str:
         return resolved
 
 
+def _prompt_writable_directory(prompt: str, default: str | None) -> str:
+    while True:
+        suffix = f' [{default}]' if default else ''
+        value = input(f'{prompt}{suffix}: ').strip()
+        if not value:
+            value = default or ''
+        resolved = os.path.abspath(os.path.expanduser(value))
+        if not resolved:
+            print('Error: path is required.')
+            continue
+        try:
+            os.makedirs(resolved, exist_ok=True)
+            probe_file = os.path.join(resolved, f'.write-probe-{secrets.token_hex(4)}')
+            with open(probe_file, 'w', encoding='utf-8') as handle:
+                handle.write('ok')
+            os.remove(probe_file)
+        except OSError as exc:
+            print(f'Error: cannot write to directory "{resolved}": {exc}')
+            continue
+        return resolved
+
+
+def _set_path_mode(path: str, mode: int) -> None:
+    if not hasattr(os, 'chmod'):
+        return
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
+
+
 def _ensure_runtime_directories(
     runtime_root: str,
     ssl_cert_path: str,
@@ -57,6 +89,8 @@ def _ensure_runtime_directories(
     )
     for runtime_dir in runtime_dirs:
         os.makedirs(runtime_dir, exist_ok=True)
+    _set_path_mode(os.path.dirname(ssl_cert_path), 0o700)
+    _set_path_mode(os.path.dirname(ssl_key_path), 0o700)
 
 
 def _write_config_atomic(
@@ -233,22 +267,28 @@ runtime_path = os.path.abspath(os.path.expanduser(runtime_path))
 os.makedirs(runtime_path, exist_ok=True)
 
 project_root = os.path.abspath(os.path.dirname(__file__))
-default_ssl_cert_path = os.path.join(project_root, 'hashcrush', 'ssl', 'cert.pem')
-default_ssl_key_path = os.path.join(project_root, 'hashcrush', 'ssl', 'key.pem')
-ssl_cert_path = os.path.abspath(
-    os.path.expanduser(
-        os.getenv('HASHCRUSH_SSL_CERT_PATH')
-        or existing_ssl_cert_path
-        or default_ssl_cert_path
-    )
+env_ssl_cert_path = (os.getenv('HASHCRUSH_SSL_CERT_PATH') or '').strip()
+env_ssl_key_path = (os.getenv('HASHCRUSH_SSL_KEY_PATH') or '').strip()
+existing_ssl_dir = None
+if existing_ssl_cert_path and existing_ssl_key_path:
+    existing_cert_dir = os.path.dirname(os.path.abspath(os.path.expanduser(existing_ssl_cert_path)))
+    existing_key_dir = os.path.dirname(os.path.abspath(os.path.expanduser(existing_ssl_key_path)))
+    if existing_cert_dir == existing_key_dir:
+        existing_ssl_dir = existing_cert_dir
+env_ssl_dir = None
+if env_ssl_cert_path and env_ssl_key_path:
+    env_cert_dir = os.path.dirname(os.path.abspath(os.path.expanduser(env_ssl_cert_path)))
+    env_key_dir = os.path.dirname(os.path.abspath(os.path.expanduser(env_ssl_key_path)))
+    if env_cert_dir == env_key_dir:
+        env_ssl_dir = env_cert_dir
+
+ssl_dir_default = env_ssl_dir or existing_ssl_dir or DEFAULT_SSL_DIR
+ssl_dir = _prompt_writable_directory(
+    'Enter path for TLS certificate/key directory',
+    ssl_dir_default,
 )
-ssl_key_path = os.path.abspath(
-    os.path.expanduser(
-        os.getenv('HASHCRUSH_SSL_KEY_PATH')
-        or existing_ssl_key_path
-        or default_ssl_key_path
-    )
-)
+ssl_cert_path = os.path.join(ssl_dir, 'cert.pem')
+ssl_key_path = os.path.join(ssl_dir, 'key.pem')
 
 if config_exists and existing_hashcat_bin:
     preserve_hashcat_bin = input(
@@ -327,6 +367,8 @@ subprocess.run([
     '-subj',
     '/C=XX/ST=Local/L=Local/O=HashCrush/OU=Setup/CN=localhost',
 ], check=True)
+_set_path_mode(ssl_cert_path, 0o644)
+_set_path_mode(ssl_key_path, 0o600)
 
 print('You can now start your instance of hashcrush by running the following command: ./hashcrush.py')
 print('Done.')

@@ -54,7 +54,7 @@ def task_groups_assigned_tasks(task_group_id):
     task_group_tasks = json.loads(task_group.tasks)
     return render_template('task_groups_assigntask.html', title='Task Group: Assign Tasks', task_group=task_group, tasks=tasks, task_group_tasks=task_group_tasks)
 
-@task_groups.route("/task_groups/assigned_tasks/<int:task_group_id>/add_task/<int:task_id>", methods=['GET'])
+@task_groups.route("/task_groups/assigned_tasks/<int:task_group_id>/add_task/<int:task_id>", methods=['POST'])
 @login_required
 def task_groups_assigned_tasks_add_task(task_group_id, task_id):
     """Function to assign task to task group"""
@@ -72,7 +72,7 @@ def task_groups_assigned_tasks_add_task(task_group_id, task_id):
     db.session.commit()
     return redirect("/task_groups/assigned_tasks/"+str(task_group.id))
 
-@task_groups.route("/task_groups/assigned_tasks/<int:task_group_id>/remove_task/<int:task_id>", methods=['GET'])
+@task_groups.route("/task_groups/assigned_tasks/<int:task_group_id>/remove_task/<int:task_id>", methods=['POST'])
 @login_required
 def task_groups_assigned_tasks_remove_task(task_group_id, task_id):
     """Function to remove task from task group."""
@@ -92,7 +92,7 @@ def task_groups_assigned_tasks_remove_task(task_group_id, task_id):
     db.session.commit()
     return redirect("/task_groups/assigned_tasks/"+str(task_group.id))
 
-@task_groups.route("/task_groups/assigned_tasks/<int:task_group_id>/promote_task/<int:task_id>", methods=['GET'])
+@task_groups.route("/task_groups/assigned_tasks/<int:task_group_id>/promote_task/<int:task_id>", methods=['POST'])
 @login_required
 def task_groups_assigned_tasks_promote_task(task_group_id, task_id):
     """Function to move assigned task up higher in queue on task group"""
@@ -129,7 +129,7 @@ def task_groups_assigned_tasks_promote_task(task_group_id, task_id):
     db.session.commit()
     return redirect("/task_groups/assigned_tasks/"+str(task_group.id))
 
-@task_groups.route("/task_groups/assigned_tasks/<int:task_group_id>/demote_task/<int:task_id>", methods=['GET'])
+@task_groups.route("/task_groups/assigned_tasks/<int:task_group_id>/demote_task/<int:task_id>", methods=['POST'])
 @login_required
 def task_groups_assigned_tasks_demote_task(task_group_id, task_id):
     """Function to move assigned task lower in queue on task group."""

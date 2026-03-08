@@ -7,14 +7,6 @@
   - Files: `hashcrush/config.conf`, setup/install docs.
   - Done when: `secret_key` and DB credentials are rotated; `config.conf` is never committed.
 
-- [ ] `P0-WEB-01` Convert all state-changing `GET` routes to `POST`/`DELETE` and enforce CSRF.
-  - Files: `hashcrush/jobs/routes.py`, `hashcrush/task_groups/routes.py`, `hashcrush/users/routes.py`, `hashcrush/wordlists/routes.py`, `hashcrush/settings/routes.py`, `hashcrush/hashfiles/routes.py`, `hashcrush/rules/routes.py`, `hashcrush/main/routes.py`, matching templates.
-  - Done when: all mutating endpoints reject `GET`; templates use forms with CSRF tokens.
-
-- [ ] `P0-AUTH-01` Add missing authorization checks for task-group mutation routes (IDOR risk).
-  - File: `hashcrush/task_groups/routes.py`.
-  - Done when: each read/write route enforces `current_user.admin or task_group.owner_id == current_user.id`.
-
 - [ ] `P0-AUTH-02` Enforce tenant scoping for non-admin users across UI routes and exports.
   - Files: `hashcrush/users/routes.py`, `hashcrush/jobs/routes.py`, `hashcrush/tasks/routes.py`, `hashcrush/searches/routes.py`, `hashcrush/analytics/routes.py`, `hashcrush/domains/routes.py`, `hashcrush/wordlists/routes.py`, `hashcrush/rules/routes.py`, `hashcrush/hashfiles/routes.py`, `hashcrush/main/routes.py`.
   - Done when: non-admin queries are owner/domain-scoped by default; bulk `.all()` usage is removed where data is tenant-sensitive.

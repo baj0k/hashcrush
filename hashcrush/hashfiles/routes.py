@@ -68,7 +68,7 @@ def hashfiles_list():
 
     return render_template('hashfiles.html', title='Hashfiles', hashfiles=hashfiles, domains=domains, cracked_rate=cracked_rate, jobs=jobs, hash_type_dict=hash_type_dict)
 
-@hashfiles.route("/hashfiles/delete/<int:hashfile_id>", methods=['GET', 'POST'])
+@hashfiles.route("/hashfiles/delete/<int:hashfile_id>", methods=['POST'])
 @login_required
 def hashfiles_delete(hashfile_id):
     """Function to delete hashfile by id"""

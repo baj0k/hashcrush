@@ -9,6 +9,7 @@ from flask import request
 from flask import url_for
 from flask import redirect
 from flask_wtf.csrf import generate_csrf
+from flask_wtf.csrf import CSRFProtect
 from functools import partial
 from logging.config import dictConfig as loggingDictConfig
 
@@ -237,6 +238,9 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
 
     from hashcrush.models import db
     db.init_app(app)
+
+    csrf = CSRFProtect()
+    csrf.init_app(app)
 
     from flask_migrate import Migrate
     migrate = Migrate()

@@ -223,7 +223,7 @@ def wordlists_delete(wordlist_id):
     return redirect(url_for('wordlists.wordlists_list'))
 
 
-@wordlists.route("/wordlists/update/<int:wordlist_id>", methods=['GET'])
+@wordlists.route("/wordlists/update/<int:wordlist_id>", methods=['POST'])
 @login_required
 def dynamicwordlist_update(wordlist_id):
     """Function to update dynamic wordlist"""

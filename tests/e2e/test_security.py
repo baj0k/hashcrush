@@ -151,7 +151,8 @@ def test_job_idor_access_denied_for_other_user(
         pytest.skip("Could not determine job id for IDOR test.")
     job_id = match.group(1)
 
-    page.goto(f"{live_server}/logout", wait_until="domcontentloaded")
+    page.locator("#manageMenu").click()
+    page.get_by_role("button", name="Logout").click()
     _login(page, live_server, second_username, second_password)
 
     page.goto(f"{live_server}/jobs/{job_id}/tasks", wait_until="domcontentloaded")

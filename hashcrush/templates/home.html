@@ -94,7 +94,10 @@
                                                 </td>
                                                 <td>
                                                     {% if job_task.status == 'Running' %}
-                                                        <a class="fa fa-stop btn btn-secondary" href="/job_task/stop/{{job_task.id}}" role="button" title="stop"></a>
+                                                        <form action="{{ url_for('main.stop_job_task', job_task_id=job_task.id) }}" method="POST" class="d-inline">
+                                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                            <button type="submit" class="fa fa-stop btn btn-secondary" title="stop"></button>
+                                                        </form>
                                                     {% endif %}
                                                 </td>
                                             </tr>

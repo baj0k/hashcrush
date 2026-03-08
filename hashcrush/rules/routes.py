@@ -182,7 +182,7 @@ def rules_add():
     )
 
 
-@rules.route("/rules/delete/<int:rule_id>", methods=['GET', 'POST'])
+@rules.route("/rules/delete/<int:rule_id>", methods=['POST'])
 @login_required
 def rules_delete(rule_id):
     """Function to delete rule file record"""

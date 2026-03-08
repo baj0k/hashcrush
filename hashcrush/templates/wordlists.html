@@ -67,7 +67,10 @@ Configured root: <code>{{ wordlists_root }}</code>
                             </td>
                             <td>
                                 <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{wordlist.id}}" title=Info></button>
-                                <a class="fa fa-undo btn btn-warning" href="/wordlists/update/{{wordlist.id}}" role="button" title=Update></a>
+                                <form action="{{ url_for('wordlists.dynamicwordlist_update', wordlist_id=wordlist.id) }}" method="POST" class="d-inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="fa fa-undo btn btn-warning" title="Update"></button>
+                                </form>
                             </td>
                         </tr>
                     {% endfor %}
@@ -120,6 +123,7 @@ Configured root: <code>{{ wordlists_root }}</code>
             <div class="modal-footer">
             <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
             <form action="{{ url_for('wordlists.wordlists_delete', wordlist_id=wordlist.id) }}" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input class="btn btn-danger" type="submit" value="Delete">
                 </form>
             </div>

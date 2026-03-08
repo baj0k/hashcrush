@@ -131,7 +131,8 @@ Task Groups are a set of tasks that can be assigned to a job.
                 <!-- Replace with url_for()
                 <form action="#" method="POST">
                 -->
-                <form action="/task_groups/delete/{{task_group.id}}" method="POST">
+                <form action="{{ url_for('task_groups.task_groups_delete', task_group_id=task_group.id) }}" method="POST">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input class="btn btn-danger" type="submit" value="Delete">
                 </form>
                 </div>

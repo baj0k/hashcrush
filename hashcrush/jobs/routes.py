@@ -329,7 +329,7 @@ def jobs_list_tasks(job_id):
 
     return render_template('jobs_assigned_tasks.html', title='Jobs Assigned Tasks', job=job, tasks=tasks, job_tasks=job_tasks, task_groups=task_groups)
 
-@jobs.route("/jobs/<int:job_id>/assign_task/<int:task_id>", methods=['GET'])
+@jobs.route("/jobs/<int:job_id>/assign_task/<int:task_id>", methods=['POST'])
 @login_required
 def jobs_assigned_task(job_id, task_id):
     """Function to assign task to job"""
@@ -350,7 +350,7 @@ def jobs_assigned_task(job_id, task_id):
 
     return redirect("/jobs/"+str(job_id)+"/tasks")
 
-@jobs.route("/jobs/<int:job_id>/assign_task_group/<int:task_group_id>", methods=['GET'])
+@jobs.route("/jobs/<int:job_id>/assign_task_group/<int:task_group_id>", methods=['POST'])
 @login_required
 def jobs_assign_task_group(job_id, task_group_id):
     """Function to assign task group to job"""
@@ -375,7 +375,7 @@ def jobs_assign_task_group(job_id, task_group_id):
 
     return redirect("/jobs/" + str(job_id) + "/tasks")
 
-@jobs.route("/jobs/<int:job_id>/move_task_up/<int:task_id>", methods=['GET'])
+@jobs.route("/jobs/<int:job_id>/move_task_up/<int:task_id>", methods=['POST'])
 @login_required
 def jobs_move_task_up(job_id, task_id):
     """Function to move assigned task up on task list for job"""
@@ -414,7 +414,7 @@ def jobs_move_task_up(job_id, task_id):
 
     return redirect("/jobs/"+str(job_id)+"/tasks")
 
-@jobs.route("/jobs/<int:job_id>/move_task_down/<int:task_id>", methods=['GET'])
+@jobs.route("/jobs/<int:job_id>/move_task_down/<int:task_id>", methods=['POST'])
 @login_required
 def jobs_move_task_down(job_id, task_id):
     """Function to move assigned task down on task list for job"""
@@ -453,7 +453,7 @@ def jobs_move_task_down(job_id, task_id):
 
     return redirect("/jobs/"+str(job_id)+"/tasks")
 
-@jobs.route("/jobs/<int:job_id>/remove_task/<int:task_id>", methods=['GET'])
+@jobs.route("/jobs/<int:job_id>/remove_task/<int:task_id>", methods=['POST'])
 @login_required
 def jobs_remove_task(job_id, task_id):
     """Function to remove task from task list on job"""
@@ -472,7 +472,7 @@ def jobs_remove_task(job_id, task_id):
 
     return redirect("/jobs/"+str(job_id)+"/tasks")
 
-@jobs.route("/jobs/<int:job_id>/remove_all_tasks", methods=['GET'])
+@jobs.route("/jobs/<int:job_id>/remove_all_tasks", methods=['POST'])
 @login_required
 def jobs_remove_all_tasks(job_id):
     """Function to remove all tasks from job"""
@@ -485,7 +485,7 @@ def jobs_remove_all_tasks(job_id):
     db.session.commit()
     return redirect("/jobs/"+str(job_id)+"/tasks")
 
-@jobs.route("/jobs/delete/<int:job_id>", methods=['GET', 'POST'])
+@jobs.route("/jobs/delete/<int:job_id>", methods=['POST'])
 @login_required
 def jobs_delete(job_id):
     """Function to delete job"""
@@ -542,7 +542,7 @@ def jobs_summary(job_id):
 
     return render_template('jobs_summary.html', title='Job Summary', job=job, form=form, cracked_rate=cracked_rate, job_tasks=job_tasks, domain=domain, hashfile=hashfile, tasks=tasks)
 
-@jobs.route("/jobs/start/<int:job_id>", methods=['GET'])
+@jobs.route("/jobs/start/<int:job_id>", methods=['POST'])
 @login_required
 def jobs_start(job_id):
     """Function to start job"""
@@ -574,7 +574,7 @@ def jobs_start(job_id):
     flash('Job has been Started!', 'success')
     return redirect(url_for('main.home'))
 
-@jobs.route("/jobs/stop/<int:job_id>", methods=['GET'])
+@jobs.route("/jobs/stop/<int:job_id>", methods=['POST'])
 @login_required
 def jobs_stop(job_id):
     """Function to stop a job"""
@@ -599,7 +599,7 @@ def jobs_stop(job_id):
         flash('Job is not actively running.', 'danger')
     return redirect(url_for('jobs.jobs_list'))
 
-@jobs.route("/jobs/pause/<int:job_id>", methods=['GET'])
+@jobs.route("/jobs/pause/<int:job_id>", methods=['POST'])
 @login_required
 def jobs_pause(job_id):
     """Pause a running or queued job."""
@@ -624,7 +624,7 @@ def jobs_pause(job_id):
     flash('Job has been paused!', 'success')
     return redirect(url_for('jobs.jobs_list'))
 
-@jobs.route("/jobs/resume/<int:job_id>", methods=['GET'])
+@jobs.route("/jobs/resume/<int:job_id>", methods=['POST'])
 @login_required
 def jobs_resume(job_id):
     """Resume a paused job."""

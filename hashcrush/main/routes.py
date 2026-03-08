@@ -75,7 +75,7 @@ def home():
         job_task_runtime_progress=job_task_runtime_progress,
     )
 
-@main.route("/job_task/stop/<int:job_task_id>")
+@main.route("/job_task/stop/<int:job_task_id>", methods=['POST'])
 @login_required
 def stop_job_task(job_task_id):
     """Function to stop specific task on a running job"""

@@ -27,9 +27,18 @@ Each task will be ran once in order selected You can create new tasks by selecti
                                     <td>{{ task.name }}</td>
                                     <td>{{ task.hc_attackmode}}</td>
                                     <td>
-                                        <a class="fa fa-arrow-up btn btn-success btn-sm" href="/task_groups/assigned_tasks/{{task_group.id}}/promote_task/{{task.id}}" role="button" title='Move Up'></a>
-                                        <a class="fa fa-arrow-down btn btn-success btn-sm" href="/task_groups/assigned_tasks/{{task_group.id}}/demote_task/{{task.id}}" role="button" title='Move Down'></a>
-                                        <a class="fa fa-trash btn btn-danger btn-sm" href="/task_groups/assigned_tasks/{{task_group.id}}/remove_task/{{task.id}}" role="button" title=delete></a>
+                                        <form action="{{ url_for('task_groups.task_groups_assigned_tasks_promote_task', task_group_id=task_group.id, task_id=task.id) }}" method="POST" class="d-inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" class="fa fa-arrow-up btn btn-success btn-sm" title="Move Up"></button>
+                                        </form>
+                                        <form action="{{ url_for('task_groups.task_groups_assigned_tasks_demote_task', task_group_id=task_group.id, task_id=task.id) }}" method="POST" class="d-inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" class="fa fa-arrow-down btn btn-success btn-sm" title="Move Down"></button>
+                                        </form>
+                                        <form action="{{ url_for('task_groups.task_groups_assigned_tasks_remove_task', task_group_id=task_group.id, task_id=task.id) }}" method="POST" class="d-inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" class="fa fa-trash btn btn-danger btn-sm" title="delete"></button>
+                                        </form>
                                     </td>
                                 </tr>
                             {% endif %}
@@ -43,7 +52,10 @@ Each task will be ran once in order selected You can create new tasks by selecti
                         </button>
                         <div class="dropdown-menu" aria-labelledby="dropdownMenuButton">
                             {% for task in tasks %}
-                                <a class="dropdown-item" href="/task_groups/assigned_tasks/{{task_group.id}}/add_task/{{task.id}}">{{task.name}}</a>
+                                <form action="{{ url_for('task_groups.task_groups_assigned_tasks_add_task', task_group_id=task_group.id, task_id=task.id) }}" method="POST" class="m-0">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="dropdown-item btn btn-link text-left">{{ task.name }}</button>
+                                </form>
                             {% endfor %}
                         </div>
                 </div>

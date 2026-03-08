@@ -53,8 +53,9 @@ def test_job_creation_flow(page, live_server, login):
     match = re.search(r"/jobs/(\d+)/tasks", page.url)
     assert match, f"Unexpected tasks URL: {page.url}"
     job_id = match.group(1)
-    page.goto(
-        f"{live_server}/jobs/{job_id}/assign_task/{task_id}",
-        wait_until="domcontentloaded",
-    )
+    page.get_by_role("button", name="Add Task").click()
+    task_entry = page.locator(".dropdown-menu .dropdown-item", has_text=task_name).first
+    if task_entry.count() == 0:
+        pytest.skip("HASHCRUSH_E2E_TASK_NAME not present in add-task dropdown.")
+    task_entry.click()
     expect(page.get_by_role("cell", name=task_name, exact=True)).to_be_visible()

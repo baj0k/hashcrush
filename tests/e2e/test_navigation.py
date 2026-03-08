@@ -18,5 +18,6 @@ def test_jobs_page_accessible_after_login(page, live_server, login):
 @pytest.mark.e2e
 def test_logout_redirects_to_login(page, live_server, login):
     login()
-    page.goto(f"{live_server}/logout", wait_until="domcontentloaded")
+    page.locator("#manageMenu").click()
+    page.get_by_role("button", name="Logout").click()
     expect(page).to_have_url(re.compile(r".*/login.*"))

@@ -67,7 +67,8 @@ def login_post():
             next_url = None
     return redirect(next_url or url_for('main.home'))
 
-@users.route("/logout")
+@users.route("/logout", methods=['POST'])
+@login_required
 def logout():
     """Function to handle logout requests"""
 

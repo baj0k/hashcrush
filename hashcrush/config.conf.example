@@ -19,5 +19,5 @@ rules_path = /usr/share/hashcat/rules
 # Optional: runtime artifact root (tmp/hashes/outfiles). Default uses system temp.
 runtime_path = /tmp/hashcrush-runtime
 # Optional: SSL cert/key file paths (or set HASHCRUSH_SSL_CERT_PATH / HASHCRUSH_SSL_KEY_PATH).
-ssl_cert_path = ./hashcrush/ssl/cert.pem
-ssl_key_path = ./hashcrush/ssl/key.pem
+ssl_cert_path = /etc/hashcrush/ssl/cert.pem
+ssl_key_path = /etc/hashcrush/ssl/key.pem

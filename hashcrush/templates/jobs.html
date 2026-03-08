@@ -68,17 +68,35 @@ Jobs contain a series of tasks (hashcat commands). Jobs also have an associated 
                             </td>
                             <td>
                                 {% if job.status == 'Ready' %}
-                                    <a class="fa fa-play btn btn-success" href="/jobs/start/{{job.id}}" role="button" title=start></a>
+                                    <form action="{{ url_for('jobs.jobs_start', job_id=job.id) }}" method="POST" class="d-inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="fa fa-play btn btn-success" title="start"></button>
+                                    </form>
                                 {% elif job.status == 'Queued' or job.status == 'Running' %}
-                                    <a class="fa fa-pause btn btn-warning" href="/jobs/pause/{{job.id}}" role="button" title=pause></a>
-                                    <a class="fa fa-stop btn btn-secondary" href="/jobs/stop/{{job.id}}" role="button" title=stop></a>
+                                    <form action="{{ url_for('jobs.jobs_pause', job_id=job.id) }}" method="POST" class="d-inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="fa fa-pause btn btn-warning" title="pause"></button>
+                                    </form>
+                                    <form action="{{ url_for('jobs.jobs_stop', job_id=job.id) }}" method="POST" class="d-inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="fa fa-stop btn btn-secondary" title="stop"></button>
+                                    </form>
                                 {% elif job.status == 'Paused' %}
-                                    <a class="fa fa-play btn btn-success" href="/jobs/resume/{{job.id}}" role="button" title=resume></a>
-                                    <a class="fa fa-stop btn btn-secondary" href="/jobs/stop/{{job.id}}" role="button" title=stop></a>
+                                    <form action="{{ url_for('jobs.jobs_resume', job_id=job.id) }}" method="POST" class="d-inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="fa fa-play btn btn-success" title="resume"></button>
+                                    </form>
+                                    <form action="{{ url_for('jobs.jobs_stop', job_id=job.id) }}" method="POST" class="d-inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="fa fa-stop btn btn-secondary" title="stop"></button>
+                                    </form>
                                 {% elif job.status == 'Completed' %}
                                     <a class="fa fa-check btn btn-primary" href="#" role="button" title=Completed></a>
                                 {% elif job.status == 'Canceled' %}
-                                    <a class="fa fa-close btn btn-secondary" href="/jobs/start/{{job.id}}" role="button" title=Canceled></a>
+                                    <form action="{{ url_for('jobs.jobs_start', job_id=job.id) }}" method="POST" class="d-inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="fa fa-close btn btn-secondary" title="Canceled"></button>
+                                    </form>
                                 {% endif %}
                                 {% if job.status != 'Incomplete' %}
                                     <a class="fa fa-pie-chart btn btn-warning" href="/analytics?domain_id={{job.domain_id}}&hashfile_id={{job.hashfile_id}}" role="button" title=Analytics></a>
@@ -176,6 +194,7 @@ Jobs contain a series of tasks (hashcat commands). Jobs also have an associated 
             <div class="modal-footer">
             <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
             <form action="{{ url_for('jobs.jobs_delete', job_id=job.id) }}" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input class="btn btn-danger" type="submit" value="Delete">
             </form>
             </div>

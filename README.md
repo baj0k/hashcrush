@@ -43,6 +43,8 @@ Production deployments should provide certificate paths via environment variable
 - `HASHCRUSH_SSL_KEY_PATH`
 
 If SSL is enabled and either file is missing/unreadable, startup fails with an explicit error.
+`setup.py` now defaults to generating the certificate and key under `/etc/hashcrush/ssl`.
+It applies restrictive permissions (`cert.pem` `0644`, `key.pem` `0600`) and prompts for another writable directory if `/etc/hashcrush/ssl` is not writable.
 
 
 ## Running HashCrush

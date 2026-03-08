@@ -201,7 +201,7 @@ def test_hashfiles_delete_removes_orphan_hashes():
         client = app.test_client()
         _login_client_as_user(client, user)
 
-        response = client.get(f"/hashfiles/delete/{hashfile.id}")
+        response = client.post(f"/hashfiles/delete/{hashfile.id}")
         assert response.status_code == 302
 
         assert Hashfiles.query.filter_by(id=hashfile.id).count() == 0
@@ -801,11 +801,60 @@ def test_wordlist_and_job_mutation_routes_return_404_for_invalid_ids():
         response_wordlist_delete = client.post("/wordlists/delete/999999")
         assert response_wordlist_delete.status_code == 404
 
-        response_wordlist_update = client.get("/wordlists/update/999999")
+        response_wordlist_update = client.post("/wordlists/update/999999")
         assert response_wordlist_update.status_code == 404
 
         response_job_delete = client.post("/jobs/delete/999999")
         assert response_job_delete.status_code == 404
+
+
+@pytest.mark.security
+def test_mutating_routes_reject_get_requests():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="MethodCheck")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="method-check.txt", domain_id=domain.id, owner_id=admin.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        job = Jobs(name="method-check-job", status="Ready", domain_id=domain.id, owner_id=admin.id, hashfile_id=hashfile.id)
+        db.session.add(job)
+        db.session.commit()
+
+        task = Tasks(
+            name="method-check-task",
+            hc_attackmode="maskmode",
+            owner_id=admin.id,
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a?a",
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        task_group = TaskGroups(name="method-check-group", owner_id=admin.id, tasks=json.dumps([task.id]))
+        db.session.add(task_group)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        assert client.get(f"/hashfiles/delete/{hashfile.id}").status_code == 405
+        assert client.get("/wordlists/update/999999").status_code == 405
+        assert client.get(f"/jobs/start/{job.id}").status_code == 405
+        assert client.get(f"/jobs/{job.id}/assign_task/{task.id}").status_code == 405
+        assert client.get(
+            f"/task_groups/assigned_tasks/{task_group.id}/add_task/{task.id}"
+        ).status_code == 405
+        assert client.get(f"/rules/delete/999999").status_code == 405
+        assert client.get("/logout").status_code == 405
 
 
 @pytest.mark.security
