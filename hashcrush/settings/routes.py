@@ -104,14 +104,14 @@ HASHCRUSH_CONFIG_FIELDS = [
         'key': 'ssl_cert_path',
         'label': 'TLS Certificate Path',
         'env_name': 'HASHCRUSH_SSL_CERT_PATH',
-        'default_display': '(project)/hashcrush/ssl/cert.pem',
+        'default_display': '/etc/hashcrush/ssl/cert.pem',
     },
     {
         'section': 'app',
         'key': 'ssl_key_path',
         'label': 'TLS Key Path',
         'env_name': 'HASHCRUSH_SSL_KEY_PATH',
-        'default_display': '(project)/hashcrush/ssl/key.pem',
+        'default_display': '/etc/hashcrush/ssl/key.pem',
     },
     {
         'section': 'app',
@@ -140,6 +140,13 @@ HASHCRUSH_CONFIG_FIELDS = [
         'label': 'Auth Throttle Lockout Seconds',
         'env_name': 'HASHCRUSH_AUTH_THROTTLE_LOCKOUT_SECONDS',
         'default_display': '900',
+    },
+    {
+        'section': 'app',
+        'key': 'trust_x_forwarded_for',
+        'label': 'Trust X-Forwarded-For Header',
+        'env_name': 'HASHCRUSH_TRUST_X_FORWARDED_FOR',
+        'default_display': 'false',
     },
     {
         'section': 'app',
@@ -185,10 +192,6 @@ def _load_hashcrush_config(config_path: str) -> ConfigParser:
 
 
 def _resolve_field_default(field: dict) -> str:
-    if field['key'] == 'ssl_cert_path':
-        return os.path.join(current_app.root_path, 'ssl', 'cert.pem')
-    if field['key'] == 'ssl_key_path':
-        return os.path.join(current_app.root_path, 'ssl', 'key.pem')
     return str(field['default_display'])
 
 

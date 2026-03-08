@@ -173,6 +173,11 @@ class Config:
         fallback=900,
         minimum=1,
     )
+    TRUST_X_FORWARDED_FOR = _parse_bool(
+        os.getenv('HASHCRUSH_TRUST_X_FORWARDED_FOR')
+        or file_config.get('app', 'trust_x_forwarded_for', fallback='false'),
+        False,
+    )
 
     SESSION_COOKIE_SECURE = _parse_bool(
         os.getenv('HASHCRUSH_SESSION_COOKIE_SECURE')

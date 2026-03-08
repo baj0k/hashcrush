@@ -10,8 +10,8 @@ class TasksForm(FlaskForm):
 
     name = StringField('Name', validators=[DataRequired()])
     hc_attackmode = SelectField('Attack Mode', choices=[('', '--SELECT--'), ('dictionary', 'dictionary'), ('maskmode', 'maskmode'), ('bruteforce', 'bruteforce')], validators=[DataRequired()])  # dictionary, maskmode, bruteforce
-    wl_id = SelectField('Wordlist', choices=[])
-    rule_id = SelectField('Rules', choices=[])
+    wl_id = SelectField('Wordlist', choices=[], validate_choice=False)
+    rule_id = SelectField('Rules', choices=[], validate_choice=False)
     mask = StringField('Hashcat Mask')
     submit = SubmitField('Create') 
 

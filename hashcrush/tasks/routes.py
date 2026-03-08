@@ -9,6 +9,14 @@ from hashcrush.models import db
 tasks = Blueprint('tasks', __name__)
 
 
+def _parse_positive_int(raw_value) -> int | None:
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _visible_tasks_query():
     query = Tasks.query
     if not current_user.admin:
@@ -90,18 +98,35 @@ def tasks_add():
         tasksForm.rule_id.choices += [(rule.id, rule.name)]
 
     if tasksForm.validate_on_submit():
-
-        if tasksForm.rule_id.data == 'None':
-            rule_id = None
-        else:
-            rule_id = tasksForm.rule_id.data
-
         if tasksForm.hc_attackmode.data == 'dictionary':
-            task = Tasks(   name=tasksForm.name.data,
-                            owner_id=current_user.id,
-                            wl_id=tasksForm.wl_id.data,
-                            rule_id=rule_id,
-                            hc_attackmode=tasksForm.hc_attackmode.data
+            selected_wl_id = _parse_positive_int(tasksForm.wl_id.data)
+            selected_wordlist = (
+                _visible_wordlists_query().filter(Wordlists.id == selected_wl_id).first()
+                if selected_wl_id is not None
+                else None
+            )
+            if not selected_wordlist:
+                flash('Dictionary tasks require a valid visible wordlist.', 'danger')
+                return render_template('tasks_add.html', title='Tasks Add', tasksForm=tasksForm)
+
+            selected_rule_id = None
+            if tasksForm.rule_id.data not in ('None', None, ''):
+                selected_rule_id = _parse_positive_int(tasksForm.rule_id.data)
+                selected_rule = (
+                    _visible_rules_query().filter(Rules.id == selected_rule_id).first()
+                    if selected_rule_id is not None
+                    else None
+                )
+                if not selected_rule:
+                    flash('Selected rule is invalid or outside your access scope.', 'danger')
+                    return render_template('tasks_add.html', title='Tasks Add', tasksForm=tasksForm)
+
+            task = Tasks(
+                name=tasksForm.name.data,
+                owner_id=current_user.id,
+                wl_id=selected_wordlist.id,
+                rule_id=selected_rule_id,
+                hc_attackmode=tasksForm.hc_attackmode.data,
             )
             db.session.add(task)
             db.session.commit()
@@ -113,6 +138,18 @@ def tasks_add():
                             rule_id=None,
                             hc_attackmode=tasksForm.hc_attackmode.data,
                             hc_mask=tasksForm.mask.data
+            )
+            db.session.add(task)
+            db.session.commit()
+            flash(f'Task {tasksForm.name.data} created!', 'success')
+        elif tasksForm.hc_attackmode.data == 'bruteforce':
+            task = Tasks(
+                name=tasksForm.name.data,
+                owner_id=current_user.id,
+                wl_id=None,
+                rule_id=None,
+                hc_attackmode=tasksForm.hc_attackmode.data,
+                hc_mask=None,
             )
             db.session.add(task)
             db.session.commit()
@@ -167,13 +204,32 @@ def task_edit(task_id):
     tasksForm.submit.label.text = 'Update'
 
     if tasksForm.validate_on_submit():
-        if tasksForm.rule_id.data == 'None':
-            tasksForm.rule_id.data = None
-
         if tasksForm.hc_attackmode.data == 'dictionary':
+            selected_wl_id = _parse_positive_int(tasksForm.wl_id.data)
+            selected_wordlist = (
+                _visible_wordlists_query().filter(Wordlists.id == selected_wl_id).first()
+                if selected_wl_id is not None
+                else None
+            )
+            if not selected_wordlist:
+                flash('Dictionary tasks require a valid visible wordlist.', 'danger')
+                return render_template('tasks_edit.html', title='Tasks Edit', tasksForm=tasksForm, task=task, wordlists=wordlists, rules=rules)
+
+            selected_rule_id = None
+            if tasksForm.rule_id.data not in ('None', None, ''):
+                selected_rule_id = _parse_positive_int(tasksForm.rule_id.data)
+                selected_rule = (
+                    _visible_rules_query().filter(Rules.id == selected_rule_id).first()
+                    if selected_rule_id is not None
+                    else None
+                )
+                if not selected_rule:
+                    flash('Selected rule is invalid or outside your access scope.', 'danger')
+                    return render_template('tasks_edit.html', title='Tasks Edit', tasksForm=tasksForm, task=task, wordlists=wordlists, rules=rules)
+
             task.name = tasksForm.name.data
-            task.wl_id = tasksForm.wl_id.data
-            task.rule_id = tasksForm.rule_id.data
+            task.wl_id = selected_wordlist.id
+            task.rule_id = selected_rule_id
             task.hc_attackmode = tasksForm.hc_attackmode.data
 
             db.session.add(task)
@@ -186,6 +242,16 @@ def task_edit(task_id):
             task.rule_id = None
             task.hc_attackmode = tasksForm.hc_attackmode.data
             task.hc_mask = tasksForm.mask.data
+
+            db.session.add(task)
+            db.session.commit()
+            flash(f'Task {tasksForm.name.data} updated!', 'success')
+        elif tasksForm.hc_attackmode.data == 'bruteforce':
+            task.name = tasksForm.name.data
+            task.wl_id = None
+            task.rule_id = None
+            task.hc_attackmode = tasksForm.hc_attackmode.data
+            task.hc_mask = None
 
             db.session.add(task)
             db.session.commit()

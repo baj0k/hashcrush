@@ -1,5 +1,6 @@
 """Flask routes to handle Users"""
-from datetime import datetime
+from datetime import UTC, datetime
+import ipaddress
 import time
 
 from flask import Blueprint, render_template, url_for, flash, abort, redirect, request, current_app
@@ -9,7 +10,7 @@ from flask_login import LoginManager
 from flask_bcrypt import Bcrypt
 
 from hashcrush.models import db
-from hashcrush.models import Users, Jobs, Wordlists, Rules, TaskGroups, Tasks
+from hashcrush.models import AuthThrottle, Users, Jobs, Wordlists, Rules, TaskGroups, Tasks
 from hashcrush.users.forms import LoginForm, UsersForm, ProfileForm
 
 bcrypt = Bcrypt()
@@ -32,16 +33,24 @@ def _admin_count() -> int:
     return Users.query.filter_by(admin=True).count()
 
 
-def _auth_throttle_store() -> dict[str, dict[str, float | int]]:
-    return current_app.extensions.setdefault('auth_throttle', {})
+def _utc_now_naive() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _auth_client_ip() -> str:
-    forwarded_for = (request.headers.get('X-Forwarded-For') or '').strip()
-    if forwarded_for:
-        first_hop = forwarded_for.split(',', maxsplit=1)[0].strip()
-        if first_hop:
-            return first_hop
+    if current_app.config.get('TRUST_X_FORWARDED_FOR', False):
+        forwarded_for = (request.headers.get('X-Forwarded-For') or '').strip()
+        if forwarded_for:
+            first_hop = forwarded_for.split(',', maxsplit=1)[0].strip()
+            if first_hop:
+                try:
+                    ipaddress.ip_address(first_hop)
+                    return first_hop
+                except ValueError:
+                    current_app.logger.warning(
+                        'Ignoring invalid X-Forwarded-For value: %s',
+                        first_hop,
+                    )
     return request.remote_addr or 'unknown'
 
 
@@ -51,29 +60,27 @@ def _auth_throttle_key(username: str | None) -> str:
 
 
 def _cleanup_auth_throttle_store(now_epoch: float) -> None:
-    store = _auth_throttle_store()
     window_seconds = int(current_app.config.get('AUTH_THROTTLE_WINDOW_SECONDS', 300))
     lockout_seconds = int(current_app.config.get('AUTH_THROTTLE_LOCKOUT_SECONDS', 900))
-    stale_before = now_epoch - max(window_seconds, lockout_seconds) - 60
-    stale_keys = [
-        key
-        for key, entry in store.items()
-        if (
-            float(entry.get('locked_until', 0)) <= now_epoch
-            and float(entry.get('window_start', 0)) <= stale_before
-        )
-    ]
-    for stale_key in stale_keys:
-        store.pop(stale_key, None)
+    stale_before = int(now_epoch - max(window_seconds, lockout_seconds) - 60)
+    try:
+        AuthThrottle.query.filter(
+            AuthThrottle.locked_until <= int(now_epoch),
+            AuthThrottle.window_start <= stale_before,
+        ).delete(synchronize_session=False)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('Failed cleaning auth throttle state.')
 
 
 def _is_auth_throttled(throttle_key: str, now_epoch: float) -> tuple[bool, int]:
     if not current_app.config.get('AUTH_THROTTLE_ENABLED', True):
         return False, 0
-    entry = _auth_throttle_store().get(throttle_key)
+    entry = AuthThrottle.query.get(throttle_key)
     if not entry:
         return False, 0
-    locked_until = float(entry.get('locked_until', 0))
+    locked_until = int(entry.locked_until or 0)
     if locked_until > now_epoch:
         return True, max(1, int(locked_until - now_epoch))
     return False, 0
@@ -83,34 +90,53 @@ def _record_failed_login(throttle_key: str, now_epoch: float) -> None:
     if not current_app.config.get('AUTH_THROTTLE_ENABLED', True):
         return
 
+    now_epoch_int = int(now_epoch)
     max_attempts = int(current_app.config.get('AUTH_THROTTLE_MAX_ATTEMPTS', 5))
     window_seconds = int(current_app.config.get('AUTH_THROTTLE_WINDOW_SECONDS', 300))
     lockout_seconds = int(current_app.config.get('AUTH_THROTTLE_LOCKOUT_SECONDS', 900))
-    store = _auth_throttle_store()
-    entry = store.get(throttle_key)
+    try:
+        entry = AuthThrottle.query.get(throttle_key)
+        if entry is None:
+            entry = AuthThrottle(
+                key=throttle_key,
+                count=0,
+                window_start=now_epoch_int,
+                locked_until=0,
+            )
+            db.session.add(entry)
 
-    if (not entry) or (now_epoch - float(entry.get('window_start', 0)) > window_seconds):
-        entry = {'count': 0, 'window_start': now_epoch, 'locked_until': 0}
+        if now_epoch_int - int(entry.window_start or 0) > window_seconds:
+            entry.count = 0
+            entry.window_start = now_epoch_int
+            entry.locked_until = 0
 
-    if float(entry.get('locked_until', 0)) > now_epoch:
-        store[throttle_key] = entry
-        return
+        if int(entry.locked_until or 0) > now_epoch_int:
+            db.session.commit()
+            return
 
-    entry['count'] = int(entry.get('count', 0)) + 1
-    if int(entry['count']) >= max_attempts:
-        entry['count'] = 0
-        entry['window_start'] = now_epoch
-        entry['locked_until'] = now_epoch + lockout_seconds
-        current_app.logger.warning(
-            'Login throttled for %s for %s seconds after repeated failures.',
-            throttle_key,
-            lockout_seconds,
-        )
-    store[throttle_key] = entry
+        entry.count = int(entry.count or 0) + 1
+        if int(entry.count) >= max_attempts:
+            entry.count = 0
+            entry.window_start = now_epoch_int
+            entry.locked_until = now_epoch_int + lockout_seconds
+            current_app.logger.warning(
+                'Login throttled for %s for %s seconds after repeated failures.',
+                throttle_key,
+                lockout_seconds,
+            )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('Failed updating auth throttle state.')
 
 
 def _reset_failed_login_counter(throttle_key: str) -> None:
-    _auth_throttle_store().pop(throttle_key, None)
+    try:
+        AuthThrottle.query.filter_by(key=throttle_key).delete(synchronize_session=False)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('Failed clearing auth throttle key=%s', throttle_key)
 
 
 @users.route("/login", methods=['GET'])
@@ -141,6 +167,9 @@ def login_post():
             (submitted_username or '').strip(),
             _auth_client_ip(),
         )
+        # Keep generic auth failure wording consistent for UI/tests while still
+        # surfacing throttle state and returning 429.
+        flash('Login Unsuccessful. Please check username and password', 'danger')
         flash('Too many failed login attempts. Try again later.', 'danger')
         response = render_template('login.html', title='Login', form=form)
         return response, 429, {'Retry-After': str(retry_after)}
@@ -163,7 +192,7 @@ def login_post():
 
     _reset_failed_login_counter(throttle_key)
     login_user(user, remember=form.remember.data)
-    user.last_login_utc = datetime.utcnow()
+    user.last_login_utc = _utc_now_naive()
     db.session.commit()
     current_app.logger.info('Login succeeded: user=%s.', user.username)
     next_url = request.args.get("next")
@@ -262,7 +291,7 @@ def profile():
                 return render_template('profile.html', title='Profile', form=form, current_user=current_user)
 
             current_user.password = bcrypt.generate_password_hash(form.new_password.data).decode('utf-8')
-            current_user.last_login_utc = datetime.utcnow()
+            current_user.last_login_utc = _utc_now_naive()
             db.session.commit()
             flash('Password updated.', 'success')
         else:
@@ -300,7 +329,7 @@ def admin_reset(user_id):
         return redirect(url_for('users.users_list'))
 
     user.password = bcrypt.generate_password_hash(new_password).decode('utf-8')
-    user.last_login_utc = datetime.utcnow()
+    user.last_login_utc = _utc_now_naive()
     db.session.commit()
     flash(f'Password updated for user {user.username}. Share it securely and ask the user to change it in Profile.', 'success')
     return redirect(url_for('users.users_list'))

@@ -1,5 +1,7 @@
 import os
+import ssl
 from pathlib import Path
+from urllib.parse import urlparse
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -34,6 +36,18 @@ def load_dotenv(path: Path) -> None:
 load_dotenv(Path(__file__).resolve().parents[1] / ".env.test")
 
 
+def _e2e_verify_tls() -> bool:
+    raw = os.getenv("HASHCRUSH_E2E_VERIFY_TLS", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _is_authenticated_session(page, live_server: str) -> bool:
+    """Best-effort auth check that does not depend on navbar visibility."""
+    page.goto(f"{live_server}/jobs", wait_until="domcontentloaded")
+    current_path = urlparse(page.url).path.rstrip("/")
+    return current_path != "/login"
+
+
 def build_test_config(db_path: Path):
     return {
         "SECRET_KEY": "test-secret-key",
@@ -66,14 +80,28 @@ def live_server():
     if not base_url:
         pytest.skip("Set HASHCRUSH_E2E_BASE_URL to run e2e tests against a live host.")
     base_url = base_url.rstrip("/")
+    parsed = urlparse(base_url)
+    open_kwargs = {"timeout": 2}
+    if parsed.scheme == "https" and (not _e2e_verify_tls()):
+        # Local E2E commonly targets self-signed TLS endpoints.
+        open_kwargs["context"] = ssl._create_unverified_context()
+
     try:
-        with urlopen(f"{base_url}/login", timeout=2):
+        with urlopen(f"{base_url}/login", **open_kwargs):
             pass
     except (URLError, OSError, TimeoutError) as exc:
         pytest.skip(
             f"External server not reachable ({type(exc).__name__}: {exc}); start it or check HASHCRUSH_E2E_BASE_URL."
         )
     yield base_url
+
+
+@pytest.fixture(scope="session")
+def browser_context_args(browser_context_args):
+    base_url = (os.getenv("HASHCRUSH_E2E_BASE_URL") or "").strip().lower()
+    if base_url.startswith("https://") and (not _e2e_verify_tls()):
+        return {**browser_context_args, "ignore_https_errors": True}
+    return browser_context_args
 
 
 @pytest.fixture(autouse=True)
@@ -136,11 +164,30 @@ def login(page, live_server, test_user_credentials):
         page.get_by_label("Username").fill(test_user_credentials["username"])
         page.get_by_label("Password").fill(test_user_credentials["password"])
         page.get_by_role("button", name="Login").click()
-        if not page.get_by_role("link", name="Jobs").is_visible():
+        if page.get_by_role("link", name="Jobs").count() > 0 or _is_authenticated_session(page, live_server):
+            return page
+        if "/setup/" in page.url:
             pytest.skip(
-                "Login failed against external server; set HASHCRUSH_E2E_USERNAME/PASSWORD."
+                "Live host is in setup flow; complete setup before running e2e tests."
             )
-        return page
+        rendered = page.content().lower()
+        if "too many failed login attempts" in rendered:
+            pytest.skip(
+                "Login account appears throttled by prior failed attempts. "
+                "Wait lockout expiry or clear auth_throttle rows for this account/IP."
+            )
+        alert_text = ""
+        if page.locator(".alert").count() > 0:
+            alert_text = page.locator(".alert").first.inner_text().strip()
+        if alert_text:
+            pytest.skip(
+                f"Login failed against external server (url={page.url}, alert={alert_text!r}); "
+                "set HASHCRUSH_E2E_USERNAME/PASSWORD."
+            )
+        pytest.skip(
+            f"Login failed against external server (url={page.url}); "
+            "set HASHCRUSH_E2E_USERNAME/PASSWORD."
+        )
 
     return _login
 

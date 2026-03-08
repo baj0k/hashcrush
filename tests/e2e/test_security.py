@@ -1,6 +1,7 @@
 import os
 import re
 import uuid
+from urllib.parse import urlparse
 
 import pytest
 from playwright.sync_api import expect
@@ -30,8 +31,30 @@ def _login(page, live_server, username, password):
     page.get_by_label("Username").fill(username)
     page.get_by_label("Password").fill(password)
     page.get_by_role("button", name="Login").click()
-    if not page.get_by_role("link", name="Jobs").is_visible():
-        pytest.skip("Login failed against external server.")
+    if page.get_by_role("link", name="Jobs").count() > 0:
+        return
+
+    # Fallback auth check that does not depend on navbar visibility.
+    page.goto(f"{live_server}/jobs", wait_until="domcontentloaded")
+    current_path = urlparse(page.url).path.rstrip("/")
+    authenticated = current_path != "/login"
+    if authenticated:
+        return
+
+    rendered = page.content().lower()
+    if "too many failed login attempts" in rendered:
+        pytest.skip(
+            "Login account appears throttled by prior failed attempts. "
+            "Wait lockout expiry or clear auth_throttle rows for this account/IP."
+        )
+    if "/setup/" in page.url:
+        pytest.skip("Live host is in setup flow; complete setup before running e2e tests.")
+    alert_text = ""
+    if page.locator(".alert").count() > 0:
+        alert_text = page.locator(".alert").first.inner_text().strip()
+    if alert_text:
+        pytest.skip(f"Login failed against external server (url={page.url}, alert={alert_text!r}).")
+    pytest.skip(f"Login failed against external server (url={page.url}).")
 
 
 @pytest.mark.e2e

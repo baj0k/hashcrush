@@ -3,7 +3,7 @@ import os
 import secrets
 import json
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from flask import Blueprint, render_template, redirect, flash, url_for, current_app, request
 from flask_login import login_required, current_user
 from sqlalchemy import func, case, exists, or_
@@ -14,10 +14,26 @@ from hashcrush.models import db
 
 
 jobs = Blueprint('jobs', __name__)
+ACTIVE_JOB_TASK_MUTATION_STATUSES = {'Running', 'Queued', 'Paused'}
+
+
+def _utc_now_naive() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _can_manage_job(job: Jobs | None) -> bool:
     return bool(job and (current_user.admin or job.owner_id == current_user.id))
+
+
+def _job_allows_task_mutation(job: Jobs) -> bool:
+    return job.status not in ACTIVE_JOB_TASK_MUTATION_STATUSES
+
+
+def _require_job_allows_task_mutation(job: Jobs) -> bool:
+    if _job_allows_task_mutation(job):
+        return True
+    flash('You cannot edit assigned tasks while the job is running, queued, or paused.', 'danger')
+    return False
 
 
 def _parse_positive_int(raw_value) -> int | None:
@@ -26,6 +42,18 @@ def _parse_positive_int(raw_value) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
+
+
+def _normalize_task_id_list(raw_values) -> list[int]:
+    if not isinstance(raw_values, list):
+        return []
+    normalized: list[int] = []
+    for value in raw_values:
+        parsed = _parse_positive_int(value)
+        if parsed is None or parsed in normalized:
+            continue
+        normalized.append(parsed)
+    return normalized
 
 
 def _visible_hashfiles_for_job(job: Jobs) -> list[Hashfiles]:
@@ -393,8 +421,20 @@ def jobs_assigned_hashfile_cracked(job_id, hashfile_id):
         flash('Invalid hashfile for this job.', 'danger')
         return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job.id))
     # Can be optimized to only return the hash and plaintext
-    cracked_hashfiles_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile.id).all()
-    cracked_hashfiles_hashes_cnt = db.session.query(Hashes).join(HashfileHashes, Hashes.id == HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile.id).count()
+    cracked_hashfiles_hashes = (
+        db.session.query(Hashes, HashfileHashes)
+        .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+        .filter(Hashes.cracked.is_(True))
+        .filter(HashfileHashes.hashfile_id == hashfile.id)
+        .all()
+    )
+    cracked_hashfiles_hashes_cnt = (
+        db.session.query(Hashes)
+        .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+        .filter(Hashes.cracked.is_(True))
+        .filter(HashfileHashes.hashfile_id == hashfile.id)
+        .count()
+    )
     if cracked_hashfiles_hashes_cnt > 0:
         flash(str(cracked_hashfiles_hashes_cnt) + " instacracked Hashes!", 'success')
     # Opportunity for either a stored procedure or more advanced queries.
@@ -411,7 +451,7 @@ def jobs_list_tasks(job_id):
         return redirect(url_for('jobs.jobs_list'))
 
     tasks = _visible_tasks_query().all()
-    job_tasks = JobTasks.query.filter_by(job_id=job_id)
+    job_tasks = JobTasks.query.filter_by(job_id=job_id).order_by(JobTasks.id.asc())
     task_groups = _visible_task_groups_query().all()
     # Right now we're doing nested loops in the template, this could probably be solved with a left/join select
 
@@ -425,6 +465,8 @@ def jobs_assigned_task(job_id, task_id):
     if not _can_manage_job(job):
         flash('You do not have rights to modify this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
+    if not _require_job_allows_task_mutation(job):
+        return redirect(url_for('jobs.jobs_list_tasks', job_id=job.id))
 
     task = _visible_tasks_query().filter(Tasks.id == task_id).first()
     if not task:
@@ -450,6 +492,8 @@ def jobs_assign_task_group(job_id, task_group_id):
     if not _can_manage_job(job):
         flash('You do not have rights to modify this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
+    if not _require_job_allows_task_mutation(job):
+        return redirect(url_for('jobs.jobs_list_tasks', job_id=job.id))
 
     task_group = _visible_task_groups_query().filter(TaskGroups.id == task_group_id).first()
     if not task_group:
@@ -459,14 +503,32 @@ def jobs_assign_task_group(job_id, task_group_id):
         task_group_entries = json.loads(task_group.tasks)
     except (TypeError, ValueError):
         task_group_entries = []
+    task_group_task_ids = _normalize_task_id_list(task_group_entries)
 
-    for task_group_entry in task_group_entries:
-        if not _visible_tasks_query().filter(Tasks.id == task_group_entry).first():
+    existing_task_ids = {
+        row.task_id for row in JobTasks.query.filter(JobTasks.job_id == job.id).all()
+    }
+    visible_task_ids = {
+        row.id
+        for row in _visible_tasks_query()
+        .with_entities(Tasks.id)
+        .filter(Tasks.id.in_(task_group_task_ids))
+        .all()
+    }
+    new_assignments = 0
+    for task_group_entry in task_group_task_ids:
+        if task_group_entry not in visible_task_ids:
+            continue
+        if task_group_entry in existing_task_ids:
             continue
         job_task = JobTasks(job_id=job_id, task_id=task_group_entry, status='Not Started')
         db.session.add(job_task)
+        existing_task_ids.add(task_group_entry)
+        new_assignments += 1
     db.session.commit()
-
+    if new_assignments == 0:
+        flash('Task Group did not add any new tasks to this job.', 'info')
+	
     return redirect("/jobs/" + str(job_id) + "/tasks")
 
 @jobs.route("/jobs/<int:job_id>/move_task_up/<int:task_id>", methods=['POST'])
@@ -477,8 +539,10 @@ def jobs_move_task_up(job_id, task_id):
     if not _can_manage_job(job):
         flash('You do not have rights to modify this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
+    if not _require_job_allows_task_mutation(job):
+        return redirect(url_for('jobs.jobs_list_tasks', job_id=job.id))
 
-    job_tasks = JobTasks.query.filter_by(job_id=job_id).all()
+    job_tasks = JobTasks.query.filter_by(job_id=job_id).order_by(JobTasks.id.asc()).all()
     if not job_tasks:
         flash('No tasks assigned to this job.', 'warning')
         return redirect("/jobs/"+str(job_id)+"/tasks")
@@ -498,11 +562,35 @@ def jobs_move_task_up(job_id, task_id):
         ordered_task_ids[element_index - 1],
     )
 
-    JobTasks.query.filter_by(job_id=job_id).delete()
+    task_state_by_id = {
+        row.task_id: {
+            'status': row.status,
+            'priority': row.priority,
+            'command': row.command,
+            'started_at': row.started_at,
+            'progress': row.progress,
+            'benchmark': row.benchmark,
+            'worker_pid': row.worker_pid,
+        }
+        for row in job_tasks
+    }
+
+    JobTasks.query.filter_by(job_id=job_id).delete(synchronize_session=False)
     db.session.commit()
 
     for entry in ordered_task_ids:
-        job_task = JobTasks(job_id=job_id, task_id=entry, status='Not Started')
+        state = task_state_by_id.get(entry, {})
+        job_task = JobTasks(
+            job_id=job_id,
+            task_id=entry,
+            status=state.get('status', 'Not Started'),
+            priority=state.get('priority', 3),
+            command=state.get('command'),
+            started_at=state.get('started_at'),
+            progress=state.get('progress'),
+            benchmark=state.get('benchmark'),
+            worker_pid=state.get('worker_pid'),
+        )
         db.session.add(job_task)
     db.session.commit()
 
@@ -516,8 +604,10 @@ def jobs_move_task_down(job_id, task_id):
     if not _can_manage_job(job):
         flash('You do not have rights to modify this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
+    if not _require_job_allows_task_mutation(job):
+        return redirect(url_for('jobs.jobs_list_tasks', job_id=job.id))
 
-    job_tasks = JobTasks.query.filter_by(job_id=job_id).all()
+    job_tasks = JobTasks.query.filter_by(job_id=job_id).order_by(JobTasks.id.asc()).all()
     if not job_tasks:
         flash('No tasks assigned to this job.', 'warning')
         return redirect("/jobs/"+str(job_id)+"/tasks")
@@ -537,11 +627,35 @@ def jobs_move_task_down(job_id, task_id):
         ordered_task_ids[element_index],
     )
 
-    JobTasks.query.filter_by(job_id=job_id).delete()
+    task_state_by_id = {
+        row.task_id: {
+            'status': row.status,
+            'priority': row.priority,
+            'command': row.command,
+            'started_at': row.started_at,
+            'progress': row.progress,
+            'benchmark': row.benchmark,
+            'worker_pid': row.worker_pid,
+        }
+        for row in job_tasks
+    }
+
+    JobTasks.query.filter_by(job_id=job_id).delete(synchronize_session=False)
     db.session.commit()
 
     for entry in ordered_task_ids:
-        job_task = JobTasks(job_id=job_id, task_id=entry, status='Not Started')
+        state = task_state_by_id.get(entry, {})
+        job_task = JobTasks(
+            job_id=job_id,
+            task_id=entry,
+            status=state.get('status', 'Not Started'),
+            priority=state.get('priority', 3),
+            command=state.get('command'),
+            started_at=state.get('started_at'),
+            progress=state.get('progress'),
+            benchmark=state.get('benchmark'),
+            worker_pid=state.get('worker_pid'),
+        )
         db.session.add(job_task)
     db.session.commit()
 
@@ -555,6 +669,8 @@ def jobs_remove_task(job_id, task_id):
     if not _can_manage_job(job):
         flash('You do not have rights to modify this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
+    if not _require_job_allows_task_mutation(job):
+        return redirect(url_for('jobs.jobs_list_tasks', job_id=job.id))
 
     job_task = JobTasks.query.filter_by(job_id=job_id, task_id=task_id).first()
     if not job_task:
@@ -574,6 +690,8 @@ def jobs_remove_all_tasks(job_id):
     if not _can_manage_job(job):
         flash('You do not have rights to modify this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
+    if not _require_job_allows_task_mutation(job):
+        return redirect(url_for('jobs.jobs_list_tasks', job_id=job.id))
 
     JobTasks.query.filter_by(job_id=job_id).delete()
     db.session.commit()
@@ -618,8 +736,19 @@ def jobs_summary(job_id):
         flash('You must assign a valid hashfile before reviewing summary.', 'danger')
         return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job.id))
     domain = Domains.query.get(job.domain_id)
-    cracked_cnt = db.session.query(Hashes).outerjoin(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile.id).count()
-    hash_total = db.session.query(Hashes).outerjoin(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(HashfileHashes.hashfile_id==hashfile.id).count()
+    cracked_cnt = (
+        db.session.query(Hashes)
+        .outerjoin(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+        .filter(Hashes.cracked.is_(True))
+        .filter(HashfileHashes.hashfile_id == hashfile.id)
+        .count()
+    )
+    hash_total = (
+        db.session.query(Hashes)
+        .outerjoin(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+        .filter(HashfileHashes.hashfile_id == hashfile.id)
+        .count()
+    )
     cracked_rate = str(cracked_cnt) + '/' + str(hash_total)
 
     if form.validate_on_submit():
@@ -627,7 +756,7 @@ def jobs_summary(job_id):
             job_task.status = 'Ready'
 
         job.status = 'Ready'
-        job.updated_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        job.updated_at = _utc_now_naive()
         db.session.commit()
 
         flash('Job successfully created', 'success')
@@ -653,9 +782,12 @@ def jobs_start(job_id):
         return redirect(url_for('jobs.jobs_list'))
 
     job.status = 'Queued'
-    job.queued_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    job.queued_at = _utc_now_naive()
+    visible_task_ids = {
+        row.id for row in _visible_tasks_query().with_entities(Tasks.id).all()
+    }
     for job_task in job_tasks:
-        if not _visible_tasks_query().filter(Tasks.id == job_task.task_id).first():
+        if job_task.task_id not in visible_task_ids:
             db.session.rollback()
             flash('One or more assigned tasks are outside your access scope.', 'danger')
             return redirect(url_for('jobs.jobs_list_tasks', job_id=job.id))
@@ -686,7 +818,7 @@ def jobs_stop(job_id):
 
     if job.status in ('Running', 'Queued', 'Paused'):
         job.status = 'Canceled'
-        job.ended_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        job.ended_at = _utc_now_naive()
 
         for job_task in job_tasks:
             job_task.status = 'Canceled'
@@ -749,7 +881,7 @@ def jobs_resume(job_id):
         job.status = 'Running'
     elif has_queued:
         job.status = 'Queued'
-        job.queued_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        job.queued_at = _utc_now_naive()
     else:
         # Fallback: if every task completed/canceled while paused, leave current job state unchanged.
         job.status = 'Paused'

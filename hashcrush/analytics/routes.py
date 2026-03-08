@@ -5,6 +5,7 @@ import re
 
 from flask import Blueprint, redirect, render_template, request, send_file
 from flask_login import current_user, login_required
+from sqlalchemy import func
 
 from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles
 from hashcrush.models import db
@@ -137,10 +138,17 @@ def get_analytics():
         )
 
     scoped_hash_rows = _scoped_hash_rows_query(scoped_hashfile_ids)
+    status_counts = dict(
+        db.session.query(Hashes.cracked, func.count(Hashes.id))
+        .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+        .filter(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
+        .group_by(Hashes.cracked)
+        .all()
+    )
 
     # Figure 1 (Recovered vs unrecovered account rows)
-    fig1_cracked_cnt = scoped_hash_rows.filter(Hashes.cracked.is_(True)).count()
-    fig1_uncracked_cnt = scoped_hash_rows.filter(Hashes.cracked.is_(False)).count()
+    fig1_cracked_cnt = int(status_counts.get(True, 0))
+    fig1_uncracked_cnt = int(status_counts.get(False, 0))
     fig1_data = [
         ("Recovered: " + str(format_display(fig1_cracked_cnt)), fig1_cracked_cnt),
         ("Unrecovered: " + str(format_display(fig1_uncracked_cnt)), fig1_uncracked_cnt),
@@ -154,7 +162,7 @@ def get_analytics():
     fig2_cracked_hashes = (
         scoped_hash_rows.filter(Hashes.cracked.is_(True)).with_entities(Hashes.plaintext).all()
     )
-    fig2_uncracked_cnt = scoped_hash_rows.filter(Hashes.cracked.is_(False)).count()
+    fig2_uncracked_cnt = fig1_uncracked_cnt
     fig2_fails_complexity_cnt = 0
     fig2_meets_complexity_cnt = 0
     for entry in fig2_cracked_hashes:
@@ -210,7 +218,7 @@ def get_analytics():
 
     # General Stats Table
     total_runtime = sum(hashfile.runtime or 0 for hashfile in scope['scoped_hashfiles'])
-    total_accounts = scoped_hash_rows.count()
+    total_accounts = fig1_total
     total_unique_hashes = (
         scoped_hash_rows.with_entities(Hashes.ciphertext).distinct().count()
     )

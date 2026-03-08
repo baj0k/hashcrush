@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import threading
 import time
@@ -192,6 +193,7 @@ class LocalExecutorService:
         touched_job_ids = set()
         imported_total = 0
         for job_task in orphaned:
+            self._terminate_orphaned_pid(job_task)
             crack_path = self._crack_file_path_for_job_task(job_task)
             if crack_path:
                 imported_total += self._safe_import_crack_file(job_task, crack_path)
@@ -221,6 +223,73 @@ class LocalExecutorService:
             len(orphaned),
             imported_total,
         )
+
+    @staticmethod
+    def _pid_exists(pid: int) -> bool:
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    @staticmethod
+    def _pid_matches_expected_hashcat(pid: int, job_task: JobTasks) -> bool:
+        cmdline_path = f"/proc/{pid}/cmdline"
+        if not os.path.exists(cmdline_path):
+            return False
+        try:
+            with open(cmdline_path, "rb") as cmdline_file:
+                raw_cmdline = cmdline_file.read()
+        except OSError:
+            return False
+        if not raw_cmdline:
+            return False
+
+        expected_session = f"--session\x00job{job_task.job_id}_task{job_task.task_id}".encode("utf-8")
+        return (b"hashcat" in raw_cmdline.lower()) and (expected_session in raw_cmdline)
+
+    def _terminate_orphaned_pid(self, job_task: JobTasks) -> None:
+        pid = int(job_task.worker_pid or 0)
+        if pid <= 0:
+            return
+        if not self._pid_exists(pid):
+            return
+        if not self._pid_matches_expected_hashcat(pid, job_task):
+            current_app.logger.warning(
+                "Skipping orphaned PID termination for job_task id=%s pid=%s: process does not match expected hashcat session.",
+                job_task.id,
+                pid,
+            )
+            return
+
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            return
+
+        for _ in range(50):
+            if not self._pid_exists(pid):
+                current_app.logger.warning(
+                    "Terminated orphaned hashcat process pid=%s for job_task id=%s.",
+                    pid,
+                    job_task.id,
+                )
+                return
+            time.sleep(0.1)
+
+        try:
+            os.kill(pid, signal.SIGKILL)
+            current_app.logger.warning(
+                "Force-killed orphaned hashcat process pid=%s for job_task id=%s.",
+                pid,
+                job_task.id,
+            )
+        except (ProcessLookupError, PermissionError):
+            return
 
     def _claim_and_start_next(self) -> None:
         next_task = (

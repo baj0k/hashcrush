@@ -45,6 +45,10 @@ def _contains_hidden_segment(relative_path: str) -> bool:
     return any(segment.startswith('.') for segment in relative_path.split('/') if segment not in ('', '.'))
 
 
+def _is_selectable_rule_filename(filename: str) -> bool:
+    return (filename or '').lower().endswith('.rule')
+
+
 def _rules_root_path() -> str:
     configured = current_app.config.get('RULES_PATH')
     if configured:
@@ -61,7 +65,7 @@ def _list_selectable_files(base_dir: str, max_entries: int = MAX_SELECTABLE_RULE
         # Skip hidden directories from recursive discovery.
         dirnames[:] = [dirname for dirname in dirnames if not dirname.startswith('.')]
         for filename in files:
-            if not filename.lower().endswith('.rule'):
+            if not _is_selectable_rule_filename(filename):
                 continue
             abs_path = os.path.abspath(os.path.join(dirpath, filename))
             rel_path = os.path.relpath(abs_path, base_dir).replace(os.path.sep, '/')
@@ -111,6 +115,8 @@ def _resolve_selected_file(selected_relative_path: str, base_dir: str) -> str | 
         return None
     normalized_selected = selected.replace('\\', '/')
     if _contains_hidden_segment(normalized_selected):
+        return None
+    if not _is_selectable_rule_filename(normalized_selected):
         return None
 
     candidate = os.path.abspath(os.path.join(base_dir, normalized_selected))

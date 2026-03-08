@@ -1,7 +1,7 @@
 """Flask routes to handle Task Groups."""
 import io
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 from flask import Blueprint, abort, flash, redirect, render_template, request, send_file, url_for
 from flask_login import current_user, login_required
@@ -134,7 +134,7 @@ def task_groups_export():
 
     payload = {
         'version': 1,
-        'exported_at_utc': datetime.utcnow().isoformat(timespec='seconds') + 'Z',
+        'exported_at_utc': datetime.now(UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
         'owner': current_user.username,
         'tasks': export_tasks,
         'task_groups': export_task_groups,
@@ -142,7 +142,7 @@ def task_groups_export():
 
     buffer = io.BytesIO(json.dumps(payload, indent=2).encode('utf-8'))
     buffer.seek(0)
-    filename = f"task_groups_export_{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.json"
+    filename = f"task_groups_export_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
     return send_file(
         buffer,
         as_attachment=True,

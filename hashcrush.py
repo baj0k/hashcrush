@@ -219,7 +219,6 @@ def cli(args) -> int:
 
         parser = argparse.ArgumentParser()
         parser.add_argument("--debug",  action="store_true", help="increase output verbosity")
-        parser.add_argument("--no-ssl", action="store_true", help="disable use of ssl")
         parser.add_argument("--reset-admin-password", action="store_true", help="reset an admin password locally and exit")
         parser.add_argument("--admin-username", help="admin username to target with --reset-admin-password")
         parsed_args = parser.parse_args(args)
@@ -256,12 +255,8 @@ def cli(args) -> int:
             werkzeug_logger = logging.getLogger('werkzeug')
             werkzeug_logger.setLevel(logging.ERROR)
 
-        if parsed_args.no_ssl:
-            app.run(host='0.0.0.0', port=8080, debug=parsed_args.debug)
-
-        else:
-            ssl_context = _resolve_ssl_context(app)
-            app.run(host='0.0.0.0', port=8443, ssl_context=ssl_context, debug=parsed_args.debug)
+        ssl_context = _resolve_ssl_context(app)
+        app.run(host='0.0.0.0', port=8443, ssl_context=ssl_context, debug=parsed_args.debug)
 
     except Exception as ex:
         print(f'Exception!: {ex}', file=sys.stderr)

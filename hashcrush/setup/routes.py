@@ -1,5 +1,5 @@
 """Flask routes to handle Setup"""
-from datetime import datetime
+from datetime import UTC, datetime
 
 from flask import flash
 from flask import url_for
@@ -74,7 +74,7 @@ def admin_pass_post():
 
     admin_user.username = form.username.data
     admin_user.password      = bcrypt.generate_password_hash(form.password.data).decode('utf-8')
-    admin_user.last_login_utc = datetime.utcnow()
+    admin_user.last_login_utc = datetime.now(UTC).replace(tzinfo=None)
     db.session.commit()
     flash('Admin password changed!', 'success')
     return redirect(url_for('setup.settings_get'))

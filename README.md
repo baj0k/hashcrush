@@ -41,8 +41,9 @@ Because HashCrush starts with a self-signed certificate, browsers will warn by d
 Production deployments should provide certificate paths via environment variables:
 - `HASHCRUSH_SSL_CERT_PATH`
 - `HASHCRUSH_SSL_KEY_PATH`
+- `HASHCRUSH_TRUST_X_FORWARDED_FOR` (set only behind a trusted reverse proxy)
 
-If SSL is enabled and either file is missing/unreadable, startup fails with an explicit error.
+If either TLS file is missing/unreadable, startup fails with an explicit error.
 `setup.py` now defaults to generating the certificate and key under `/etc/hashcrush/ssl`.
 It applies restrictive permissions (`cert.pem` `0644`, `key.pem` `0600`) and prompts for another writable directory if `/etc/hashcrush/ssl` is not writable.
 
@@ -67,7 +68,6 @@ export HASHCRUSH_SSL_KEY_PATH='/run/secrets/hashcrush-key.pem'
 Optional flags:
 
 - --debug
-- --no-ssl (default port 8080)
 - --reset-admin-password
 - --reset-admin-password --admin-username <admin_username>
 

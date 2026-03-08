@@ -27,6 +27,8 @@ from hashcrush.models import (
 from hashcrush.users.routes import bcrypt
 from hashcrush.utils.utils import (
     encode_plaintext_for_storage,
+    get_linecount,
+    import_hashfilehashes,
     validate_hash_only_hashfile,
     validate_netntlm_hashfile,
     validate_user_hash_hashfile,
@@ -318,6 +320,7 @@ def test_rules_selectable_files_support_nested_folders(tmp_path):
 
     resolved_nested = _resolve_selected_file("example_folder1/best64.rule", str(rules_root))
     assert resolved_nested == str(nested_file.resolve())
+    assert _resolve_selected_file("example_folder1/not_a_rule.txt", str(rules_root)) is None
     assert _resolve_selected_file(".hidden/secret.rule", str(rules_root)) is None
     assert _resolve_selected_file("../etc/passwd", str(rules_root)) is None
     missing_files, missing_truncated = _list_selectable_files(str(rules_root / "does-not-exist"))
@@ -1185,6 +1188,181 @@ def test_login_throttle_can_be_disabled():
 
 
 @pytest.mark.security
+def test_login_throttle_ignores_x_forwarded_for_by_default():
+    app = _build_app(
+        {
+            "AUTH_THROTTLE_ENABLED": True,
+            "AUTH_THROTTLE_MAX_ATTEMPTS": 1,
+            "AUTH_THROTTLE_WINDOW_SECONDS": 300,
+            "AUTH_THROTTLE_LOCKOUT_SECONDS": 60,
+            "TRUST_X_FORWARDED_FOR": False,
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+
+        first = client.post(
+            "/login",
+            data={"username": "admin", "password": "wrong-password"},
+            headers={"X-Forwarded-For": "1.1.1.1"},
+        )
+        assert first.status_code == 200
+
+        blocked = client.post(
+            "/login",
+            data={"username": "admin", "password": "wrong-password"},
+            headers={"X-Forwarded-For": "2.2.2.2"},
+        )
+        assert blocked.status_code == 429
+
+
+@pytest.mark.security
+def test_login_throttle_can_trust_x_forwarded_for_when_enabled():
+    app = _build_app(
+        {
+            "AUTH_THROTTLE_ENABLED": True,
+            "AUTH_THROTTLE_MAX_ATTEMPTS": 1,
+            "AUTH_THROTTLE_WINDOW_SECONDS": 300,
+            "AUTH_THROTTLE_LOCKOUT_SECONDS": 60,
+            "TRUST_X_FORWARDED_FOR": True,
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+
+        first = client.post(
+            "/login",
+            data={"username": "admin", "password": "wrong-password"},
+            headers={"X-Forwarded-For": "1.1.1.1"},
+        )
+        assert first.status_code == 200
+
+        second = client.post(
+            "/login",
+            data={"username": "admin", "password": "wrong-password"},
+            headers={"X-Forwarded-For": "2.2.2.2"},
+        )
+        assert second.status_code == 200
+
+        blocked = client.post(
+            "/login",
+            data={"username": "admin", "password": "wrong-password"},
+            headers={"X-Forwarded-For": "2.2.2.2"},
+        )
+        assert blocked.status_code == 429
+
+
+@pytest.mark.security
+def test_job_task_move_routes_do_not_mutate_active_jobs():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="Move Guard Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        task_a = Tasks(
+            name="task-a",
+            hc_attackmode="maskmode",
+            owner_id=admin.id,
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a",
+        )
+        task_b = Tasks(
+            name="task-b",
+            hc_attackmode="maskmode",
+            owner_id=admin.id,
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a?a",
+        )
+        db.session.add_all([task_a, task_b])
+        db.session.commit()
+
+        job = Jobs(
+            name="active-job",
+            status="Running",
+            domain_id=domain.id,
+            owner_id=admin.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        first = JobTasks(job_id=job.id, task_id=task_a.id, status="Running")
+        second = JobTasks(job_id=job.id, task_id=task_b.id, status="Queued")
+        db.session.add_all([first, second])
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(f"/jobs/{job.id}/move_task_down/{task_a.id}")
+        assert response.status_code == 302
+
+        persisted = JobTasks.query.filter_by(job_id=job.id).order_by(JobTasks.id.asc()).all()
+        assert [row.task_id for row in persisted] == [task_a.id, task_b.id]
+        assert [row.status for row in persisted] == ["Running", "Queued"]
+
+
+@pytest.mark.security
+def test_tasks_add_supports_bruteforce_attackmode():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/tasks/add",
+            data={
+                "name": "bruteforce-task",
+                "hc_attackmode": "bruteforce",
+                "wl_id": "",
+                "rule_id": "None",
+                "mask": "",
+            },
+        )
+        assert response.status_code == 302
+
+        task = Tasks.query.filter_by(name="bruteforce-task", owner_id=admin.id).first()
+        assert task is not None
+        assert task.hc_attackmode == "bruteforce"
+        assert task.wl_id is None
+        assert task.rule_id is None
+        assert task.hc_mask is None
+
+
+@pytest.mark.security
+def test_get_linecount_handles_newline_edge_cases(tmp_path):
+    file_with_newline = tmp_path / "one-line-newline.txt"
+    file_with_newline.write_text("line1\n", encoding="utf-8")
+    assert get_linecount(str(file_with_newline)) == 1
+
+    file_without_newline = tmp_path / "two-lines-no-final-newline.txt"
+    file_without_newline.write_text("line1\nline2", encoding="utf-8")
+    assert get_linecount(str(file_without_newline)) == 2
+
+    empty_file = tmp_path / "empty.txt"
+    empty_file.write_text("", encoding="utf-8")
+    assert get_linecount(str(empty_file)) == 0
+
+
+@pytest.mark.security
 def test_hashfile_validator_rejects_overlong_lines(tmp_path):
     app = _build_app({"HASHFILE_MAX_LINE_LENGTH": 10})
     with app.app_context():
@@ -1226,6 +1404,99 @@ def test_hashfile_validator_rejects_too_many_lines(tmp_path):
         error = validate_hash_only_hashfile(str(path), "0")
         assert isinstance(error, str)
         assert "too many lines" in error.lower()
+
+
+@pytest.mark.security
+def test_import_user_hash_dcc2_preserves_username_association(tmp_path):
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="ImportDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="dcc2.txt", domain_id=domain.id, owner_id=admin.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_line = "alice:$DCC2$10240#alice#6f1f1524858772cc7f3a5ecf4dbf45f6\n"
+        hash_path = tmp_path / "user_hash_dcc2.txt"
+        hash_path.write_text(hash_line, encoding="utf-8")
+
+        assert import_hashfilehashes(
+            hashfile_id=hashfile.id,
+            hashfile_path=str(hash_path),
+            file_type="user_hash",
+            hash_type="2100",
+        )
+
+        association = HashfileHashes.query.filter_by(hashfile_id=hashfile.id).first()
+        assert association is not None
+        assert bytes.fromhex(association.username).decode("latin-1") == "alice"
+
+        imported_hash = Hashes.query.get(association.hash_id)
+        assert imported_hash is not None
+        assert imported_hash.ciphertext.startswith("$DCC2$10240#alice#")
+
+
+@pytest.mark.security
+def test_jobs_assign_task_group_normalizes_string_ids_and_skips_duplicates():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="TaskGroupAssignDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="job_hashes.txt", domain_id=domain.id, owner_id=admin.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        job = Jobs(
+            name="tg-job",
+            status="Incomplete",
+            domain_id=domain.id,
+            owner_id=admin.id,
+            hashfile_id=hashfile.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        task_a = Tasks(name="task-a", hc_attackmode="bruteforce", owner_id=admin.id, wl_id=None, rule_id=None)
+        task_b = Tasks(name="task-b", hc_attackmode="bruteforce", owner_id=admin.id, wl_id=None, rule_id=None)
+        db.session.add(task_a)
+        db.session.add(task_b)
+        db.session.commit()
+
+        task_group = TaskGroups(
+            name="tg-string-ids",
+            owner_id=admin.id,
+            tasks=json.dumps([str(task_a.id), str(task_a.id), str(task_b.id), "invalid"]),
+        )
+        db.session.add(task_group)
+        db.session.commit()
+
+        preexisting_assignment = JobTasks(job_id=job.id, task_id=task_a.id, status="Not Started")
+        db.session.add(preexisting_assignment)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+        response = client.post(f"/jobs/{job.id}/assign_task_group/{task_group.id}")
+        assert response.status_code == 302
+
+        assigned_task_ids = [
+            row.task_id
+            for row in JobTasks.query.filter_by(job_id=job.id).order_by(JobTasks.id.asc()).all()
+        ]
+        assert assigned_task_ids.count(task_a.id) == 1
+        assert assigned_task_ids.count(task_b.id) == 1
 
 
 @pytest.mark.security
@@ -1807,3 +2078,23 @@ def test_database_constraints_and_indexes_exist_on_core_link_tables():
         }
         assert (("job_id",), "jobs") in job_tasks_fks
         assert (("task_id",), "tasks") in job_tasks_fks
+
+        hashfile_hashes_unique = {
+            tuple(entry["column_names"])
+            for entry in inspector.get_unique_constraints("hashfile_hashes")
+        }
+        assert ("hashfile_id", "hash_id", "username") in hashfile_hashes_unique
+
+        job_tasks_unique = {
+            tuple(entry["column_names"])
+            for entry in inspector.get_unique_constraints("job_tasks")
+        }
+        assert ("job_id", "task_id") in job_tasks_unique
+
+        hashes_unique = {
+            tuple(entry["column_names"])
+            for entry in inspector.get_unique_constraints("hashes")
+        }
+        assert ("hash_type", "sub_ciphertext") in hashes_unique
+
+        assert "auth_throttle" in inspector.get_table_names()

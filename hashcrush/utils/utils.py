@@ -5,7 +5,7 @@ import hashlib
 import re
 import shlex
 import tempfile
-from datetime import datetime
+from datetime import UTC, datetime
 import _md5
 from flask import current_app, has_app_context
 from hashcrush.models import db
@@ -80,6 +80,10 @@ def get_runtime_root_path() -> str:
         return os.path.abspath(os.path.expanduser(str(configured)))
     # Backward-compatible fallback when config does not define runtime_path.
     return os.path.join(tempfile.gettempdir(), 'hashcrush-runtime')
+
+
+def _utc_now_naive() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def get_runtime_subdir(name: str) -> str:
@@ -214,7 +218,19 @@ def get_linecount(filepath):
 
     with open(filepath, 'rb') as fp:
         c_generator = _count_generator(fp.raw.read)
-        count = sum(buffer.count(b'\n') for buffer in c_generator)
+        count = 0
+        has_content = False
+        trailing_newline = False
+        for buffer in c_generator:
+            if not buffer:
+                continue
+            has_content = True
+            count += buffer.count(b'\n')
+            trailing_newline = buffer.endswith(b'\n')
+        if not has_content:
+            return 0
+        if trailing_newline:
+            return count
         return count + 1
 
 def get_filehash(filepath):
@@ -249,84 +265,98 @@ def import_hash_only(line, hash_type):
 def import_hashfilehashes(hashfile_id, hashfile_path, file_type, hash_type):
     """Function to hashfile"""
 
-    with open(hashfile_path, 'r') as file:
-        for line in file:
-            # If line is empty:
-            if len(line) > 0:
-                if file_type == 'hash_only':
-                    # forcing lower casing of hash as hashcat will return lower cased version of the has and we want to match what we imported.
-                    if hash_type in ('300', '1731'):
-                        hash_id = import_hash_only(line=line.lower().rstrip(), hash_type=hash_type)
-                    elif hash_type == '2100':
-                        line = line.lower().rstrip()
-                        line = line.replace('$dcc2$', '$DCC2$')
-                        hash_id = import_hash_only(line, hash_type)
-                    else:
-                        hash_id = import_hash_only(line=line.rstrip(), hash_type=hash_type)
-                    # extract username from dcc2 hash
-                    if hash_type == '2100':
-                        username = line.split('#')[1]
-                    else:
-                        username = None
-                elif file_type == 'user_hash':
-                    if ':' in line:
-                        if hash_type in ('300', '1731'):
-                            hash_id = import_hash_only(line=line.lower().rstrip(), hash_type=hash_type)
-                        if hash_type == '2100':
-                            line = line.split(':',1)[1].rstrip()
-                            line = line.lower()
-                            line = line.replace('$dcc2$', '$DCC2$')
-                            hash_id = import_hash_only(line, hash_type)
-                            username = line.split(':')[0]
-                        else:
-                            hash_id = import_hash_only(line=line.split(':',1)[1].rstrip(), hash_type=hash_type)
-                            username = line.split(':')[0]
-                    else:
-                        db.session.rollback()
-                        return False
-                elif file_type == 'shadow':
-                    hash_id= import_hash_only(line=line.split(':')[1], hash_type=hash_type)
-                    username = line.split(':')[0]
-                elif file_type == 'pwdump':
-                    # do we let user select LM so that we crack those instead of NTLM?
-                    # First extracting usernames so we can filter out machine accounts
-                    if re.search(r"\$$", line.split(':')[0]):
-                    #if '$' in line.split(':')[0]:
-                        continue
-                    else:
-                        hash_id = import_hash_only(line=line.split(':')[3].lower(), hash_type='1000')
-                        username = line.split(':')[0]
-                elif file_type == 'kerberos':
-                    hash_id = import_hash_only(line=line.lower().rstrip(), hash_type=hash_type)
-                    if hash_type == '18200':
-                        username = line.split('$')[3].split(':')[0]
-                    else:
-                        username = line.split('$')[3]
-                elif file_type == 'NetNTLM':
-                    # First extracting usernames so we can filter out machine accounts
-                    # 5600, domain is case sensitve. Hashcat returns username in upper case.
-                    if re.search(r"\$$", line.split(':')[0]):
-                    #if '$' in line.split(':')[0]:
-                        continue
-                    else:
-                        # uppercase uesrname in line
-                        line_list = line.split(':')
-                        # uppercase the username in line
-                        line_list[0] = line_list[0].upper()
-                        # lowercase the rest (except domain name) 3,4,5
-                        line_list[3] = line_list[3].lower()
-                        line_list[4] = line_list[4].lower()
-                        line_list[5] = line_list[5].lower()
-                        line = ':'.join(line_list)
-                        hash_id = import_hash_only(line=line.rstrip(), hash_type=hash_type)
-                        username = line.split(':', maxsplit=1)[0]
-                else:
+    with open(hashfile_path, encoding='utf-8', errors='replace') as file:
+        for raw_line in file:
+            line = raw_line.rstrip('\r\n')
+            if not line:
+                continue
+
+            username = None
+            if file_type == 'hash_only':
+                hash_value = line
+                # Hashcat normalizes these types to lowercase in output.
+                if hash_type in ('300', '1731'):
+                    hash_value = hash_value.lower()
+                elif hash_type == '2100':
+                    hash_value = hash_value.lower().replace('$dcc2$', '$DCC2$')
+                hash_id = import_hash_only(line=hash_value, hash_type=hash_type)
+                if hash_type == '2100':
+                    dcc_parts = hash_value.split('#')
+                    username = dcc_parts[1] if len(dcc_parts) >= 3 else None
+            elif file_type == 'user_hash':
+                if ':' not in line:
                     db.session.rollback()
                     return False
-                if username is None:
-                    hashfilehashes = HashfileHashes(hash_id=hash_id, hashfile_id=hashfile_id)
+                username, hash_value = line.split(':', 1)
+                hash_value = hash_value.rstrip()
+                if hash_type in ('300', '1731'):
+                    hash_value = hash_value.lower()
+                elif hash_type == '2100':
+                    hash_value = hash_value.lower().replace('$dcc2$', '$DCC2$')
+                hash_id = import_hash_only(line=hash_value, hash_type=hash_type)
+            elif file_type == 'shadow':
+                line_parts = line.split(':')
+                if len(line_parts) < 2:
+                    db.session.rollback()
+                    return False
+                username = line_parts[0]
+                hash_id = import_hash_only(line=line_parts[1], hash_type=hash_type)
+            elif file_type == 'pwdump':
+                line_parts = line.split(':')
+                if len(line_parts) < 4:
+                    db.session.rollback()
+                    return False
+                # Filter out machine accounts.
+                if re.search(r"\$$", line_parts[0]):
+                    continue
+                hash_id = import_hash_only(line=line_parts[3].lower(), hash_type='1000')
+                username = line_parts[0]
+            elif file_type == 'kerberos':
+                hash_value = line.lower()
+                hash_id = import_hash_only(line=hash_value, hash_type=hash_type)
+                kerberos_parts = hash_value.split('$')
+                if len(kerberos_parts) <= 3:
+                    db.session.rollback()
+                    return False
+                if hash_type == '18200':
+                    username = kerberos_parts[3].split(':')[0]
                 else:
-                    hashfilehashes = HashfileHashes(hash_id=hash_id, username=username.encode('latin-1').hex(), hashfile_id=hashfile_id)
+                    username = kerberos_parts[3]
+            elif file_type == 'NetNTLM':
+                line_list = line.split(':')
+                if len(line_list) < 6:
+                    db.session.rollback()
+                    return False
+                # Filter out machine accounts.
+                if re.search(r"\$$", line_list[0]):
+                    continue
+                # Uppercase username; lowercase the challenge/response sections.
+                line_list[0] = line_list[0].upper()
+                line_list[3] = line_list[3].lower()
+                line_list[4] = line_list[4].lower()
+                line_list[5] = line_list[5].lower()
+                normalized_line = ':'.join(line_list)
+                hash_id = import_hash_only(line=normalized_line, hash_type=hash_type)
+                username = line_list[0]
+            else:
+                db.session.rollback()
+                return False
+
+            encoded_username = ''
+            if username is not None:
+                encoded_username = username.encode('latin-1', errors='replace').hex()
+
+            existing_link = HashfileHashes.query.filter_by(
+                hash_id=hash_id,
+                hashfile_id=hashfile_id,
+                username=encoded_username,
+            ).first()
+            if not existing_link:
+                hashfilehashes = HashfileHashes(
+                    hash_id=hash_id,
+                    username=encoded_username,
+                    hashfile_id=hashfile_id,
+                )
                 db.session.add(hashfilehashes)
 
     db.session.commit()
@@ -370,7 +400,7 @@ def update_dynamic_wordlist(wordlist_id, requesting_user_id: int | None = None, 
     # update file hash
     wordlist.checksum = get_filehash(resolved_path)
     # update last update
-    wordlist.last_updated = datetime.today()
+    wordlist.last_updated = datetime.now(UTC).replace(tzinfo=None)
     db.session.commit()
     return True
 
@@ -481,7 +511,7 @@ def update_job_task_status(jobtask_id, status):
     if status in ('Running', 'Importing') and job.status in ('Queued', 'Paused'):
         job.status = 'Running'
         if not job.started_at:
-            job.started_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            job.started_at = _utc_now_naive()
         db.session.commit()
 
     # Paused task means this job is no longer actively cracking.
@@ -504,7 +534,7 @@ def update_job_task_status(jobtask_id, status):
         ).count() > 0
 
         job.status = 'Canceled' if any_canceled else 'Completed'
-        job.ended_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        job.ended_at = _utc_now_naive()
         db.session.commit()
         current_app.logger.info(
             'Job lifecycle update: job_id=%s name="%s" finished with status=%s',
@@ -515,9 +545,16 @@ def update_job_task_status(jobtask_id, status):
 
         # Update hashfile runtime if we have a start/end time.
         try:
-            start_time = datetime.strptime(str(job.started_at), '%Y-%m-%d %H:%M:%S')
-            end_time = datetime.strptime(str(job.ended_at), '%Y-%m-%d %H:%M:%S')
-            duration = abs(end_time - start_time).seconds
+            start_time = job.started_at
+            end_time = job.ended_at
+            if isinstance(start_time, str):
+                start_time = datetime.strptime(start_time, '%Y-%m-%d %H:%M:%S')
+            if isinstance(end_time, str):
+                end_time = datetime.strptime(end_time, '%Y-%m-%d %H:%M:%S')
+            if isinstance(start_time, datetime) and isinstance(end_time, datetime):
+                duration = int(abs((end_time - start_time).total_seconds()))
+            else:
+                duration = 0
         except Exception:
             duration = 0
 
@@ -776,17 +813,3 @@ def validate_hash_only_hashfile(hashfile_path, hash_type):
         return str(error)
 
     return False
-
-def getTimeFormat(total_runtime): # Runtime in seconds
-    """Function to convert seconds into, minutes, hours, days or weeks"""
-
-    if total_runtime >= 604800:
-        return str(round(total_runtime/604800)) + " week(s)"
-    elif total_runtime >= 86400:
-        return str(round(total_runtime/86400)) + " day(s)"
-    elif total_runtime >= 3600:
-        return str(round(total_runtime/3600)) + " hour(s)"
-    elif total_runtime >= 60:
-        return str(round(total_runtime/60)) + " minute(s)"
-    elif total_runtime < 60:
-        return "less then 1 minute"
