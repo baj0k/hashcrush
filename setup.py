@@ -13,7 +13,7 @@ LOCAL_MYSQL_HOST_ALIASES = {'localhost', '127.0.0.1', '::1'}
 DEFAULT_DB_HOST = '127.0.0.1'
 DEFAULT_HASHCAT_BIN = '/usr/bin/hashcat'
 DEFAULT_HASHCAT_STATUS_TIMER = 5
-DEFAULT_WORDLISTS_PATH = '/usr/share/seclists'
+DEFAULT_WORDLISTS_PATH = '/usr/share/seclists/Passwords'
 DEFAULT_RULES_PATH = '/usr/share/hashcat/rules'
 
 
@@ -196,7 +196,7 @@ rules_default = (
 
 print('\nCollecting External Dictionary and Rules Paths')
 wordlists_path = _prompt_existing_directory(
-    'Enter path to the SecLists wordlists root',
+    'Enter path to the SecLists/Passwords wordlists root',
     wordlists_default,
 )
 rules_path = _prompt_existing_directory(

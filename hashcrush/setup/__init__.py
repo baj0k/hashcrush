@@ -22,7 +22,7 @@ def add_default_tasks(db: SQLAlchemy):
     for length in range(1, 11):
         mask = '?a' * length
         task = Tasks(
-            name=f'Bruteforce ?a x{length}',
+            name=f'{mask} [{length}]',
             owner_id=1,
             wl_id=None,
             rule_id=None,

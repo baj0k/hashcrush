@@ -1,16 +1,22 @@
 """Flask routes to handle Wordlists"""
 import os
 
-from flask import Blueprint, render_template, redirect, url_for, flash, current_app
+from flask import Blueprint, current_app, flash, redirect, render_template, url_for
 from flask_login import login_required, current_user
 
-from hashcrush.wordlists.forms import WordlistsForm
-from hashcrush.models import Tasks, Wordlists, Users
+from hashcrush.models import Tasks, Users, Wordlists
 from hashcrush.models import db
-from hashcrush.utils.utils import save_file, get_linecount, get_filehash, update_dynamic_wordlist
+from hashcrush.utils.utils import get_filehash, get_linecount, update_dynamic_wordlist
+from hashcrush.wordlists.forms import WordlistsForm
 
 
 wordlists = Blueprint('wordlists', __name__)
+MAX_SELECTABLE_WORDLIST_FILES = 5000
+
+
+def _is_selectable_wordlist_filename(filename: str) -> bool:
+    lowered = (filename or '').lower()
+    return lowered.endswith('.txt')
 
 
 def _wordlists_root_path() -> str:
@@ -20,36 +26,43 @@ def _wordlists_root_path() -> str:
     return os.path.abspath(os.path.join(current_app.root_path, 'control', 'wordlists'))
 
 
-def _resolve_existing_file(user_path: str, base_dir: str) -> str | None:
-    raw_value = os.path.expanduser((user_path or '').strip())
-    if not raw_value:
+def _list_selectable_files(base_dir: str, max_entries: int = MAX_SELECTABLE_WORDLIST_FILES) -> tuple[list[tuple[str, str]], bool]:
+    if (not base_dir) or (not os.path.isdir(base_dir)):
+        return [], False
+
+    discovered: list[str] = []
+    for dirpath, dirnames, files in os.walk(base_dir):
+        # Skip hidden directories from recursive discovery.
+        dirnames[:] = [dirname for dirname in dirnames if not dirname.startswith('.')]
+        for filename in files:
+            if not _is_selectable_wordlist_filename(filename):
+                continue
+            abs_path = os.path.abspath(os.path.join(dirpath, filename))
+            rel_path = os.path.relpath(abs_path, base_dir).replace(os.path.sep, '/')
+            discovered.append(rel_path)
+            if len(discovered) >= max_entries:
+                discovered.sort(key=str.casefold)
+                return [(path, path) for path in discovered], True
+
+    discovered.sort(key=str.casefold)
+    return [(path, path) for path in discovered], False
+
+
+def _resolve_selected_file(selected_relative_path: str, base_dir: str) -> str | None:
+    selected = (selected_relative_path or '').strip()
+    if not selected:
+        return None
+    if not _is_selectable_wordlist_filename(selected):
         return None
 
-    input_is_absolute = os.path.isabs(raw_value)
-    candidate = os.path.abspath(raw_value if input_is_absolute else os.path.join(base_dir, raw_value))
-
+    candidate = os.path.abspath(os.path.join(base_dir, selected))
     try:
         if os.path.commonpath([candidate, base_dir]) != base_dir:
             return None
     except ValueError:
         return None
 
-    if os.path.isfile(candidate):
-        return candidate
-
-    # Allow bare filename lookup in nested directories under wordlists_path.
-    has_path_separator = (os.path.sep in raw_value) or (os.path.altsep and os.path.altsep in raw_value)
-    if (not input_is_absolute) and (not has_path_separator):
-        matches: list[str] = []
-        for dirpath, _, files in os.walk(base_dir):
-            if raw_value in files:
-                matches.append(os.path.abspath(os.path.join(dirpath, raw_value)))
-                if len(matches) > 1:
-                    return None
-        if len(matches) == 1:
-            return matches[0]
-
-    return None
+    return candidate if os.path.isfile(candidate) else None
 
 
 @wordlists.route("/wordlists", methods=['GET'])
@@ -81,23 +94,35 @@ def wordlists_add():
 
     form = WordlistsForm()
     wordlists_root = _wordlists_root_path()
+    wordlists_root_exists = os.path.isdir(wordlists_root)
+    selectable_files, selectable_truncated = _list_selectable_files(wordlists_root)
+    form.existing_file.choices = [('', '--SELECT FILE--')] + selectable_files
 
     if form.validate_on_submit():
-        upload_file = form.wordlist.data
-        existing_path_input = (form.existing_path.data or '').strip()
+        if not wordlists_root_exists:
+            flash('Configured wordlists_path directory does not exist. Cannot register wordlists until it is fixed.', 'danger')
+            return render_template(
+                'wordlists_add.html',
+                title='Wordlist Add',
+                form=form,
+                wordlists_root=wordlists_root,
+                wordlists_root_exists=wordlists_root_exists,
+                selectable_count=len(selectable_files),
+                selectable_truncated=selectable_truncated,
+            )
 
-        if not upload_file and not existing_path_input:
-            flash('Provide either a wordlist upload or an existing path.', 'danger')
-            return render_template('wordlists_add.html', title='Wordlist Add', form=form, wordlists_root=wordlists_root)
-
-        if existing_path_input:
-            wordlist_path = _resolve_existing_file(existing_path_input, wordlists_root)
-            if not wordlist_path or not os.path.isfile(wordlist_path):
-                flash('Invalid existing wordlist path. Use an absolute path, a nested relative path, or a unique filename under configured wordlists_path.', 'danger')
-                return render_template('wordlists_add.html', title='Wordlist Add', form=form, wordlists_root=wordlists_root)
-        else:
-            os.makedirs(wordlists_root, exist_ok=True)
-            wordlist_path = save_file(wordlists_root, upload_file)
+        wordlist_path = _resolve_selected_file(form.existing_file.data, wordlists_root)
+        if not wordlist_path:
+            flash('Invalid file selection. Choose an existing file from the configured wordlists_path list.', 'danger')
+            return render_template(
+                'wordlists_add.html',
+                title='Wordlist Add',
+                form=form,
+                wordlists_root=wordlists_root,
+                wordlists_root_exists=wordlists_root_exists,
+                selectable_count=len(selectable_files),
+                selectable_truncated=selectable_truncated,
+            )
 
         wordlist_path = os.path.abspath(wordlist_path)
         if Wordlists.query.filter_by(path=wordlist_path).first():
@@ -117,7 +142,15 @@ def wordlists_add():
         flash('Wordlist created!', 'success')
         return redirect(url_for('wordlists.wordlists_list'))
 
-    return render_template('wordlists_add.html', title='Wordlist Add', form=form, wordlists_root=wordlists_root)
+    return render_template(
+        'wordlists_add.html',
+        title='Wordlist Add',
+        form=form,
+        wordlists_root=wordlists_root,
+        wordlists_root_exists=wordlists_root_exists,
+        selectable_count=len(selectable_files),
+        selectable_truncated=selectable_truncated,
+    )
 
 
 @wordlists.route("/wordlists/delete/<int:wordlist_id>", methods=['POST'])

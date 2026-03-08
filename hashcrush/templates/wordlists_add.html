@@ -11,7 +11,7 @@
 {% endblock header %}
 {% block content %}
 <div class="content-section">
-    <form method="POST" action="" enctype="multipart/form-data">
+    <form method="POST" action="">
         {{ form.hidden_tag() }}
         <fieldset class="form-group">
            <div class="form-group">
@@ -28,29 +28,35 @@
                 {{ form.name(class="form-control form-control-lg") }}
             {% endif %}
            </div>
-           <div class="form-group">
-                {{ form.wordlist.label() }}
-                {{ form.wordlist(class="form-control-file") }}
-                {% if form.wordlist.errors %}
-                    {% for error in form.wordlist.errors %}
-                        <span class="text-danger">{{ error }}</span><br>
-                    {% endfor %}
-                {% endif %}
-           </div>
-           <div class="form-group">
-                {{ form.existing_path.label(class="form-control-label") }}
-                {{ form.existing_path(class="form-control") }}
-                <small class="text-muted">Use absolute path, nested relative path (for example <code>example_folder1/list.txt</code>), or a unique filename under <code>{{ wordlists_root }}</code>.</small>
-                {% if form.existing_path.errors %}
-                    {% for error in form.existing_path.errors %}
-                        <span class="text-danger">{{ error }}</span><br>
-                    {% endfor %}
-                {% endif %}
-           </div>
+           {% if not wordlists_root_exists %}
+               <div class="alert alert-danger">
+                   Configured <code>wordlists_path</code> directory does not exist: <code>{{ wordlists_root }}</code>
+               </div>
+           {% elif selectable_count == 0 %}
+               <div class="alert alert-warning">
+                   No files found in <code>{{ wordlists_root }}</code>. Add wordlist files there, then reload this page.
+               </div>
+           {% else %}
+               <div class="form-group">
+                    {{ form.existing_file.label(class="form-control-label") }}
+                    {{ form.existing_file(class="form-control") }}
+                    <small class="text-muted">Select a file discovered under <code>{{ wordlists_root }}</code> (including nested folders).</small>
+                    {% if selectable_truncated %}
+                        <small class="text-warning d-block">List truncated to first 5000 files. Narrow the directory scope if needed.</small>
+                    {% endif %}
+                    {% if form.existing_file.errors %}
+                        {% for error in form.existing_file.errors %}
+                            <span class="text-danger">{{ error }}</span><br>
+                        {% endfor %}
+                    {% endif %}
+               </div>
+           {% endif %}
         </fieldset>
-        <div class="form-group">
-            {{ form.submit(class="btn btn-outline-info") }}
-        </div>
+        {% if wordlists_root_exists and selectable_count > 0 %}
+            <div class="form-group">
+                {{ form.submit(class="btn btn-outline-info") }}
+            </div>
+        {% endif %}
     </form>
 </div>
 {% endblock content %}

@@ -179,7 +179,9 @@ def test_add_default_tasks_seeds_bruteforce_mask_set_and_group():
         seeded_tasks = Tasks.query.order_by(Tasks.id.asc()).all()
         assert len(seeded_tasks) == 10
         expected_masks = ['?a' * length for length in range(1, 11)]
+        expected_names = [f'{mask} [{length}]' for length, mask in enumerate(expected_masks, start=1)]
         assert [task.hc_mask for task in seeded_tasks] == expected_masks
+        assert [task.name for task in seeded_tasks] == expected_names
         assert all(task.hc_attackmode == 'maskmode' for task in seeded_tasks)
 
         task_group = TaskGroups.query.filter_by(name='bruteforce 1-10').first()
@@ -216,34 +218,68 @@ def test_setup_defaults_no_longer_seeds_rules_or_wordlists():
 
 
 @pytest.mark.security
-def test_rules_existing_path_resolution_supports_nested_folders(tmp_path):
-    from hashcrush.rules.routes import _resolve_existing_file
+def test_rules_selectable_files_support_nested_folders(tmp_path):
+    from hashcrush.rules.routes import _list_selectable_files, _resolve_selected_file
 
     rules_root = tmp_path / "rules"
     nested_dir = rules_root / "example_folder1"
     nested_dir.mkdir(parents=True, exist_ok=True)
     nested_file = nested_dir / "best64.rule"
     nested_file.write_text("X", encoding="utf-8")
+    non_rule_file = nested_dir / "not_a_rule.txt"
+    non_rule_file.write_text("Z", encoding="utf-8")
+    hidden_dir = rules_root / ".hidden"
+    hidden_dir.mkdir(parents=True, exist_ok=True)
+    hidden_file = hidden_dir / "secret.rule"
+    hidden_file.write_text("Y", encoding="utf-8")
 
-    resolved_nested = _resolve_existing_file("example_folder1/best64.rule", str(rules_root))
+    selectable_files, truncated = _list_selectable_files(str(rules_root))
+    assert truncated is False
+    assert ("example_folder1/best64.rule", "example_folder1/best64.rule") in selectable_files
+    assert ("example_folder1/not_a_rule.txt", "example_folder1/not_a_rule.txt") not in selectable_files
+    assert (".hidden/secret.rule", ".hidden/secret.rule") not in selectable_files
+
+    resolved_nested = _resolve_selected_file("example_folder1/best64.rule", str(rules_root))
     assert resolved_nested == str(nested_file.resolve())
-
-    resolved_filename = _resolve_existing_file("best64.rule", str(rules_root))
-    assert resolved_filename == str(nested_file.resolve())
+    assert _resolve_selected_file(".hidden/secret.rule", str(rules_root)) == str(hidden_file.resolve())
+    assert _resolve_selected_file("../etc/passwd", str(rules_root)) is None
+    missing_files, missing_truncated = _list_selectable_files(str(rules_root / "does-not-exist"))
+    assert missing_files == []
+    assert missing_truncated is False
 
 
 @pytest.mark.security
-def test_wordlists_existing_path_resolution_supports_nested_folders(tmp_path):
-    from hashcrush.wordlists.routes import _resolve_existing_file
+def test_wordlists_selectable_files_support_nested_folders(tmp_path):
+    from hashcrush.wordlists.routes import _list_selectable_files, _resolve_selected_file
 
     wordlists_root = tmp_path / "wordlists"
     nested_dir = wordlists_root / "example_folder1"
     nested_dir.mkdir(parents=True, exist_ok=True)
     nested_file = nested_dir / "rockyou.txt"
     nested_file.write_text("password", encoding="utf-8")
+    nested_tar_file = nested_dir / "rockyou.txt.tar.gz"
+    nested_tar_file.write_text("compressed-placeholder", encoding="utf-8")
+    disallowed_file = nested_dir / "ignore.csv"
+    disallowed_file.write_text("x,y", encoding="utf-8")
+    hidden_dir = wordlists_root / ".hidden"
+    hidden_dir.mkdir(parents=True, exist_ok=True)
+    hidden_file = hidden_dir / "secret.txt"
+    hidden_file.write_text("secret", encoding="utf-8")
 
-    resolved_nested = _resolve_existing_file("example_folder1/rockyou.txt", str(wordlists_root))
+    selectable_files, truncated = _list_selectable_files(str(wordlists_root))
+    assert truncated is False
+    assert ("example_folder1/rockyou.txt", "example_folder1/rockyou.txt") in selectable_files
+    assert ("example_folder1/rockyou.txt.tar.gz", "example_folder1/rockyou.txt.tar.gz") not in selectable_files
+    assert ("example_folder1/ignore.csv", "example_folder1/ignore.csv") not in selectable_files
+    assert (".hidden/secret.txt", ".hidden/secret.txt") not in selectable_files
+
+    resolved_nested = _resolve_selected_file("example_folder1/rockyou.txt", str(wordlists_root))
     assert resolved_nested == str(nested_file.resolve())
-
-    resolved_filename = _resolve_existing_file("rockyou.txt", str(wordlists_root))
-    assert resolved_filename == str(nested_file.resolve())
+    resolved_nested_tar = _resolve_selected_file("example_folder1/rockyou.txt.tar.gz", str(wordlists_root))
+    assert resolved_nested_tar is None
+    assert _resolve_selected_file("example_folder1/ignore.csv", str(wordlists_root)) is None
+    assert _resolve_selected_file(".hidden/secret.txt", str(wordlists_root)) == str(hidden_file.resolve())
+    assert _resolve_selected_file("../etc/passwd", str(wordlists_root)) is None
+    missing_files, missing_truncated = _list_selectable_files(str(wordlists_root / "does-not-exist"))
+    assert missing_files == []
+    assert missing_truncated is False

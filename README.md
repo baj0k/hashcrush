@@ -19,6 +19,8 @@ sudo mysql_secure_installation
 
 #### 2) Install HashCrush
 ```
+git clone https://github.com/baj0k/hashcrush.git
+cd hashcrush
 sudo apt install python3 python3-pip python3-flask -y
 ./setup.py # Follow prompts
 ```
@@ -55,17 +57,14 @@ Optional flags:
 - --reset-admin-password --admin-username <admin_username>
 
 ## External Wordlists and Rules
-`setup.py` now prompts for both paths and writes them to `hashcrush/config.conf`.
+`setup.py` prompts for paths and writes them to `hashcrush/config.conf`.
 They should point to external repositories such as SecLists and hashcat rules:
 
 ```ini
 [app]
-wordlists_path = /path/to/SecLists
+wordlists_path = /path/to/SecLists/Passwords
 rules_path = /path/to/hashcat/rules
 ```
-
-When adding rules/wordlists in the UI, files can be referenced from nested folders under those roots
-(for example `example_folder1/best64.rule`).
 
 ## Account and Password Management
 - Admins can set a temporary password for users from the Users page.

@@ -61,7 +61,7 @@ class Config:
     except ValueError:
         HASHCAT_STATUS_TIMER = 5
 
-    _default_wordlists_path = '/usr/share/seclists'
+    _default_wordlists_path = '/usr/share/seclists/Passwords'
     _default_rules_path = '/usr/share/hashcat/rules'
 
     WORDLISTS_PATH = _normalize_dir_path(
