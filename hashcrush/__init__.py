@@ -44,6 +44,37 @@ def get_application_version() -> str:
     return __version__
 
 
+def _warn_insecure_configuration(app: Flask) -> None:
+    """Emit warnings when weak/default-looking security settings are detected."""
+    weak_secret_values = {'changeme', 'change-me', 'default', 'secret', 'hashcrush'}
+    secret_key = str(app.config.get('SECRET_KEY') or '').strip()
+    if (len(secret_key) < 32) or (secret_key.lower() in weak_secret_values):
+        app.logger.warning(
+            'SECURITY WARNING: SECRET_KEY appears weak/short; rotate to a strong random value (>=32 chars).'
+        )
+
+    db_uri = str(app.config.get('SQLALCHEMY_DATABASE_URI') or '')
+    db_uri_lower = db_uri.lower()
+    if (
+        '://username:' in db_uri_lower
+        or ':password@' in db_uri_lower
+        or '://root:' in db_uri_lower
+    ):
+        app.logger.warning(
+            'SECURITY WARNING: database credentials look like defaults/placeholders; rotate DB credentials now.'
+        )
+
+    cert_path = os.path.abspath(os.path.expanduser(str(app.config.get('SSL_CERT_PATH') or '')))
+    key_path = os.path.abspath(os.path.expanduser(str(app.config.get('SSL_KEY_PATH') or '')))
+    project_ssl_path = os.path.abspath(os.path.join(app.root_path, 'ssl'))
+    if cert_path.startswith(project_ssl_path) or key_path.startswith(project_ssl_path):
+        app.logger.warning(
+            'SECURITY WARNING: TLS cert/key are loaded from project-local path (%s). '
+            'Prefer secret volume or env-configured secure paths.',
+            project_ssl_path,
+        )
+
+
 def do_gui_setup_if_needed():
     from flask import current_app
     logger = current_app.logger
@@ -195,6 +226,8 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
 
     if config_overrides:
         app.config.update(config_overrides)
+
+    _warn_insecure_configuration(app)
 
     if _is_flask_db_command():
         app.config['SKIP_RUNTIME_BOOTSTRAP'] = True

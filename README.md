@@ -38,15 +38,28 @@ python3 ./hashcrush.py
 Navigate to your server at [https://127.0.0.1:8443](https://127.0.0.1:8443) and Setup admin user.
 
 Because HashCrush starts with a self-signed certificate, browsers will warn by default.
-To use your own certificate, replace:
-- `hashcrush/ssl/cert.pem`
-- `hashcrush/ssl/key.pem`
+Production deployments should provide certificate paths via environment variables:
+- `HASHCRUSH_SSL_CERT_PATH`
+- `HASHCRUSH_SSL_KEY_PATH`
+
+If SSL is enabled and either file is missing/unreadable, startup fails with an explicit error.
 
 
 ## Running HashCrush
 
 ```bash
 python3 ./hashcrush.py
+```
+
+Recommended production environment overrides:
+
+```bash
+export HASHCRUSH_SECRET_KEY='<strong-random-secret>'
+export HASHCRUSH_DB_HOST='127.0.0.1'
+export HASHCRUSH_DB_USERNAME='hashcrush'
+export HASHCRUSH_DB_PASSWORD='<strong-db-password>'
+export HASHCRUSH_SSL_CERT_PATH='/run/secrets/hashcrush-cert.pem'
+export HASHCRUSH_SSL_KEY_PATH='/run/secrets/hashcrush-key.pem'
 ```
 
 Optional flags:
@@ -65,6 +78,10 @@ They should point to external repositories such as SecLists and hashcat rules:
 wordlists_path = /path/to/SecLists/Passwords
 rules_path = /path/to/hashcat/rules
 ```
+
+## Security Notes
+- `hashcrush/config.conf` must stay local and never be distributed.
+- Rotate `SECRET_KEY`, DB credentials, and TLS cert/key on deployment.
 
 ## Account and Password Management
 - Admins can set a temporary password for users from the Users page.

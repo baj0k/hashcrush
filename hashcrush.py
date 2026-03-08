@@ -36,6 +36,35 @@ def ensure_flask_bcrypt():
         exit(1)
 
 
+def _resolve_ssl_context(app) -> tuple[str, str]:
+    """Return validated SSL cert/key paths from app configuration."""
+    cert_path = os.path.abspath(os.path.expanduser(str(app.config.get('SSL_CERT_PATH', '')).strip()))
+    key_path = os.path.abspath(os.path.expanduser(str(app.config.get('SSL_KEY_PATH', '')).strip()))
+
+    if not cert_path:
+        raise RuntimeError('SSL is enabled but SSL_CERT_PATH is not configured.')
+    if not key_path:
+        raise RuntimeError('SSL is enabled but SSL_KEY_PATH is not configured.')
+    if not os.path.isfile(cert_path):
+        raise RuntimeError(f'SSL certificate file not found: {cert_path}')
+    if not os.path.isfile(key_path):
+        raise RuntimeError(f'SSL private key file not found: {key_path}')
+
+    try:
+        with open(cert_path, 'rb'):
+            pass
+    except OSError as exc:
+        raise RuntimeError(f'SSL certificate file is not readable: {cert_path}') from exc
+
+    try:
+        with open(key_path, 'rb'):
+            pass
+    except OSError as exc:
+        raise RuntimeError(f'SSL private key file is not readable: {key_path}') from exc
+
+    return cert_path, key_path
+
+
 def ensure_admin_account_cli(db, bcrypt):
     '''
     If no admins exist prompt user to generate new admin account
@@ -231,7 +260,8 @@ def cli(args) -> int:
             app.run(debug=parsed_args.debug)
 
         else:
-            app.run(host='0.0.0.0', port=8443, ssl_context=('./hashcrush/ssl/cert.pem', './hashcrush/ssl/key.pem'), debug=parsed_args.debug)
+            ssl_context = _resolve_ssl_context(app)
+            app.run(host='0.0.0.0', port=8443, ssl_context=ssl_context, debug=parsed_args.debug)
 
     except Exception as ex:
         print(f'Exception!: {ex}', file=sys.stderr)

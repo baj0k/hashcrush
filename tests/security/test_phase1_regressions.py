@@ -104,6 +104,40 @@ def test_ensure_settings_cli_adds_settings_only_when_missing():
 
 
 @pytest.mark.security
+def test_cli_resolve_ssl_context_uses_configured_paths(tmp_path):
+    cli_module = _load_cli_module()
+    cert_path = tmp_path / "cert.pem"
+    key_path = tmp_path / "key.pem"
+    cert_path.write_text("certificate", encoding="utf-8")
+    key_path.write_text("private-key", encoding="utf-8")
+
+    class _App:
+        config = {
+            "SSL_CERT_PATH": str(cert_path),
+            "SSL_KEY_PATH": str(key_path),
+        }
+
+    resolved = cli_module._resolve_ssl_context(_App())
+    assert resolved == (str(cert_path.resolve()), str(key_path.resolve()))
+
+
+@pytest.mark.security
+def test_cli_resolve_ssl_context_rejects_missing_files(tmp_path):
+    cli_module = _load_cli_module()
+    missing_cert = tmp_path / "missing-cert.pem"
+    missing_key = tmp_path / "missing-key.pem"
+
+    class _App:
+        config = {
+            "SSL_CERT_PATH": str(missing_cert),
+            "SSL_KEY_PATH": str(missing_key),
+        }
+
+    with pytest.raises(RuntimeError, match="SSL certificate file not found"):
+        cli_module._resolve_ssl_context(_App())
+
+
+@pytest.mark.security
 def test_analytics_download_rejects_invalid_domain_id_and_uses_hashfile_id_in_filename():
     app = _build_app()
     with app.app_context():

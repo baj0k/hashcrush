@@ -59,3 +59,8 @@
 
 ## P3 - Product and UX Backlog (Decision-Driven)
 - [ ] `P3-PROD-12 (New)` Implement task/task-group import/export inside the app using JSON.
+- [] Dashboard and job status should also show recovered amount of hashes similar to console log
+- --no-ssl should start on port 8080 by default
+
+
+-- when job is stopped it does not save the already cracked hashes? 
