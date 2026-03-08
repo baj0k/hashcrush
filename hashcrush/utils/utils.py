@@ -11,6 +11,75 @@ from hashcrush.models import db
 from hashcrush.models import Rules, Wordlists, Hashfiles, HashfileHashes, Hashes, Tasks, Jobs, JobTasks
 from werkzeug.utils import secure_filename
 
+_PLAINTEXT_HEX_PATTERN = re.compile(r'^[0-9a-f]+$')
+
+
+def is_plaintext_hex_encoded(value: str | None) -> bool:
+    """Return True when value matches canonical lowercase hex encoding."""
+    if value is None:
+        return False
+    if value == '':
+        return True
+    if len(value) % 2 != 0:
+        return False
+    return bool(_PLAINTEXT_HEX_PATTERN.fullmatch(value))
+
+
+def encode_plaintext_for_storage(value: str | None) -> str | None:
+    """Encode plaintext to canonical lowercase hex for DB storage."""
+    if value is None:
+        return None
+    if value == '':
+        return ''
+    return value.encode('latin-1').hex()
+
+
+def decode_plaintext_from_storage(value: str | None) -> str | None:
+    """Decode canonical plaintext storage format, with legacy fallback."""
+    if value is None:
+        return None
+    if value == '':
+        return ''
+    if is_plaintext_hex_encoded(value):
+        try:
+            return bytes.fromhex(value).decode('latin-1')
+        except (TypeError, ValueError):
+            return value
+    # Legacy rows stored raw plaintext; return unchanged.
+    return value
+
+
+def migrate_plaintext_storage_rows(batch_size: int = 1000) -> int:
+    """Convert legacy raw plaintext rows to canonical hex encoding."""
+    migrated_rows = 0
+    last_id = 0
+
+    while True:
+        rows = (
+            Hashes.query.filter(Hashes.id > last_id)
+            .filter(Hashes.cracked.is_(True))
+            .filter(Hashes.plaintext.isnot(None))
+            .order_by(Hashes.id.asc())
+            .limit(batch_size)
+            .all()
+        )
+        if not rows:
+            break
+
+        changed = False
+        for row in rows:
+            last_id = row.id
+            if is_plaintext_hex_encoded(row.plaintext):
+                continue
+            row.plaintext = encode_plaintext_for_storage(row.plaintext)
+            migrated_rows += 1
+            changed = True
+
+        if changed:
+            db.session.commit()
+
+    return migrated_rows
+
 
 def _resolve_storage_path(stored_path: str) -> str:
     """Resolve a DB-stored path to an absolute filesystem path.
@@ -211,7 +280,9 @@ def update_dynamic_wordlist(wordlist_id):
 
     with open(resolved_path, 'wt') as file:
         for entry in plaintext_rows:
-            file.write(str(bytes.fromhex(entry.plaintext).decode('latin-1')) + '\n')
+            decoded_plaintext = decode_plaintext_from_storage(entry.plaintext)
+            if decoded_plaintext is not None:
+                file.write(decoded_plaintext + '\n')
 
     # update line count
     wordlist.size = get_linecount(resolved_path)

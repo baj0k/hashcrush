@@ -3,10 +3,12 @@ import csv
 import io
 from flask import Blueprint, render_template, redirect, url_for, request, flash, send_file
 from flask_login import login_required
+from sqlalchemy import or_
 from hashcrush.searches.forms import SearchForm
 from hashcrush.models import Domains, Hashfiles, HashfileHashes, Hashes
 from hashcrush.models import db
 from hashcrush import jinja_hex_decode
+from hashcrush.utils.utils import encode_plaintext_for_storage
 
 searches = Blueprint('searches', __name__)
 
@@ -25,7 +27,24 @@ def searches_list():
         elif search_form.search_type.data == 'user':
             results = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(HashfileHashes.username.like('%' + search_form.query.data.encode('latin-1').hex() + '%')).all()
         elif search_form.search_type.data == 'password':
-            results = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.plaintext == search_form.query.data.encode('latin-1').hex()).all()
+            query_text = search_form.query.data or ''
+            try:
+                encoded_query = encode_plaintext_for_storage(query_text)
+            except UnicodeEncodeError:
+                encoded_query = None
+            legacy_query = query_text.upper()
+
+            password_filters = []
+            if encoded_query is not None:
+                password_filters.append(Hashes.plaintext == encoded_query)
+            password_filters.append(Hashes.plaintext == legacy_query)
+
+            results = (
+                db.session.query(Hashes, HashfileHashes)
+                .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+                .filter(or_(*password_filters))
+                .all()
+            )
         else:
             flash('No results found', 'warning')
             return redirect(url_for('searches.searches_list'))

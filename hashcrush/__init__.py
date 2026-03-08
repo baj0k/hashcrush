@@ -7,6 +7,7 @@ from flask import Flask
 from flask import request
 from flask import url_for
 from flask import redirect
+from flask_wtf.csrf import generate_csrf
 from functools import partial
 from logging.config import dictConfig as loggingDictConfig
 
@@ -132,11 +133,9 @@ def setup_defaults_if_needed():
 
 
 def jinja_hex_decode(text):
-    """ jinja2 filter to convert hex to bytes """
-    if not text:
-        return text #if all hashes in a file are already cracked
-    else:
-        return bytes.fromhex(text).decode('latin-1')
+    """Jinja2 filter to decode stored plaintext with legacy fallback."""
+    from hashcrush.utils.utils import decode_plaintext_from_storage
+    return decode_plaintext_from_storage(text)
 
 
 def create_app(testing: bool = False, config_overrides: dict | None = None):
@@ -182,6 +181,7 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     app.config.setdefault('ENABLE_SCHEDULER', False)
     app.config.setdefault('ENABLE_LOCAL_EXECUTOR', True)
     app.config.setdefault('SKIP_RUNTIME_BOOTSTRAP', False)
+    app.config.setdefault('AUTO_MIGRATE_PLAINTEXT_STORAGE', True)
 
     if testing:
         app.config['TESTING'] = True
@@ -222,6 +222,10 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     from hashcrush.users.routes import login_manager
     login_manager.init_app(app)
 
+    @app.context_processor
+    def inject_csrf_token():
+        return {'csrf_token': generate_csrf}
+
     from hashcrush.domains.routes import domains
     from hashcrush.hashfiles.routes import hashfiles
     from hashcrush.jobs.routes import jobs
@@ -261,6 +265,23 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     ):
         with app.app_context():
             setup_defaults_if_needed()
+
+    if (
+        (not app.config.get('TESTING'))
+        and (not app.config.get('SKIP_RUNTIME_BOOTSTRAP'))
+        and app.config.get('AUTO_MIGRATE_PLAINTEXT_STORAGE', True)
+    ):
+        with app.app_context():
+            try:
+                from hashcrush.utils.utils import migrate_plaintext_storage_rows
+                migrated_rows = migrate_plaintext_storage_rows()
+                if migrated_rows:
+                    app.logger.info(
+                        'Migrated %s legacy plaintext row(s) to canonical hex storage.',
+                        migrated_rows,
+                    )
+            except Exception:
+                app.logger.exception('Legacy plaintext migration failed.')
 
     app.before_request(do_gui_setup_if_needed)
 

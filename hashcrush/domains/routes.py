@@ -1,10 +1,12 @@
 """Flask routes to handle Domains"""
-from flask import Blueprint, render_template, redirect, url_for, flash
+from flask import Blueprint, render_template, redirect, url_for, flash, current_app
 from flask_login import login_required, current_user
-from hashcrush.models import Domains, Jobs, Hashfiles, HashfileHashes, Hashes
+from sqlalchemy import exists
+from hashcrush.models import Domains, Jobs, Hashfiles, HashfileHashes, Hashes, JobTasks
 from hashcrush.models import db
 
 domains = Blueprint('domains', __name__)
+ACTIVE_JOB_STATUSES = {'Running', 'Queued', 'Paused', 'Ready', 'Incomplete'}
 
 #############################################
 # Domains
@@ -24,35 +26,46 @@ def domains_list():
 def domains_delete(domain_id):
     """Function to delete a domain."""
     domain = Domains.query.get_or_404(domain_id)
-    if current_user.admin:
-        # Check if jobs are present
-        jobs = Jobs.query.filter_by(domain_id=domain_id).all()
-        if jobs:
-            flash('Unable to delete. Domain has active job', 'danger')
-            return redirect(url_for('domains.domains_list'))
-        else:
-            # remove associated hash files and unreferenced uncracked hashes
-            hashfiles = Hashfiles.query.filter_by(domain_id=domain_id)
-            for hashfile in hashfiles:
-                hashfile_hashes = HashfileHashes.query.filter_by(hashfile_id=hashfile.id).all()
-                for hashfile_hash in hashfile_hashes:
-                    hashes = Hashes.query.filter_by(id=hashfile_hash.hash_id, cracked=False).all()
-                    for hash in hashes:
-                        # Delete only if this hash exists in a single domain.
-                        domain_cnt = (
-                            db.session.query(Hashfiles.domain_id)
-                            .join(HashfileHashes, Hashfiles.id == HashfileHashes.hashfile_id)
-                            .filter(HashfileHashes.hash_id == hash.id)
-                            .distinct()
-                            .count()
-                        )
-                        if domain_cnt < 2:
-                            db.session.delete(hash)
-                    db.session.delete(hashfile_hash)
-                db.session.delete(hashfile)
+
+    if not current_user.admin:
+        flash('Permission Denied', 'danger')
+        return redirect(url_for('domains.domains_list'))
+
+    active_jobs = (
+        Jobs.query.filter_by(domain_id=domain_id)
+        .filter(Jobs.status.in_(ACTIVE_JOB_STATUSES))
+        .count()
+    )
+    if active_jobs > 0:
+        flash('Unable to delete. Domain has active jobs.', 'danger')
+        return redirect(url_for('domains.domains_list'))
+
+    try:
+        inactive_job_ids = [
+            row.id
+            for row in Jobs.query.with_entities(Jobs.id).filter_by(domain_id=domain_id).all()
+        ]
+        if inactive_job_ids:
+            JobTasks.query.filter(JobTasks.job_id.in_(inactive_job_ids)).delete(synchronize_session=False)
+            Jobs.query.filter(Jobs.id.in_(inactive_job_ids)).delete(synchronize_session=False)
+
+        hashfile_ids = [
+            row.id
+            for row in Hashfiles.query.with_entities(Hashfiles.id).filter_by(domain_id=domain_id).all()
+        ]
+        if hashfile_ids:
+            HashfileHashes.query.filter(HashfileHashes.hashfile_id.in_(hashfile_ids)).delete(synchronize_session=False)
+            Hashfiles.query.filter(Hashfiles.id.in_(hashfile_ids)).delete(synchronize_session=False)
+            Hashes.query.filter(Hashes.cracked.is_(False)).filter(
+                ~exists().where(Hashes.id == HashfileHashes.hash_id)
+            ).delete(synchronize_session=False)
+
         db.session.delete(domain)
         db.session.commit()
         flash('Domain has been deleted!', 'success')
-    else:
-        flash('Permission Denied', 'danger')
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('Failed deleting domain id=%s', domain_id)
+        flash('Unable to delete domain due to an internal error.', 'danger')
+
     return redirect(url_for('domains.domains_list'))

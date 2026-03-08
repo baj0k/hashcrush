@@ -23,21 +23,6 @@
   - File: `hashcrush/utils/utils.py` (`update_dynamic_wordlist`).
   - Done when: dynamic wordlists for non-admin users include only plaintexts from hashes they are allowed to access.
 
-### Data Integrity and Correctness
-- [ ] `P0-DATA-01` Fix plaintext storage format inconsistency (raw uppercase vs hex-encoded expected by readers).
-  - Files: `hashcrush/executor/service.py`, `hashcrush/analytics/routes.py`, `hashcrush/searches/routes.py`, `hashcrush/utils/utils.py`.
-  - Done when: one format is enforced end-to-end (recommended: hex-encoded bytes), existing rows are migrated, tests protect against regression.
-
-- [ ] `P0-DATA-02` Validate job hashfile assignment ownership/domain scope before accepting `hashfile_id` from form.
-  - File: `hashcrush/jobs/routes.py`.
-  - Done when: selected hashfile is confirmed to exist, match job domain, and be visible to current user.
-
-- [ ] `P0-DATA-03 (New)` Fix domain delete logic to avoid deleting domains with active jobs.
-  - File: `hashcrush/domains/routes.py`.
-  - Done when: deletion aborts early if jobs exist and never leaves orphaned records or throws integrity errors.
-
-## P1 - High Priority
-
 ### Functional Bugs
 - [ ] `P1-BUG-01` Fix wordlist route logic and authorization bugs.
   - File: `hashcrush/wordlists/routes.py`.

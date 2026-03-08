@@ -5,8 +5,14 @@ from flask import Blueprint, render_template, request, redirect, send_from_direc
 from flask_login import login_required
 from hashcrush.models import Domains, HashfileHashes, Hashes, Hashfiles
 from hashcrush.models import db
+from hashcrush.utils.utils import decode_plaintext_from_storage
 
 analytics = Blueprint('analytics', __name__)
+
+
+def _decoded_plaintext(value: str | None) -> str:
+    decoded = decode_plaintext_from_storage(value)
+    return decoded if decoded is not None else ''
 
 
 @analytics.route('/analytics', methods=['GET'])
@@ -76,15 +82,15 @@ def get_analytics():
 
     for entry in fig2_cracked_hashes:
         flags = 0
-        if len(bytes.fromhex(entry[0]).decode('latin-1')) < 8:
+        if len(_decoded_plaintext(entry[0])) < 8:
             flags = -3 # set to negative 3 so that there's no way we can meet complexity
-        if re.search(r"[a-z]", bytes.fromhex(entry[0]).decode('latin-1')):
+        if re.search(r"[a-z]", _decoded_plaintext(entry[0])):
             flags = flags + 1
-        if re.search(r"[A-Z]", bytes.fromhex(entry[0]).decode('latin-1')):
+        if re.search(r"[A-Z]", _decoded_plaintext(entry[0])):
             flags = flags + 1
-        if re.search(r"[0-9]", bytes.fromhex(entry[0]).decode('latin-1')):
+        if re.search(r"[0-9]", _decoded_plaintext(entry[0])):
             flags = flags + 1
-        if re.search(r"[^0-9A-Za-z]", bytes.fromhex(entry[0]).decode('latin-1')):
+        if re.search(r"[^0-9A-Za-z]", _decoded_plaintext(entry[0])):
             flags = flags + 1
 
         if flags < 3:
@@ -181,7 +187,7 @@ def get_analytics():
     other = 0
 
     for entry in fig2_cracked_hashes:
-        tmp_plaintext = bytes.fromhex(entry[0]).decode('latin-1')
+        tmp_plaintext = _decoded_plaintext(entry[0])
         tmp_plaintext = re.sub(r"[A-Z]", 'U', tmp_plaintext)
         tmp_plaintext = re.sub(r"[a-z]", 'L', tmp_plaintext)
         tmp_plaintext = re.sub(r"[0-9]", 'D', tmp_plaintext)
@@ -274,10 +280,10 @@ def get_analytics():
     fig5_data = {}
 
     for entry in fig5_cracked_hashes:
-        if len(bytes.fromhex(entry[0]).decode('latin-1')) in fig5_data:
-            fig5_data[len(bytes.fromhex(entry[0]).decode('latin-1'))] += 1
+        if len(_decoded_plaintext(entry[0])) in fig5_data:
+            fig5_data[len(_decoded_plaintext(entry[0]))] += 1
         else:
-            fig5_data[len(bytes.fromhex(entry[0]).decode('latin-1'))] = 1
+            fig5_data[len(_decoded_plaintext(entry[0]))] = 1
 
     fig5_labels =[]
     fig5_values = []
@@ -305,11 +311,11 @@ def get_analytics():
 
     blank_label = 'Blank (unset)'
     for entry in fig6_cracked_hashes:
-        if len(bytes.fromhex(entry[0]).decode('latin-1')) > 0:
-            if bytes.fromhex(entry[0]).decode('latin-1') in fig6_data:
-                fig6_data[bytes.fromhex(entry[0]).decode('latin-1')] += 1
+        if len(_decoded_plaintext(entry[0])) > 0:
+            if _decoded_plaintext(entry[0]) in fig6_data:
+                fig6_data[_decoded_plaintext(entry[0])] += 1
             else:
-                fig6_data[bytes.fromhex(entry[0]).decode('latin-1')] = 1
+                fig6_data[_decoded_plaintext(entry[0])] = 1
         else:
             if blank_label in fig6_data:
                 fig6_data[blank_label] += 1
@@ -333,7 +339,7 @@ def get_analytics():
     fig7_data = {}
     fig7_total = 0
     for entry in fig6_cracked_hashes:
-        tmp_plaintext = bytes.fromhex(entry[0]).decode('latin-1')
+        tmp_plaintext = _decoded_plaintext(entry[0])
         tmp_plaintext = re.sub(r"[A-Z]", 'U', tmp_plaintext)
         tmp_plaintext = re.sub(r"[a-z]", 'L', tmp_plaintext)
         tmp_plaintext = re.sub(r"[0-9]", 'D', tmp_plaintext)
@@ -380,8 +386,8 @@ def get_analytics():
                 username = bytes.fromhex(entry[1]).decode('latin-1').split('*')[1]
             else:
                 username = bytes.fromhex(entry[1]).decode('latin-1')
-            if bytes.fromhex(entry[0]).decode('latin-1') == username:
-                fig8_table.append(bytes.fromhex(entry[0]).decode('latin-1'))
+            if _decoded_plaintext(entry[0]) == username:
+                fig8_table.append(_decoded_plaintext(entry[0]))
 
 
     return render_template('analytics.html',
@@ -469,9 +475,9 @@ def analytics_download_hashes():
         if export_type == 'found':
             for entry in cracked_hashes:
                 if entry[1].username:
-                    outfile.write(str(bytes.fromhex(entry[1].username).decode('latin-1')) + ":" + str(entry[0].ciphertext) + ':' + str(bytes.fromhex(entry[0].plaintext).decode('latin-1')) + "\n")
+                    outfile.write(str(bytes.fromhex(entry[1].username).decode('latin-1')) + ":" + str(entry[0].ciphertext) + ':' + str(_decoded_plaintext(entry[0].plaintext)) + "\n")
                 else:
-                    outfile.write(str(entry[0].ciphertext) + ':' + str(bytes.fromhex(entry[0].plaintext).decode('latin-1')) + "\n")
+                    outfile.write(str(entry[0].ciphertext) + ':' + str(_decoded_plaintext(entry[0].plaintext)) + "\n")
 
         if export_type == 'left':
             for entry in uncracked_hashes:

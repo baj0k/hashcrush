@@ -15,7 +15,13 @@ from typing import TextIO
 from flask import current_app
 
 from hashcrush.models import Hashes, HashfileHashes, Jobs, JobTasks, Tasks, Wordlists, db
-from hashcrush.utils.utils import build_hashcat_argv, get_md5_hash, update_dynamic_wordlist, update_job_task_status
+from hashcrush.utils.utils import (
+    build_hashcat_argv,
+    encode_plaintext_for_storage,
+    get_md5_hash,
+    update_dynamic_wordlist,
+    update_job_task_status,
+)
 
 
 def _ensure_control_dirs(root_path: str) -> None:
@@ -375,12 +381,12 @@ class LocalExecutorService:
             return 0
 
         parsed_entries: list[tuple[str, str]] = []
-        with open(crack_path, "r", encoding="utf-8", errors="ignore") as file_contents:
+        with open(crack_path, "r", encoding="latin-1", errors="ignore") as file_contents:
             for entry in file_contents.read().split("\n"):
                 if ":" not in entry:
                     continue
                 encoded_plaintext = entry.split(":")[-1]
-                plaintext = encoded_plaintext.rstrip().upper()
+                plaintext = encode_plaintext_for_storage(encoded_plaintext.rstrip())
                 elements = entry.split(":")
                 elements.pop()
                 ciphertext = ":".join(elements)

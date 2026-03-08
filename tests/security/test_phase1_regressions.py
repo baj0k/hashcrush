@@ -10,6 +10,8 @@ from hashcrush.models import (
     Hashes,
     HashfileHashes,
     Hashfiles,
+    Jobs,
+    JobTasks,
     Rules,
     Settings,
     TaskGroups,
@@ -51,6 +53,18 @@ def _seed_admin_user() -> Users:
         username="admin",
         password=valid_password_hash,
         admin=True,
+    )
+    db.session.add(user)
+    db.session.commit()
+    return user
+
+
+def _seed_user(username: str, password: str = "test-user-password", admin: bool = False) -> Users:
+    valid_password_hash = bcrypt.generate_password_hash(password).decode("utf-8")
+    user = Users(
+        username=username,
+        password=valid_password_hash,
+        admin=admin,
     )
     db.session.add(user)
     db.session.commit()
@@ -276,3 +290,260 @@ def test_wordlists_selectable_files_support_nested_folders(tmp_path):
     missing_files, missing_truncated = _list_selectable_files(str(wordlists_root / "does-not-exist"))
     assert missing_files == []
     assert missing_truncated is False
+
+
+@pytest.mark.security
+def test_plaintext_storage_migration_normalizes_legacy_rows():
+    from hashcrush.utils.utils import (
+        decode_plaintext_from_storage,
+        encode_plaintext_for_storage,
+        migrate_plaintext_storage_rows,
+    )
+
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+
+        legacy = Hashes(
+            sub_ciphertext="11111111111111111111111111111111",
+            ciphertext="legacy-cipher",
+            hash_type=1000,
+            cracked=True,
+            plaintext="PASSWORD",
+        )
+        canonical_value = encode_plaintext_for_storage("Summer2026!")
+        canonical = Hashes(
+            sub_ciphertext="22222222222222222222222222222222",
+            ciphertext="canonical-cipher",
+            hash_type=1000,
+            cracked=True,
+            plaintext=canonical_value,
+        )
+        db.session.add_all([legacy, canonical])
+        db.session.commit()
+
+        migrated_rows = migrate_plaintext_storage_rows()
+        assert migrated_rows == 1
+
+        legacy_row = Hashes.query.get(legacy.id)
+        canonical_row = Hashes.query.get(canonical.id)
+
+        assert legacy_row.plaintext == encode_plaintext_for_storage("PASSWORD")
+        assert decode_plaintext_from_storage(legacy_row.plaintext) == "PASSWORD"
+        assert canonical_row.plaintext == canonical_value
+        assert decode_plaintext_from_storage(canonical_row.plaintext) == "Summer2026!"
+
+
+@pytest.mark.security
+def test_executor_import_stores_plaintext_in_hex_format(tmp_path):
+    from hashcrush.executor.service import LocalExecutorService
+    from hashcrush.utils.utils import encode_plaintext_for_storage, get_md5_hash
+
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="ACME")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="input.txt", domain_id=domain.id, owner_id=user.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = Hashes(
+            sub_ciphertext=get_md5_hash("abc123"),
+            ciphertext="abc123",
+            hash_type=1000,
+            cracked=False,
+            plaintext=None,
+        )
+        db.session.add(hash_row)
+        db.session.commit()
+
+        db.session.add(HashfileHashes(hash_id=hash_row.id, hashfile_id=hashfile.id))
+        db.session.commit()
+
+        task = Tasks(
+            name="mask",
+            hc_attackmode="maskmode",
+            owner_id=user.id,
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a",
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        job = Jobs(
+            name="job-1",
+            status="Running",
+            domain_id=domain.id,
+            owner_id=user.id,
+            hashfile_id=hashfile.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        job_task = JobTasks(job_id=job.id, task_id=task.id, status="Running")
+        db.session.add(job_task)
+        db.session.commit()
+
+        crack_path = tmp_path / "cracked.txt"
+        crack_path.write_text("abc123:Pa$$w0rd\n", encoding="latin-1")
+
+        service = LocalExecutorService(app)
+        imported_count = service._import_crack_file_for_task(job_task, str(crack_path))
+        assert imported_count == 1
+
+        imported_hash = Hashes.query.get(hash_row.id)
+        assert imported_hash.cracked is True
+        assert imported_hash.plaintext == encode_plaintext_for_storage("Pa$$w0rd")
+
+
+@pytest.mark.security
+def test_jobs_assigned_hashfile_validates_domain_and_visibility():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        _seed_settings()
+        owner = _seed_user("owner")
+        other = _seed_user("other")
+
+        domain_a = Domains(name="Domain A")
+        domain_b = Domains(name="Domain B")
+        db.session.add_all([domain_a, domain_b])
+        db.session.commit()
+
+        job = Jobs(
+            name="scoped-job",
+            status="Incomplete",
+            domain_id=domain_a.id,
+            owner_id=owner.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        valid_hashfile = Hashfiles(name="valid.txt", domain_id=domain_a.id, owner_id=owner.id)
+        wrong_owner_hashfile = Hashfiles(name="other-owner.txt", domain_id=domain_a.id, owner_id=other.id)
+        wrong_domain_hashfile = Hashfiles(name="other-domain.txt", domain_id=domain_b.id, owner_id=owner.id)
+        db.session.add_all([valid_hashfile, wrong_owner_hashfile, wrong_domain_hashfile])
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, owner)
+
+        response_wrong_owner = client.post(
+            f"/jobs/{job.id}/assigned_hashfile/",
+            data={"hashfile_id": str(wrong_owner_hashfile.id)},
+        )
+        assert response_wrong_owner.status_code == 302
+        assert Jobs.query.get(job.id).hashfile_id is None
+
+        response_wrong_domain = client.post(
+            f"/jobs/{job.id}/assigned_hashfile/",
+            data={"hashfile_id": str(wrong_domain_hashfile.id)},
+        )
+        assert response_wrong_domain.status_code == 302
+        assert Jobs.query.get(job.id).hashfile_id is None
+
+        response_valid = client.post(
+            f"/jobs/{job.id}/assigned_hashfile/",
+            data={"hashfile_id": str(valid_hashfile.id)},
+        )
+        assert response_valid.status_code == 302
+        assert Jobs.query.get(job.id).hashfile_id == valid_hashfile.id
+
+
+@pytest.mark.security
+def test_domains_delete_blocks_when_active_jobs_exist():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="Protected Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        active_job = Jobs(
+            name="active-job",
+            status="Running",
+            domain_id=domain.id,
+            owner_id=admin.id,
+        )
+        db.session.add(active_job)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(f"/domains/delete/{domain.id}")
+        assert response.status_code == 302
+        assert Domains.query.get(domain.id) is not None
+        assert Jobs.query.get(active_job.id) is not None
+
+
+@pytest.mark.security
+def test_domains_delete_removes_inactive_jobs_and_orphans():
+    from hashcrush.utils.utils import get_md5_hash
+
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="Cleanup Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="cleanup.txt", domain_id=domain.id, owner_id=admin.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        orphan_hash = Hashes(
+            sub_ciphertext=get_md5_hash("cleanup-hash"),
+            ciphertext="cleanup-hash",
+            hash_type=1000,
+            cracked=False,
+            plaintext=None,
+        )
+        db.session.add(orphan_hash)
+        db.session.commit()
+
+        db.session.add(HashfileHashes(hash_id=orphan_hash.id, hashfile_id=hashfile.id))
+        db.session.commit()
+
+        inactive_job = Jobs(
+            name="completed-job",
+            status="Completed",
+            domain_id=domain.id,
+            owner_id=admin.id,
+            hashfile_id=hashfile.id,
+        )
+        db.session.add(inactive_job)
+        db.session.commit()
+
+        db.session.add(JobTasks(job_id=inactive_job.id, task_id=1, status="Completed"))
+        db.session.commit()
+
+        domain_id = domain.id
+        inactive_job_id = inactive_job.id
+        hashfile_id = hashfile.id
+        orphan_hash_id = orphan_hash.id
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(f"/domains/delete/{domain_id}")
+        assert response.status_code == 302
+
+        assert Domains.query.get(domain_id) is None
+        assert Jobs.query.get(inactive_job_id) is None
+        assert Hashfiles.query.get(hashfile_id) is None
+        assert HashfileHashes.query.filter_by(hashfile_id=hashfile_id).count() == 0
+        assert Hashes.query.get(orphan_hash_id) is None

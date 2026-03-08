@@ -18,6 +18,36 @@ jobs = Blueprint('jobs', __name__)
 def _can_manage_job(job: Jobs | None) -> bool:
     return bool(job and (current_user.admin or job.owner_id == current_user.id))
 
+
+def _parse_positive_int(raw_value) -> int | None:
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _visible_hashfiles_for_job(job: Jobs) -> list[Hashfiles]:
+    query = Hashfiles.query.filter_by(domain_id=job.domain_id)
+    if not current_user.admin:
+        query = query.filter(Hashfiles.owner_id == current_user.id)
+    return query.all()
+
+
+def _get_assignable_hashfile(job: Jobs, raw_hashfile_id) -> Hashfiles | None:
+    hashfile_id = _parse_positive_int(raw_hashfile_id)
+    if hashfile_id is None:
+        return None
+
+    query = Hashfiles.query.filter(
+        Hashfiles.id == hashfile_id,
+        Hashfiles.domain_id == job.domain_id,
+    )
+    if not current_user.admin:
+        query = query.filter(Hashfiles.owner_id == current_user.id)
+
+    return query.first()
+
 @jobs.route("/jobs", methods=['GET', 'POST'])
 @login_required
 def jobs_list():
@@ -71,7 +101,7 @@ def jobs_assigned_hashfile(job_id):
         flash('You do not have rights to modify this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
-    hashfiles = Hashfiles.query.filter_by(domain_id=job.domain_id).all()
+    hashfiles = _visible_hashfiles_for_job(job)
     jobs_new_hashfile_form = JobsNewHashFileForm()
     hashfile_cracked_rate = {}
 
@@ -169,11 +199,18 @@ def jobs_assigned_hashfile(job_id):
 
             return redirect(str(hashfile.id))
 
-    elif request.method == 'POST' and request.form['hashfile_id']:
-        # User selected an existing hashfile
-        job.hashfile_id = request.form['hashfile_id']
+    elif request.method == 'POST' and request.form.get('hashfile_id'):
+        selected_hashfile = _get_assignable_hashfile(job, request.form.get('hashfile_id'))
+        if not selected_hashfile:
+            flash('Selected hashfile is invalid for this job domain or user scope.', 'danger')
+            return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job_id))
+
+        job.hashfile_id = selected_hashfile.id
         db.session.commit()
         return redirect("/jobs/" + str(job.id)+"/tasks")
+    elif request.method == 'POST' and 'hashfile_id' in request.form:
+        flash('Please select a valid hashfile.', 'danger')
+        return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job_id))
 
     else:
         for error in jobs_new_hashfile_form.name.errors:
@@ -202,6 +239,9 @@ def jobs_assigned_hashfile_cracked(job_id, hashfile_id):
         return redirect(url_for('jobs.jobs_list'))
 
     hashfile = Hashfiles.query.get(hashfile_id)
+    if not hashfile or hashfile.id != job.hashfile_id or hashfile.domain_id != job.domain_id:
+        flash('Invalid hashfile for this job.', 'danger')
+        return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job.id))
     # Can be optimized to only return the hash and plaintext
     cracked_hashfiles_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile.id).all()
     cracked_hashfiles_hashes_cnt = db.session.query(Hashes).join(HashfileHashes, Hashes.id == HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile.id).count()
