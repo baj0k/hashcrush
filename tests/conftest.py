@@ -91,8 +91,6 @@ def ensure_setup(request):
     page.goto(f"{live_server}/login", wait_until="domcontentloaded")
 
     if "/setup/admin-pass" in page.url:
-        first_name = _get_setup_value("HASHCRUSH_E2E_SETUP_FIRST_NAME", "Admin")
-        last_name = _get_setup_value("HASHCRUSH_E2E_SETUP_LAST_NAME", "User")
         username = _get_setup_value(
             "HASHCRUSH_E2E_SETUP_USERNAME",
             _get_setup_value("HASHCRUSH_E2E_SETUP_EMAIL", TEST_USER_USERNAME),
@@ -102,8 +100,6 @@ def ensure_setup(request):
             _get_setup_value("HASHCRUSH_E2E_PASSWORD", TEST_USER_PASSWORD),
         )
 
-        page.get_by_label("First Name").fill(first_name)
-        page.get_by_label("Last Name").fill(last_name)
         page.get_by_label("Username").fill(username)
         page.locator("#password").fill(password)
         page.locator("#confirm_password").fill(password)
@@ -111,11 +107,6 @@ def ensure_setup(request):
         page.wait_for_load_state("domcontentloaded")
 
     if "/setup/settings" in page.url:
-        max_tasks = _get_setup_value("HASHCRUSH_E2E_SETUP_MAX_RUNTIME_TASKS", "0")
-        max_jobs = _get_setup_value("HASHCRUSH_E2E_SETUP_MAX_RUNTIME_JOBS", "0")
-
-        page.get_by_label("Max Runtime Tasks").fill(max_tasks)
-        page.get_by_label("Max Runtime Jobs").fill(max_jobs)
         page.get_by_role("button", name="Save").click()
         page.wait_for_load_state("domcontentloaded")
 

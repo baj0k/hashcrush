@@ -6,16 +6,16 @@ import pytest
 from playwright.sync_api import expect
 
 
-def _select_customer(page):
-    customer_id = os.getenv("HASHCRUSH_E2E_CUSTOMER_ID")
-    if customer_id:
-        option = page.locator(f"#customer_id option[value='{customer_id}']")
+def _select_domain(page):
+    domain_id = os.getenv("HASHCRUSH_E2E_DOMAIN_ID")
+    if domain_id:
+        option = page.locator(f"#domain_id option[value='{domain_id}']")
         if option.count() > 0:
-            page.locator("#customer_id").select_option(str(customer_id))
+            page.locator("#domain_id").select_option(str(domain_id))
             return
-    page.locator("#customer_id").select_option("add_new")
-    customer_name = os.getenv("HASHCRUSH_E2E_CUSTOMER_NAME", "E2E Customer")
-    page.locator("#new_customer_div input[name='customer_name']").fill(customer_name)
+    page.locator("#domain_id").select_option("add_new")
+    domain_name = os.getenv("HASHCRUSH_E2E_DOMAIN_NAME", "E2E Domain")
+    page.locator("#new_domain_div input[name='domain_name']").fill(domain_name)
 
 
 @pytest.mark.e2e
@@ -34,7 +34,7 @@ def test_job_name_required_validation(page, live_server, login):
     page.get_by_role("link", name="Create a New Job").click()
     expect(page.get_by_role("heading", name="Create a new Job")).to_be_visible()
 
-    _select_customer(page)
+    _select_domain(page)
     page.get_by_role("button", name="Next").click()
     expect(page.get_by_role("heading", name="Create a new Job")).to_be_visible()
 
@@ -50,7 +50,7 @@ def test_job_name_xss_is_escaped(page, live_server, login):
     page.get_by_label("Job Name").fill(xss_payload)
     if page.locator("#priority").count() > 0:
         page.locator("#priority").select_option("3")
-    _select_customer(page)
+    _select_domain(page)
     page.get_by_role("button", name="Next").click()
     expect(
         page.get_by_role("heading", name=re.compile(r"Assign Hashes for"))
@@ -69,7 +69,7 @@ def test_hashfile_validation_rejects_invalid_hash(page, live_server, login):
     expect(page.get_by_role("heading", name="Create a new Job")).to_be_visible()
 
     page.get_by_label("Job Name").fill("E2E Invalid Hash Test")
-    _select_customer(page)
+    _select_domain(page)
     page.get_by_role("button", name="Next").click()
     expect(
         page.get_by_role("heading", name=re.compile(r"Assign Hashes for"))
@@ -92,7 +92,7 @@ def test_hashfile_upload_example_file(page, live_server, login):
     expect(page.get_by_role("heading", name="Create a new Job")).to_be_visible()
 
     page.get_by_label("Job Name").fill("E2E Upload Example Hashfile")
-    _select_customer(page)
+    _select_domain(page)
     page.get_by_role("button", name="Next").click()
     expect(
         page.get_by_role("heading", name=re.compile(r"Assign Hashes for"))
@@ -115,7 +115,7 @@ def test_hashfile_upload_example_pwdump(page, live_server, login):
     expect(page.get_by_role("heading", name="Create a new Job")).to_be_visible()
 
     page.get_by_label("Job Name").fill("E2E Upload Example Pwdump")
-    _select_customer(page)
+    _select_domain(page)
     page.get_by_role("button", name="Next").click()
     expect(
         page.get_by_role("heading", name=re.compile(r"Assign Hashes for"))

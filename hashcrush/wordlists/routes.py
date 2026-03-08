@@ -14,6 +14,10 @@ wordlists = Blueprint('wordlists', __name__)
 MAX_SELECTABLE_WORDLIST_FILES = 5000
 
 
+def _contains_hidden_segment(relative_path: str) -> bool:
+    return any(segment.startswith('.') for segment in relative_path.split('/') if segment not in ('', '.'))
+
+
 def _is_selectable_wordlist_filename(filename: str) -> bool:
     lowered = (filename or '').lower()
     return lowered.endswith('.txt')
@@ -48,14 +52,48 @@ def _list_selectable_files(base_dir: str, max_entries: int = MAX_SELECTABLE_WORD
     return [(path, path) for path in discovered], False
 
 
+def _build_file_tree(relative_paths: list[str]) -> dict:
+    root = {"dirs": {}, "files": []}
+    for relative_path in relative_paths:
+        parts = [segment for segment in relative_path.split('/') if segment]
+        if not parts:
+            continue
+        node = root
+        for segment in parts[:-1]:
+            node = node["dirs"].setdefault(segment, {"dirs": {}, "files": []})
+        node["files"].append(parts[-1])
+    return _serialize_file_tree(root, "")
+
+
+def _serialize_file_tree(node: dict, prefix: str) -> dict:
+    serialized_dirs = []
+    for dirname in sorted(node["dirs"].keys(), key=str.casefold):
+        child = node["dirs"][dirname]
+        child_prefix = f"{prefix}/{dirname}" if prefix else dirname
+        serialized_child = _serialize_file_tree(child, child_prefix)
+        serialized_child["name"] = dirname
+        serialized_child["path"] = child_prefix
+        serialized_dirs.append(serialized_child)
+
+    serialized_files = []
+    for filename in sorted(node["files"], key=str.casefold):
+        file_path = f"{prefix}/{filename}" if prefix else filename
+        serialized_files.append({"name": filename, "path": file_path})
+
+    return {"dirs": serialized_dirs, "files": serialized_files}
+
+
 def _resolve_selected_file(selected_relative_path: str, base_dir: str) -> str | None:
     selected = (selected_relative_path or '').strip()
     if not selected:
         return None
-    if not _is_selectable_wordlist_filename(selected):
+    normalized_selected = selected.replace('\\', '/')
+    if _contains_hidden_segment(normalized_selected):
+        return None
+    if not _is_selectable_wordlist_filename(normalized_selected):
         return None
 
-    candidate = os.path.abspath(os.path.join(base_dir, selected))
+    candidate = os.path.abspath(os.path.join(base_dir, normalized_selected))
     try:
         if os.path.commonpath([candidate, base_dir]) != base_dir:
             return None
@@ -96,6 +134,8 @@ def wordlists_add():
     wordlists_root = _wordlists_root_path()
     wordlists_root_exists = os.path.isdir(wordlists_root)
     selectable_files, selectable_truncated = _list_selectable_files(wordlists_root)
+    selectable_paths = [path for path, _ in selectable_files]
+    selectable_tree = _build_file_tree(selectable_paths)
     form.existing_file.choices = [('', '--SELECT FILE--')] + selectable_files
 
     if form.validate_on_submit():
@@ -109,6 +149,7 @@ def wordlists_add():
                 wordlists_root_exists=wordlists_root_exists,
                 selectable_count=len(selectable_files),
                 selectable_truncated=selectable_truncated,
+                selectable_tree=selectable_tree,
             )
 
         wordlist_path = _resolve_selected_file(form.existing_file.data, wordlists_root)
@@ -122,6 +163,7 @@ def wordlists_add():
                 wordlists_root_exists=wordlists_root_exists,
                 selectable_count=len(selectable_files),
                 selectable_truncated=selectable_truncated,
+                selectable_tree=selectable_tree,
             )
 
         wordlist_path = os.path.abspath(wordlist_path)
@@ -150,6 +192,7 @@ def wordlists_add():
         wordlists_root_exists=wordlists_root_exists,
         selectable_count=len(selectable_files),
         selectable_truncated=selectable_truncated,
+        selectable_tree=selectable_tree,
     )
 
 

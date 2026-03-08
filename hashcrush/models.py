@@ -11,27 +11,22 @@ db = SQLAlchemy()
 class Users(db.Model, UserMixin):
     """Class object to represent Users"""
 
-    id                = db.Column(db.Integer,    nullable=False, primary_key=True)
-    first_name        = db.Column(db.String(20), nullable=False)
-    last_name         = db.Column(db.String(20), nullable=False)
-    email_address     = db.Column(db.String(50), nullable=False, unique=True)
-    password          = db.Column(db.String(60), nullable=False)
-    admin             = db.Column(db.Boolean,    nullable=False, default=False)
-    last_login_utc    = db.Column(db.DateTime,   nullable=True,  default=datetime.utcnow)
-    api_key           = db.Column(db.String(60), nullable=True)
-    wordlists         = db.relationship('Wordlists',  backref='tbd',   lazy=True)
-    rules             = db.relationship('Rules',      backref='owner', lazy=True)
-    jobs              = db.relationship('Jobs',       backref='owner', lazy=True)
-    tasks             = db.relationship('Tasks',      backref='owner', lazy=True)
-    taskgroups        = db.relationship('TaskGroups', backref='owner', lazy=True)
+    id = db.Column(db.Integer, nullable=False, primary_key=True)
+    username = db.Column(db.String(50), nullable=False, unique=True)
+    password = db.Column(db.String(60), nullable=False)
+    admin = db.Column(db.Boolean, nullable=False, default=False)
+    last_login_utc = db.Column(db.DateTime, nullable=True, default=datetime.utcnow)
+    wordlists = db.relationship('Wordlists', backref='owner', lazy=True)
+    rules = db.relationship('Rules', backref='owner', lazy=True)
+    jobs = db.relationship('Jobs', backref='owner', lazy=True)
+    tasks = db.relationship('Tasks', backref='owner', lazy=True)
+    taskgroups = db.relationship('TaskGroups', backref='owner', lazy=True)
 
 class Settings(db.Model):
     """Class object to represent Settings"""
 
     id = db.Column(db.Integer, primary_key=True)
-    retention_period = db.Column(db.Integer)
-    max_runtime_jobs = db.Column(db.Integer)                    # Time will be measured in hours
-    max_runtime_tasks = db.Column(db.Integer)                   # Time will be measured in hours
+    retention_period = db.Column(db.Integer, nullable=False, default=0)
     enabled_job_weights = db.Column(db.Boolean, nullable=False, default=False)
 
 class Jobs(db.Model):
@@ -47,7 +42,7 @@ class Jobs(db.Model):
     started_at = db.Column(db.DateTime, nullable=True)          # These defaults should be changed
     ended_at = db.Column(db.DateTime, nullable=True)            # These defaults should be changed
     hashfile_id = db.Column(db.Integer, nullable=True)
-    customer_id = db.Column(db.Integer, db.ForeignKey('customers.id'), nullable=False)
+    domain_id = db.Column(db.Integer, db.ForeignKey('domains.id'), nullable=False)
     owner_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
 
 class JobTasks(db.Model):
@@ -64,8 +59,8 @@ class JobTasks(db.Model):
     benchmark = db.Column(db.String(20))
     worker_pid = db.Column(db.Integer)
 
-class Customers(db.Model):
-    """Class object to represent Customers"""
+class Domains(db.Model):
+    """Class object to represent Domains"""
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(40), nullable=False)
@@ -77,8 +72,8 @@ class Hashfiles(db.Model):
     name = db.Column(db.String(256), nullable=False)        # can probably be reduced
     uploaded_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     runtime = db.Column(db.Integer, default=0)
-    customer_id = db.Column(db.Integer, nullable=False)
-    owner_id = db.Column(db.Integer, nullable=False)
+    domain_id = db.Column(db.Integer, db.ForeignKey('domains.id'), nullable=False)
+    owner_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
 
 class HashfileHashes(db.Model):
     """Class object to represent HashfileHashes"""

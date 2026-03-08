@@ -43,9 +43,7 @@ def admin_pass_get():
         abort(404)
 
     form = SetupAdminPassForm()
-    form.first_name.data    = admin_user.first_name
-    form.last_name.data     = admin_user.last_name
-    form.email_address.data = admin_user.email_address
+    form.username.data = admin_user.username
     return render_template('setup_admin_pass.html.j2', form=form)
 
 
@@ -74,9 +72,7 @@ def admin_pass_post():
     if not admin_user:
         abort(404)
 
-    admin_user.first_name    = form.first_name.data
-    admin_user.last_name     = form.last_name.data
-    admin_user.email_address = form.email_address.data
+    admin_user.username = form.username.data
     admin_user.password      = bcrypt.generate_password_hash(form.password.data).decode('utf-8')
     admin_user.last_login_utc = datetime.utcnow()
     db.session.commit()
@@ -94,8 +90,6 @@ def settings_get():
         return redirect(url_for('main.home'))
 
     form = SetupSettingsForm()
-    form.max_runtime_tasks.data = 0
-    form.max_runtime_jobs.data  = 0
     return render_template('setup_settings.html.j2', form=form)
 
 
@@ -121,10 +115,8 @@ def settings_post():
         return render_template('setup_settings.html.j2', form=form)
 
     settings = Settings(
-        # Retention culling is obsolete; keep data indefinitely.
-        retention_period  = 0,
-        max_runtime_tasks = form.max_runtime_tasks.data,
-        max_runtime_jobs  = form.max_runtime_jobs.data
+        retention_period=0,
+        enabled_job_weights=False,
     )
     db.session.add(settings)
     db.session.commit()

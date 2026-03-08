@@ -14,8 +14,8 @@ class JobsForm(FlaskForm):
 													('3', '3 - normal'),
 													('2', '2 - lower'),
 													('1', '1 - lowest')], default=3, validators=[DataRequired()])
-	customer_id = StringField('Customer ID (unused)', validators=[DataRequired()])
-	customer_name = StringField('Customer Name (unused)')
+	domain_id = StringField('Domain ID', validators=[DataRequired()])
+	domain_name = StringField('Domain Name')
 	submit = SubmitField('Next')
 
 	def validate_name(self, name):

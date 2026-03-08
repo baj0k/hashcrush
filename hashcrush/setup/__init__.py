@@ -52,9 +52,7 @@ def admin_user_needs_added(db: SQLAlchemy) -> bool:
 def add_admin_user(db: SQLAlchemy, bcrypt: Bcrypt):
     default_password_hash = bcrypt.generate_password_hash(DEFAULT_PASSWORD).decode('utf-8')
     user = Users(
-        first_name='admin',
-        last_name='user',
-        email_address='',
+        username='admin',
         password=default_password_hash,
         admin=True,
     )

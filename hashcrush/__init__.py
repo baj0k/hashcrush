@@ -49,10 +49,6 @@ def do_gui_setup_if_needed():
         # allow static files through
         return
 
-    if parsed_url.path.startswith('/v1/'):
-        # API routes are programmatic; never redirect them to GUI setup pages.
-        return
-
     from hashcrush.models import db
 
     from hashcrush.setup import admin_pass_needs_changed
@@ -226,8 +222,7 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     from hashcrush.users.routes import login_manager
     login_manager.init_app(app)
 
-    from hashcrush.api.routes import api
-    from hashcrush.customers.routes import customers
+    from hashcrush.domains.routes import domains
     from hashcrush.hashfiles.routes import hashfiles
     from hashcrush.jobs.routes import jobs
     from hashcrush.main.routes import main
@@ -241,8 +236,7 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     from hashcrush.searches.routes import searches
     from hashcrush.setup.routes import blueprint as setup_blueprint
 
-    app.register_blueprint(api)
-    app.register_blueprint(customers)
+    app.register_blueprint(domains)
     app.register_blueprint(hashfiles)
     app.register_blueprint(jobs)
     app.register_blueprint(main)

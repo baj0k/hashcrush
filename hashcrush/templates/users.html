@@ -15,8 +15,6 @@ These are the awesome people that use HashCrush.
             <table class="table">
                 <thead>
                   <tr>
-                    <th scope="col">First</th>
-                    <th scope="col">Last</th>
                     <th scope="col">Username</th>
                     <th scope="col">Role</th>
                     <th scope="col">Last Login</th>
@@ -26,9 +24,7 @@ These are the awesome people that use HashCrush.
                 <tbody>
                     {% for user in users %}
                         <tr>
-                            <td>{{ user.first_name }}</td>
-                            <td>{{ user.last_name }}</td>
-                            <td>{{ user.email_address }}</td>
+                            <td>{{ user.username }}</td>
                             <td>
                                 {% if user.admin %}
                                     Admin
@@ -60,7 +56,7 @@ These are the awesome people that use HashCrush.
             <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header">
-                <h5 class="modal-title" id="infoModal{{user.id}}Label">Info: {{user.email_address}}</h5>
+                <h5 class="modal-title" id="infoModal{{user.id}}Label">Info: {{user.username}}</h5>
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                     <span aria-hidden="true">&times;</span>
                 </button>
@@ -136,7 +132,7 @@ These are the awesome people that use HashCrush.
             <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header">
-                <h5 class="modal-title" id="resetModal{{user.id}}Label">Set Password: {{user.email_address}}</h5>
+                <h5 class="modal-title" id="resetModal{{user.id}}Label">Set Password: {{user.username}}</h5>
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                     <span aria-hidden="true">&times;</span>
                 </button>
@@ -169,7 +165,7 @@ These are the awesome people that use HashCrush.
             <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header">
-                <h5 class="modal-title" id="deleteModal{{user.id}}Label">Delete: {{user.email_address}} ?</h5>
+                <h5 class="modal-title" id="deleteModal{{user.id}}Label">Delete: {{user.username}} ?</h5>
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                     <span aria-hidden="true">&times;</span>
                 </button>

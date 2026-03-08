@@ -13,16 +13,16 @@ def _xss_payload(label: str):
     return element_id, payload
 
 
-def _select_customer(page):
-    customer_id = os.getenv("HASHCRUSH_E2E_CUSTOMER_ID")
-    if customer_id:
-        option = page.locator(f"#customer_id option[value='{customer_id}']")
+def _select_domain(page):
+    domain_id = os.getenv("HASHCRUSH_E2E_DOMAIN_ID")
+    if domain_id:
+        option = page.locator(f"#domain_id option[value='{domain_id}']")
         if option.count() > 0:
-            page.locator("#customer_id").select_option(str(customer_id))
+            page.locator("#domain_id").select_option(str(domain_id))
             return
-    page.locator("#customer_id").select_option("add_new")
-    customer_name = os.getenv("HASHCRUSH_E2E_CUSTOMER_NAME", "E2E Customer")
-    page.locator("#new_customer_div input[name='customer_name']").fill(customer_name)
+    page.locator("#domain_id").select_option("add_new")
+    domain_name = os.getenv("HASHCRUSH_E2E_DOMAIN_NAME", "E2E Domain")
+    page.locator("#new_domain_div input[name='domain_name']").fill(domain_name)
 
 
 def _login(page, live_server, username, password):
@@ -35,7 +35,7 @@ def _login(page, live_server, username, password):
 
 
 @pytest.mark.e2e
-def test_customer_name_xss_is_escaped(page, live_server, login):
+def test_domain_name_xss_is_escaped(page, live_server, login):
     login()
     payload = "<svg onload=alert(1)>"
 
@@ -43,26 +43,26 @@ def test_customer_name_xss_is_escaped(page, live_server, login):
     page.get_by_role("link", name="Create a New Job").click()
     expect(page.get_by_role("heading", name="Create a new Job")).to_be_visible()
 
-    page.locator("input[name='name']").fill(f"E2E XSS Customer {uuid.uuid4().hex[:6]}")
+    page.locator("input[name='name']").fill(f"E2E XSS Domain {uuid.uuid4().hex[:6]}")
     if page.locator("#priority").count() > 0:
         page.locator("#priority").select_option("3")
-    customer_select = page.locator("#customer_id")
-    customer_select.select_option("add_new")
-    if customer_select.input_value() != "add_new":
+    domain_select = page.locator("#domain_id")
+    domain_select.select_option("add_new")
+    if domain_select.input_value() != "add_new":
         page.evaluate(
-            "const el=document.querySelector('#customer_id');"
+            "const el=document.querySelector('#domain_id');"
             "if(el){el.value='add_new';el.dispatchEvent(new Event('change'));}"
         )
-    page.locator("input[name='customer_name']").fill(payload)
+    page.locator("input[name='domain_name']").fill(payload)
     page.get_by_role("button", name="Next").click()
     try:
         expect(
             page.get_by_role("heading", name=re.compile(r"Assign Hashes for"))
         ).to_be_visible()
     except AssertionError:
-        pytest.skip("Job creation failed; customer not created.")
+        pytest.skip("Job creation failed; domain not created.")
 
-    page.goto(f"{live_server}/customers", wait_until="domcontentloaded")
+    page.goto(f"{live_server}/domains", wait_until="domcontentloaded")
     content = page.content()
     assert "<svg onload=alert(1)>" not in content
     assert "&lt;svg onload=alert(1)&gt;" in content
@@ -144,7 +144,7 @@ def test_job_idor_access_denied_for_other_user(
     expect(page.get_by_role("heading", name="Create a new Job")).to_be_visible()
 
     page.get_by_label("Job Name").fill("E2E IDOR Job")
-    _select_customer(page)
+    _select_domain(page)
     page.get_by_role("button", name="Next").click()
     match = re.search(r"/jobs/(\d+)/assigned_hashfile", page.url)
     if not match:

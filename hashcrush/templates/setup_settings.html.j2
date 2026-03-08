@@ -9,10 +9,7 @@
 <div class="content-section">
     <form method="POST" action="/setup/settings">
         {{ form.hidden_tag() }}
-        <fieldset class="form-group">
-            {{ make_form_group('max_runtime_tasks') }}
-            {{ make_form_group('max_runtime_jobs')  }}
-        </fieldset>
+        <p class="text-muted">Runtime caps are disabled. Save to initialize default settings.</p>
         <div class="form-group">
             {{ form.submit(class="btn btn-primary pull-right")}}
         </div>

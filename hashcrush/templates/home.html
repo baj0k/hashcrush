@@ -17,15 +17,15 @@
                     <div class="card-header">
                         <h5 class="mb-0">
                             <button class="btn btn-link" data-toggle="collapse" data-target="#collapse{{job.id}}" aria-expanded="true" aria-controls="collapse{{job.id}}">
-                                {% for customer in customers %}
-                                    {% if customer.id == job.customer_id %}
-                                        {{ customer.name }}:
+                                {% for domain in domains %}
+                                    {% if domain.id == job.domain_id %}
+                                        {{ domain.name }}:
                                     {% endif %}
                                 {% endfor %}
                                 {{ job.name }}
                                 {% for user in users %}
                                     {% if user.id == job.owner_id %}
-                                        ({{ user.first_name }} {{ user.last_name }})
+                                        ({{ user.username }})
                                     {% endif %}
                                 {% endfor %}
                             </button>
@@ -101,15 +101,15 @@
                     <div class="card-header">
                         <h5 class="mb-0">
                             <button class="btn btn-link" data-toggle="collapse" data-target="#collapse{{job.id}}" aria-expanded="false" aria-controls="collapse{{job.id}}">
-                                {% for customer in customers %}
-                                    {% if customer.id == job.customer_id %}
-                                        {{ customer.name }}:
+                                {% for domain in domains %}
+                                    {% if domain.id == job.domain_id %}
+                                        {{ domain.name }}:
                                     {% endif %}
                                 {% endfor %}
                                 {{ job.name }}
                                 {% for user in users %}
                                     {% if user.id == job.owner_id %}
-                                        ({{ user.first_name }} {{ user.last_name }})
+                                        ({{ user.username }})
                                     {% endif %}
                                 {% endfor %}
                             </button>

@@ -67,20 +67,14 @@ def ensure_admin_account_cli(db, bcrypt):
             admin_password = getpass('Enter a password for the Administrator account: ')
             admin_password_verify = getpass('Re-Enter the password for the Administrator account: ')
 
-        admin_firstname = input('Enter Administrator\'s first name: ')
-        while len(admin_firstname) == 0:
-            print('Error: Firstname must be at least 1 character long')
-            admin_firstname = input('Enter Administrator\'s first name: ')
-
-        admin_lastname = input('Enter Administrator\'s last name: ')
-        while len(admin_lastname) == 0:
-            print('Error: Firstname must be at least 1 character long')
-            admin_lastname = input('Enter Administrator\'s last name: ')
-
         print('\nProvisioning account in database.')
         hashed_password = bcrypt.generate_password_hash(admin_password).decode('utf-8')
 
-        user = Users(first_name=admin_firstname, last_name=admin_lastname, email_address=admin_username, password=hashed_password, admin=True)
+        user = Users(
+            username=admin_username,
+            password=hashed_password,
+            admin=True,
+        )
         db.session.add(user)
         db.session.commit()
 
@@ -94,14 +88,9 @@ def ensure_settings_cli(db):
         return
 
     else:
-        max_runtime_tasks_int :int = 0
-        max_runtime_jobs_int :int = 0
-
         settings = Settings(
-            # Retention culling is obsolete; keep data indefinitely.
-            retention_period  = 0,
-            max_runtime_tasks = max_runtime_tasks_int,
-            max_runtime_jobs  = max_runtime_jobs_int
+            retention_period=0,
+            enabled_job_weights=False,
         )
         db.session.add(settings)
         db.session.commit()
@@ -140,7 +129,7 @@ def reset_admin_password_cli(db, bcrypt, admin_username: str | None = None) -> i
 
     admin_query = db.session.query(Users).filter_by(admin=True)
     if admin_username:
-        admin_query = admin_query.filter_by(email_address=admin_username)
+        admin_query = admin_query.filter_by(username=admin_username)
 
     admins = admin_query.order_by(Users.id.asc()).all()
     if not admins:
@@ -153,18 +142,18 @@ def reset_admin_password_cli(db, bcrypt, admin_username: str | None = None) -> i
     else:
         print('Multiple admin accounts found:')
         for admin in admins:
-            username = admin.email_address or '<empty username>'
+            username = admin.username or '<empty username>'
             print(f'  id={admin.id} username={username}')
         selected = input('Enter admin username to reset: ').strip()
         if not selected:
             print('Error: admin username is required when multiple admins exist.', file=sys.stderr)
             return 1
-        target_admin = next((admin for admin in admins if admin.email_address == selected), None)
+        target_admin = next((admin for admin in admins if admin.username == selected), None)
         if not target_admin:
             print('Error: selected username not found in admin list.', file=sys.stderr)
             return 1
 
-    username = target_admin.email_address or f'id={target_admin.id}'
+    username = target_admin.username or f'id={target_admin.id}'
     print(f'Preparing to reset password for admin account: {username}')
     confirmation = input('Type RESET to continue: ').strip()
     if confirmation != 'RESET':

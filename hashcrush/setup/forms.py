@@ -2,7 +2,6 @@
 from flask_wtf import FlaskForm
 from wtforms import StringField
 from wtforms import SubmitField
-from wtforms import IntegerField
 from wtforms import PasswordField
 from wtforms.validators import Length
 from wtforms.validators import EqualTo
@@ -12,9 +11,7 @@ from wtforms.validators import DataRequired
 class SetupAdminPassForm(FlaskForm):
     """Class representing an Admin Pass Forms"""
 
-    first_name       = StringField('First Name',         validators=[DataRequired(), Length(min=1, max=20)])
-    last_name        = StringField('Last Name',          validators=[DataRequired(), Length(min=1, max=20)])
-    email_address    = StringField('Username',           validators=[DataRequired(), Length(min=1, max=50)])
+    username = StringField('Username', validators=[DataRequired(), Length(min=1, max=50)])
     password         = PasswordField('Password',         validators=[DataRequired(), Length(min=14)])
     confirm_password = PasswordField('Confirm Password', validators=[DataRequired(), EqualTo('password')])
     submit           = SubmitField('Update')
@@ -23,6 +20,4 @@ class SetupAdminPassForm(FlaskForm):
 class SetupSettingsForm(FlaskForm):
     """Class representing an Settings Forms"""
 
-    max_runtime_tasks = IntegerField('Max Runtime Tasks')
-    max_runtime_jobs  = IntegerField('Max Runtime Jobs')
-    submit            = SubmitField('Save')
+    submit = SubmitField('Save')

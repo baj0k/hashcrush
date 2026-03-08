@@ -16,12 +16,8 @@
   - Done when: each read/write route enforces `current_user.admin or task_group.owner_id == current_user.id`.
 
 - [ ] `P0-AUTH-02` Enforce tenant scoping for non-admin users across UI routes and exports.
-  - Files: `hashcrush/users/routes.py`, `hashcrush/jobs/routes.py`, `hashcrush/tasks/routes.py`, `hashcrush/searches/routes.py`, `hashcrush/analytics/routes.py`, `hashcrush/customers/routes.py`, `hashcrush/wordlists/routes.py`, `hashcrush/rules/routes.py`, `hashcrush/hashfiles/routes.py`, `hashcrush/main/routes.py`.
-  - Done when: non-admin queries are owner/customer-scoped by default; bulk `.all()` usage is removed where data is tenant-sensitive.
-
-- [ ] `P0-AUTH-03 (New)` Scope API hash lookup/search to authorized tenant data.
-  - File: `hashcrush/api/routes.py` (`/v1/search`).
-  - Done when: non-admin API callers cannot retrieve cracked plaintext outside their own data.
+  - Files: `hashcrush/users/routes.py`, `hashcrush/jobs/routes.py`, `hashcrush/tasks/routes.py`, `hashcrush/searches/routes.py`, `hashcrush/analytics/routes.py`, `hashcrush/domains/routes.py`, `hashcrush/wordlists/routes.py`, `hashcrush/rules/routes.py`, `hashcrush/hashfiles/routes.py`, `hashcrush/main/routes.py`.
+  - Done when: non-admin queries are owner/domain-scoped by default; bulk `.all()` usage is removed where data is tenant-sensitive.
 
 - [ ] `P0-AUTH-04 (New)` Scope dynamic wordlist generation to authorized data.
   - File: `hashcrush/utils/utils.py` (`update_dynamic_wordlist`).
@@ -29,15 +25,15 @@
 
 ### Data Integrity and Correctness
 - [ ] `P0-DATA-01` Fix plaintext storage format inconsistency (raw uppercase vs hex-encoded expected by readers).
-  - Files: `hashcrush/executor/service.py`, `hashcrush/api/routes.py`, `hashcrush/analytics/routes.py`, `hashcrush/searches/routes.py`, `hashcrush/utils/utils.py`.
+  - Files: `hashcrush/executor/service.py`, `hashcrush/analytics/routes.py`, `hashcrush/searches/routes.py`, `hashcrush/utils/utils.py`.
   - Done when: one format is enforced end-to-end (recommended: hex-encoded bytes), existing rows are migrated, tests protect against regression.
 
-- [ ] `P0-DATA-02` Validate job hashfile assignment ownership/customer scope before accepting `hashfile_id` from form.
+- [ ] `P0-DATA-02` Validate job hashfile assignment ownership/domain scope before accepting `hashfile_id` from form.
   - File: `hashcrush/jobs/routes.py`.
-  - Done when: selected hashfile is confirmed to exist, match job customer, and be visible to current user.
+  - Done when: selected hashfile is confirmed to exist, match job domain, and be visible to current user.
 
-- [ ] `P0-DATA-03 (New)` Fix customer delete logic to avoid deleting customers with active jobs.
-  - File: `hashcrush/customers/routes.py`.
+- [ ] `P0-DATA-03 (New)` Fix domain delete logic to avoid deleting domains with active jobs.
+  - File: `hashcrush/domains/routes.py`.
   - Done when: deletion aborts early if jobs exist and never leaves orphaned records or throws integrity errors.
 
 ## P1 - High Priority
@@ -51,17 +47,13 @@
   - Files: all mutating route modules (for example `jobs_delete`, `tasks_delete`, `rules_delete`, `wordlists_delete`).
   - Done when: invalid IDs return `404` or safe redirect with error flash, not `500`.
 
-- [ ] `P1-BUG-03 (New)` Fix dead/broken customer add flow.
-  - File: `hashcrush/customers/routes.py` (renders missing `cusomers_add.html` template).
-  - Done when: route is either implemented with a valid template or removed if unused.
-
 - [ ] `P1-BUG-04` Investigate and fix user profile internal server error.
   - Files: `hashcrush/users/routes.py`, `hashcrush/templates/profile.html`, related model constraints.
   - Done when: profile page loads and updates reliably under normal/admin users.
 
 ### Filesystem and Runtime Hygiene
 - [ ] `P1-FS-01` Eliminate temp-file leakage in download flows.
-  - Files: `hashcrush/api/routes.py`, `hashcrush/analytics/routes.py`.
+  - Files: `hashcrush/analytics/routes.py`.
   - Done when: downloads stream in-memory or use guaranteed post-response cleanup.
 
 - [ ] `P1-FS-02` Move job runtime artifacts out of project files and enforce cleanup.
@@ -75,17 +67,13 @@
 ### Database Constraints and Query Performance
 - [ ] `P1-DB-01` Add indexes/constraints for hot paths.
   - Files: `hashcrush/models.py`, `migrations/versions/0001_single_node_baseline.py`.
-  - Required: unique/index on `users.api_key`, index on `hashfile_hashes.hashfile_id`, composite index for queue scheduling (`status`, `priority`, `id`).
+  - Required: index on `hashfile_hashes.hashfile_id`, composite index for queue scheduling (`status`, `priority`, `id`).
 
 - [ ] `P1-DB-02 (New)` Add missing foreign keys and sensible cascade behavior.
   - Files: `hashcrush/models.py`, migrations.
-  - Target tables: `hashfile_hashes`, `job_tasks`, `hashfiles` ownership/customer references.
+  - Target tables: `hashfile_hashes`, `job_tasks`, `hashfiles` ownership/domain references.
 
 ### Security Hardening
-- [ ] `P1-SEC-01 (New)` Decide API key strategy: remove feature or harden lifecycle.
-  - Files: `hashcrush/users/routes.py`, `hashcrush/api/routes.py`, `hashcrush/models.py`, profile templates.
-  - Done when: keys are scoped, rotatable, auditable, and not over-privileged (or API key feature is removed).
-
 - [ ] `P1-SEC-02 (New)` Prevent admin lockout scenarios.
   - Files: `hashcrush/users/routes.py`.
   - Done when: app cannot delete the last admin account and warns on self-delete/reset edge cases.
@@ -114,7 +102,7 @@
   - Minimum coverage: non-admin scoping, CSRF/method safety, task-group auth, plaintext format consistency.
 
 - [ ] `P2-TEST-02 (New)` Add regressions for newly discovered issues.
-  - Minimum coverage: API `/v1/search` scoping, dynamic wordlist tenant scope, customer delete guard, invalid ID handling (`404` not `500`).
+  - Minimum coverage: dynamic wordlist tenant scope, domain delete guard, invalid ID handling (`404` not `500`).
 
 ### Documentation and UX Clarity
 - [ ] `P2-OPS-01 (New)` Align container/runtime versions and startup model.
@@ -122,15 +110,5 @@
   - Done when: supported Python version matches codebase requirements and container runs a production server configuration.
 
 ## P3 - Product and UX Backlog (Decision-Driven)
-
-- [ ] `P3-PROD-01` Rename "Customers" to "Domains" across model/UI/API.
-- [ ] `P3-PROD-02` Decide whether max runtime controls should remain in Settings UI.
-- [ ] `P3-PROD-04` Integrate optional SecLists repository path (configurable) and expose its structure in Wordlists view.
-- [ ] `P3-PROD-05` Point rules directory to configurable hashcat rules path.
-- [ ] `P3-PROD-06` Define final storage model for wordlists/rules/masks:
-  - external repositories only, or
-  - managed uploads into configured resource directories.
-- [ ] `P3-PROD-08` Simplify user model to username/password only (remove first/last name) if approved.
-- [ ] `P3-PROD-09` Decide whether API key UI/feature remains part of product.
-- [ ] `P3-PROD-11` Define persistent task/task-group import/export format across installations.
+- [ ] `P3-PROD-12 (New)` Implement task/task-group import/export inside the app using JSON.
 

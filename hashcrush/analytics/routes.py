@@ -3,7 +3,7 @@ import operator
 import re
 from flask import Blueprint, render_template, request, redirect, send_from_directory
 from flask_login import login_required
-from hashcrush.models import Customers, HashfileHashes, Hashes, Hashfiles
+from hashcrush.models import Domains, HashfileHashes, Hashes, Hashfiles
 from hashcrush.models import db
 
 analytics = Blueprint('analytics', __name__)
@@ -14,33 +14,33 @@ analytics = Blueprint('analytics', __name__)
 def get_analytics():
     """Function to list Analytics Page"""
 
-    if request.args.get("customer_id"):
-        customer_id = request.args["customer_id"]
+    if request.args.get("domain_id"):
+        domain_id = request.args["domain_id"]
     else:
-        customer_id = None
+        domain_id = None
     if request.args.get("hashfile_id"):
         hashfile_id = request.args["hashfile_id"]
     else:
         hashfile_id = None
 
-    hashfiles, customers = [], []
-    results =  db.session.query(Customers, Hashfiles).join(Hashfiles, Customers.id==Hashfiles.customer_id).order_by(Customers.name)
+    hashfiles, domains = [], []
+    results =  db.session.query(Domains, Hashfiles).join(Hashfiles, Domains.id==Hashfiles.domain_id).order_by(Domains.name)
 
-    #Put all hashes in a list (hashfiles) and pull out all unique customers into a separate list (customers)
+    #Put all hashes in a list (hashfiles) and pull out all unique domains into a separate list (domains)
     for rows in results:
-        customers.append(rows.Customers) if rows.Customers not in customers else customers
+        domains.append(rows.Domains) if rows.Domains not in domains else domains
         hashfiles.append(rows.Hashfiles)
 
     # Figure 1 (Cracked vs uncracked)
-    if customer_id:
-        # we have a customer
+    if domain_id:
+        # we have a domain
         if hashfile_id: # with a hashfile
             fig1_cracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile_id).count()
             fig1_uncracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '0').filter(HashfileHashes.hashfile_id==hashfile_id).count()
         else:
-            # just a customer, no specific hashfile
-            fig1_cracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.customer_id == customer_id).filter(Hashes.cracked == '1').count()
-            fig1_uncracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.customer_id == customer_id).filter(Hashes.cracked == '0').count()
+            # just a domain, no specific hashfile
+            fig1_cracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '1').count()
+            fig1_uncracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '0').count()
     else:
         fig1_cracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='1').count()
         fig1_uncracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='0').count()
@@ -58,15 +58,15 @@ def get_analytics():
     fig1_percent = 0 if (0 == fig1_total) else [str(round(((fig1_cracked_cnt / fig1_total)*100),1)) + '%']
 
     # Figure 2 (Cracked Complexity Breakdown)
-    if customer_id:
-        # we have a customer
+    if domain_id:
+        # we have a domain
         if hashfile_id:
             fig2_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile_id).with_entities(Hashes.plaintext).all()
             fig2_uncracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '0').filter(HashfileHashes.hashfile_id==hashfile_id).count()
         else:
-            # just a customer, no specific hashfile
-            fig2_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.customer_id == customer_id).filter(Hashes.cracked == '1').with_entities(Hashes.plaintext).all()
-            fig2_uncracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.customer_id == customer_id).filter(Hashes.cracked == '0').count()
+            # just a domain, no specific hashfile
+            fig2_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '1').with_entities(Hashes.plaintext).all()
+            fig2_uncracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '0').count()
     else:
         fig2_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='1').with_entities(Hashes.plaintext).all()
         fig2_uncracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='0').count()
@@ -102,15 +102,15 @@ def get_analytics():
     fig2_values = [row[1] for row in fig2_data]
 
     # Figure 3 Recovered Hashes
-    if customer_id:
-        # we have a customer
+    if domain_id:
+        # we have a domain
         if hashfile_id: # with a hashfile
             fig3_cracked_cnt = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile_id).distinct(Hashes.plaintext).count()
             fig3_uncracked_cnt = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '0').filter(HashfileHashes.hashfile_id==hashfile_id).distinct(Hashes.ciphertext).count()
         else:
-            # just a customer, no specific hashfile
-            fig3_cracked_cnt = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.customer_id == customer_id).filter(Hashes.cracked == '1').distinct(Hashes.plaintext).count()
-            fig3_uncracked_cnt = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.customer_id == customer_id).filter(Hashes.cracked == '0').distinct(Hashes.ciphertext).count()
+            # just a domain, no specific hashfile
+            fig3_cracked_cnt = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '1').distinct(Hashes.plaintext).count()
+            fig3_uncracked_cnt = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '0').distinct(Hashes.ciphertext).count()
     else:
         fig3_cracked_cnt = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='1').distinct(Hashes.plaintext).count()
         fig3_uncracked_cnt = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='0').distinct(Hashes.ciphertext).count()
@@ -131,20 +131,20 @@ def get_analytics():
     total_runtime = 0
     total_accounts = 0
     total_unique_hashes = 0
-    if customer_id:
-        # we have a customer
+    if domain_id:
+        # we have a domain
         if hashfile_id:
             hashfile = Hashfiles.query.get(hashfile_id)
             total_runtime = hashfile.runtime
             total_accounts = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(HashfileHashes.hashfile_id==hashfile_id).count()
             total_unique_hashes = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(HashfileHashes.hashfile_id==hashfile_id).distinct('ciphertext').count()
         else:
-            # just a customer, no specific hashfile
-            hashfiles = Hashfiles.query.filter_by(customer_id=customer_id).all()
+            # just a domain, no specific hashfile
+            hashfiles = Hashfiles.query.filter_by(domain_id=domain_id).all()
             for hashfile in hashfiles:
                 total_runtime = total_runtime + hashfile.runtime
-            total_accounts = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.customer_id == customer_id).count()
-            total_unique_hashes = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.customer_id == customer_id).distinct('ciphertext').count()
+            total_accounts = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).count()
+            total_unique_hashes = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).distinct('ciphertext').count()
     else:
         hashfiles = Hashfiles.query.all()
         for hashfile in hashfiles:
@@ -261,13 +261,13 @@ def get_analytics():
     fig4_values.append(fig4_other)
 
     # Figure 4 (Passwords by Length)
-    if customer_id:
-        # we have a customer
+    if domain_id:
+        # we have a domain
         if hashfile_id:
             fig5_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile_id).with_entities(Hashes.plaintext).all()
         else:
-            # just a customer, no specific hashfile
-            fig5_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.customer_id == customer_id).filter(Hashes.cracked == '1').with_entities(Hashes.plaintext).all()
+            # just a domain, no specific hashfile
+            fig5_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '1').with_entities(Hashes.plaintext).all()
     else:
         fig5_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='1').with_entities(Hashes.plaintext).all()
 
@@ -291,13 +291,13 @@ def get_analytics():
             break
 
     # Figure 5 (Top 10 Passwords)
-    if customer_id:
-        # we have a customer
+    if domain_id:
+        # we have a domain
         if hashfile_id:
             fig6_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile_id).with_entities(Hashes.plaintext).all()
         else:
-            # just a customer, no specific hashfile
-            fig6_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.customer_id == customer_id).filter(Hashes.cracked == '1').with_entities(Hashes.plaintext).all()
+            # just a domain, no specific hashfile
+            fig6_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '1').with_entities(Hashes.plaintext).all()
     else:
         fig6_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='1').with_entities(Hashes.plaintext).all()
 
@@ -359,13 +359,13 @@ def get_analytics():
 
     # Figure 8 (Users where Passwords are the same as the username)
 
-    if customer_id:
-        # we have a customer
+    if domain_id:
+        # we have a domain
         if hashfile_id:
             fig8_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile_id).with_entities(Hashes.plaintext, HashfileHashes.username).all()
         else:
-            # just a customer, no specific hashfile
-            fig8_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.customer_id == customer_id).filter(Hashes.cracked == '1').with_entities(Hashes.plaintext, HashfileHashes.username).all()
+            # just a domain, no specific hashfile
+            fig8_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '1').with_entities(Hashes.plaintext, HashfileHashes.username).all()
     else:
         fig8_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='1').with_entities(Hashes.plaintext, HashfileHashes.username).all()
 
@@ -403,10 +403,10 @@ def get_analytics():
                             fig7_values=fig7_values,
                             fig7_total=fig7_total,
                             fig8_table=fig8_table,
-                            customers=customers,
+                            domains=domains,
                             hashfiles=hashfiles,
                             hashfile_id=hashfile_id,
-                            customer_id=customer_id,
+                            domain_id=domain_id,
                             total_runtime=total_runtime,
                             total_accounts=total_accounts,
                             total_unique_hashes=total_unique_hashes)
@@ -434,12 +434,12 @@ def analytics_download_hashes():
     else:
         return redirect('/analytics')
 
-    customer_id_arg = request.args.get("customer_id")
-    customer_id = _parse_positive_int(customer_id_arg)
-    if customer_id_arg and customer_id is None:
+    domain_id_arg = request.args.get("domain_id")
+    domain_id = _parse_positive_int(domain_id_arg)
+    if domain_id_arg and domain_id is None:
         return redirect('/analytics')
-    if customer_id is not None:
-        filename += '_' + str(customer_id)
+    if domain_id is not None:
+        filename += '_' + str(domain_id)
 
     hashfile_id_arg = request.args.get("hashfile_id")
     hashfile_id = _parse_positive_int(hashfile_id_arg)
@@ -452,15 +452,15 @@ def analytics_download_hashes():
 
     filename += '.txt'
 
-    if customer_id:
-        # we have a customer
+    if domain_id:
+        # we have a domain
         if hashfile_id:
             cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile_id).all()
             uncracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '0').filter(HashfileHashes.hashfile_id==hashfile_id).all()
         else:
-            # just a customer, no specific hashfile
-            cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.customer_id == customer_id).filter(Hashes.cracked == '1').all()
-            uncracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.customer_id == customer_id).filter(Hashes.cracked == '0').all()
+            # just a domain, no specific hashfile
+            cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '1').all()
+            uncracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '0').all()
     else:
         cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='1').all()
         uncracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='0').all()

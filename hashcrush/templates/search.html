@@ -41,7 +41,7 @@
             <table class="table">
                 <thead>
                 <tr>
-                    <th scope="col">Customer</th>
+                    <th scope="col">Domain</th>
                     <th scope="col">Username</th>
                     <th scope="col">Hash</th>
                     <th scope="col">Plaintext</th>
@@ -53,9 +53,9 @@
                             <td>
                                 {% for hashfile in hashfiles %}
                                     {% if hashfile.id == entry[1].hashfile_id %}
-                                        {% for customer in customers %}
-                                            {% if customer.id == hashfile.customer_id %}
-                                                {{ customer.name }}
+                                        {% for domain in domains %}
+                                            {% if domain.id == hashfile.domain_id %}
+                                                {{ domain.name }}
                                             {% endif %}
                                         {% endfor %}
                                     {% endif %}
@@ -89,7 +89,7 @@
             <table class="table">
                 <thead>
                 <tr>
-                    <th scope="col">Customer</th>
+                    <th scope="col">Domain</th>
                     <th scope="col">Username</th>
                     <th scope="col">Hash</th>
                     <th scope="col">Plaintext</th>

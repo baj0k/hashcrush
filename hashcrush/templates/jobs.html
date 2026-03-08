@@ -15,7 +15,7 @@ Jobs contain a series of tasks (hashcat commands). Jobs also have an associated 
             <table class="table">
                 <thead>
                   <tr>
-                    <th scope="col">Customer</th>
+                    <th scope="col">Domain</th>
                     <th scope="col">Name</th>
                     <th scope="col">Hash File</th>
                     <th scope="col">Status</th>
@@ -27,9 +27,9 @@ Jobs contain a series of tasks (hashcat commands). Jobs also have an associated 
                     {% for job in jobs%}
                         <tr>
                             <td>
-                                {% for customer in customers %}
-                                    {% if customer.id == job.customer_id %}
-                                        {{ customer.name }}
+                                {% for domain in domains %}
+                                    {% if domain.id == job.domain_id %}
+                                        {{ domain.name }}
                                     {% endif %}
                                 {% endfor %}
                             </td>
@@ -45,7 +45,7 @@ Jobs contain a series of tasks (hashcat commands). Jobs also have an associated 
                             <td>
                                 {% for user in users %}
                                     {% if user.id == job.owner_id %}
-                                        {{ user.first_name }} {{ user.last_name }}
+                                        {{ user.username }}
                                     {% endif %}
                                 {% endfor %}
                             </td>
@@ -64,7 +64,7 @@ Jobs contain a series of tasks (hashcat commands). Jobs also have an associated 
                                     <a class="fa fa-close btn btn-secondary" href="/jobs/start/{{job.id}}" role="button" title=Canceled></a>
                                 {% endif %}
                                 {% if job.status != 'Incomplete' %}
-                                    <a class="fa fa-pie-chart btn btn-warning" href="/analytics?customer_id={{job.customer_id}}&hashfile_id={{job.hashfile_id}}" role="button" title=Analytics></a>
+                                    <a class="fa fa-pie-chart btn btn-warning" href="/analytics?domain_id={{job.domain_id}}&hashfile_id={{job.hashfile_id}}" role="button" title=Analytics></a>
                                     <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{job.id}}" title=Info></button>
                                 {% endif %}
                                 {% if job.status != 'Running' and job.status != 'Queued' and job.status != 'Paused' %}

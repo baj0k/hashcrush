@@ -3,7 +3,7 @@ from flask import Blueprint, render_template, url_for, redirect, flash
 from flask_login import login_required, current_user
 from sqlalchemy.sql import exists
 from sqlalchemy import func, case
-from hashcrush.models import Hashfiles, Customers, Jobs, HashfileHashes, Hashes
+from hashcrush.models import Hashfiles, Domains, Jobs, HashfileHashes, Hashes
 from hashcrush.models import db
 
 hashfiles = Blueprint('hashfiles', __name__)
@@ -14,10 +14,10 @@ hashfiles = Blueprint('hashfiles', __name__)
 def hashfiles_list():
     """Function to return list of hashfiles"""
     hashfiles = Hashfiles.query.order_by(Hashfiles.uploaded_at.desc()).all()
-    # customers = Customers.query.order_by(Customers.name).all()
-    customers = Customers.query.filter(exists().where(Customers.id == Hashfiles.customer_id)).all()
+    # domains = Domains.query.order_by(Domains.name).all()
+    domains = Domains.query.filter(exists().where(Domains.id == Hashfiles.domain_id)).all()
     # Hashes.query.filter(~ exists().where(Hashes.id==HashfileHashes.hash_id)).filter_by(cracked = '0')
-    # select * from customers where id in (select customer_id from hashfiles);
+    # select * from domains where id in (select domain_id from hashfiles);
     jobs = Jobs.query.all()
 
     cracked_rate = {}
@@ -66,7 +66,7 @@ def hashfiles_list():
         cracked_rate[hashfile.id] = "(" + str(cracked_cnt) + "/" + str(hash_cnt) + ")"
         hash_type_dict[hashfile.id] = types_by_hashfile_id.get(hashfile.id, 'UNKNOWN')
 
-    return render_template('hashfiles.html', title='Hashfiles', hashfiles=hashfiles, customers=customers, cracked_rate=cracked_rate, jobs=jobs, hash_type_dict=hash_type_dict)
+    return render_template('hashfiles.html', title='Hashfiles', hashfiles=hashfiles, domains=domains, cracked_rate=cracked_rate, jobs=jobs, hash_type_dict=hash_type_dict)
 
 @hashfiles.route("/hashfiles/delete/<int:hashfile_id>", methods=['GET', 'POST'])
 @login_required

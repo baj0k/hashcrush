@@ -4,7 +4,7 @@ import io
 from flask import Blueprint, render_template, redirect, url_for, request, flash, send_file
 from flask_login import login_required
 from hashcrush.searches.forms import SearchForm
-from hashcrush.models import Customers, Hashfiles, HashfileHashes, Hashes
+from hashcrush.models import Domains, Hashfiles, HashfileHashes, Hashes
 from hashcrush.models import db
 from hashcrush import jinja_hex_decode
 
@@ -15,10 +15,10 @@ searches = Blueprint('searches', __name__)
 def searches_list():
     """Function to return list of search results"""
 
-    customers = Customers.query.all()
+    domains = Domains.query.all()
     hashfiles = Hashfiles.query.all()
     search_form = SearchForm()
-    # Customer and hashfile labels are resolved at render/export time.
+    # Domain and hashfile labels are resolved at render/export time.
     if search_form.validate_on_submit():
         if search_form.search_type.data == 'hash':
             results = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.ciphertext==search_form.query.data).all()
@@ -36,22 +36,22 @@ def searches_list():
             search_form.query.data = first_result[0].ciphertext #All hashs should be the same, so set the search input as the first rows hash value
             search_form.search_type.data = 'hash' #Set the search type to hash
     else:
-        customers = None
+        domains = None
         results = None
     if not results and request.method == 'POST':
         flash('No results found', 'warning')
 
     if results and "export" in request.form: #Export Results
-        return export_results(customers, results, hashfiles, search_form.export_type.data)
+        return export_results(domains, results, hashfiles, search_form.export_type.data)
 
-    return render_template('search.html', title='Search', searchForm=search_form, customers=customers, results=results, hashfiles=hashfiles )
+    return render_template('search.html', title='Search', searchForm=search_form, domains=domains, results=results, hashfiles=hashfiles )
 
 #Creating this in memory instead of on disk to avoid any extra cleanup. This can be changed later if files get too large
-def export_results(customers, results, hashfiles, separator):
+def export_results(domains, results, hashfiles, separator):
     """Function to export search results"""
     str_io = io.StringIO()
     separator = (',' if separator == "Comma" else ":")
-    get_rows(str_io, customers, results, hashfiles, separator)
+    get_rows(str_io, domains, results, hashfiles, separator)
     byte_io = io.BytesIO()
     byte_io.write(str_io.getvalue().encode())
     byte_io.seek(0)
@@ -59,19 +59,19 @@ def export_results(customers, results, hashfiles, separator):
     return send_file(byte_io, download_name="search.txt", as_attachment=True)
 
 # If this logic changes in the HTML (search.html), update this helper too.
-def get_rows(str_io, customers, results, hashfiles, separator):
+def get_rows(str_io, domains, results, hashfiles, separator):
     """Function to get rows for export search results"""
 
     writer = csv.writer(str_io,delimiter=separator)
 
-    customer_names_by_id = {customer.id: customer.name for customer in customers}
-    customer_names_by_hashfile_id = {
-        hashfile.id: customer_names_by_id.get(hashfile.customer_id, "None")
+    domain_names_by_id = {domain.id: domain.name for domain in domains}
+    domain_names_by_hashfile_id = {
+        hashfile.id: domain_names_by_id.get(hashfile.domain_id, "None")
         for hashfile in hashfiles
     }
 
     for entry in results:
-        col = [customer_names_by_hashfile_id.get(entry[1].hashfile_id, "None")] # Customer
+        col = [domain_names_by_hashfile_id.get(entry[1].hashfile_id, "None")] # Domain
 
         if entry[1].username: # Username
             col.append(jinja_hex_decode(entry[1].username))

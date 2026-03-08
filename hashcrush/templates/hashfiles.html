@@ -3,7 +3,7 @@
 <br>
 <h1>Hash Files</h1>
 <br>
-The following are a list of Hash Files currently configured in HashCrush. All Hash Files are assigned to a single customer. Deleting a Hash File will remove it from the customer, but all cracked hashes will remain in the database.
+The following are hash files currently configured in HashCrush. Each hash file is assigned to a single domain. Deleting a hash file removes only that file; recovered hashes remain in the database.
 <br>
 <br>
 <br>
@@ -14,7 +14,7 @@ The following are a list of Hash Files currently configured in HashCrush. All Ha
             <table class="table">
                 <thead>
                   <tr>
-                    <th scope="col">Customer</th>
+                    <th scope="col">Domain</th>
                     <th scope="col">Hash File</th>
                     <th scope="col">Hash Type</th>
                     <th scope="col">Crack Rate</th>
@@ -23,16 +23,16 @@ The following are a list of Hash Files currently configured in HashCrush. All Ha
                   </tr>
                 </thead>
                 <tbody>
-                    {% for customer in customers %}
+                    {% for domain in domains %}
                         <tr>
-                            <td>{{ customer.name }}</td>
+                            <td>{{ domain.name }}</td>
                             <td></td>
                             <td></td>
                             <td></td>
                             <td></td>
                         </tr>
                         {% for hashfile in hashfiles %}
-                            {% if hashfile.customer_id == customer.id %}
+                            {% if hashfile.domain_id == domain.id %}
                                 <tr>
                                     <td></td>
                                     <td>{{ hashfile.name }}</td>
@@ -46,8 +46,8 @@ The following are a list of Hash Files currently configured in HashCrush. All Ha
                                         {{hashfile.uploaded_at}}
                                     </td>
                                     <td>
-                                        <a class="fa fa-download btn btn-primary" href="/analytics/download?type=found&customer_id={{customer.id}}&hashfile_id={{hashfile.id}}" role="button" title=Download></a> 
-                                        <a class="fa fa-pie-chart btn btn-warning" href="/analytics?customer_id={{customer.id}}&hashfile_id={{hashfile.id}}" role="button" title=Analytics></a> 
+                                        <a class="fa fa-download btn btn-primary" href="/analytics/download?type=found&domain_id={{domain.id}}&hashfile_id={{hashfile.id}}" role="button" title=Download></a>
+                                        <a class="fa fa-pie-chart btn btn-warning" href="/analytics?domain_id={{domain.id}}&hashfile_id={{hashfile.id}}" role="button" title=Analytics></a>
                                         <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{hashfile.id}}" title=Info></button>
                                         <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{hashfile.id}}" title=Delete></button>
                                     </td>
@@ -109,7 +109,7 @@ The following are a list of Hash Files currently configured in HashCrush. All Ha
                     </button>
                 </div>
                 <div class="modal-body">
-                    This will permanently delete the hashfile. Cracked hashes disassociated with any customer or username will be retained. Are you sure you want to continue?
+                    This will permanently delete the hashfile. Cracked hashes disassociated with any domain or username will be retained. Are you sure you want to continue?
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>

@@ -8,13 +8,13 @@ from playwright.sync_api import expect
 @pytest.mark.e2e
 def test_job_creation_flow(page, live_server, login):
     login()
-    customer_id = os.getenv("HASHCRUSH_E2E_CUSTOMER_ID")
+    domain_id = os.getenv("HASHCRUSH_E2E_DOMAIN_ID")
     hashfile_id = os.getenv("HASHCRUSH_E2E_HASHFILE_ID")
     task_id = os.getenv("HASHCRUSH_E2E_TASK_ID")
     task_name = os.getenv("HASHCRUSH_E2E_TASK_NAME")
-    if not all([customer_id, hashfile_id, task_id, task_name]):
+    if not all([domain_id, hashfile_id, task_id, task_name]):
         pytest.skip(
-            "Set HASHCRUSH_E2E_CUSTOMER_ID, HASHCRUSH_E2E_HASHFILE_ID, "
+            "Set HASHCRUSH_E2E_DOMAIN_ID, HASHCRUSH_E2E_HASHFILE_ID, "
             "HASHCRUSH_E2E_TASK_ID, HASHCRUSH_E2E_TASK_NAME."
         )
     page.get_by_role("link", name="Jobs").click()
@@ -24,15 +24,15 @@ def test_job_creation_flow(page, live_server, login):
     page.get_by_label("Job Name").fill("E2E Job")
     if page.locator("#priority").count() > 0:
         page.locator("#priority").select_option("3")
-    customer_option = page.locator(f"#customer_id option[value='{customer_id}']")
-    if customer_option.count() == 0:
-        page.locator("#customer_id").select_option("add_new")
-        customer_name = os.getenv("HASHCRUSH_E2E_CUSTOMER_NAME", "E2E Customer")
-        page.locator("#new_customer_div input[name='customer_name']").fill(
-            customer_name
+    domain_option = page.locator(f"#domain_id option[value='{domain_id}']")
+    if domain_option.count() == 0:
+        page.locator("#domain_id").select_option("add_new")
+        domain_name = os.getenv("HASHCRUSH_E2E_DOMAIN_NAME", "E2E Domain")
+        page.locator("#new_domain_div input[name='domain_name']").fill(
+            domain_name
         )
     else:
-        page.locator("#customer_id").select_option(str(customer_id))
+        page.locator("#domain_id").select_option(str(domain_id))
     page.get_by_role("button", name="Next").click()
 
     expect(

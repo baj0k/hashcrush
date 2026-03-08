@@ -1,4 +1,27 @@
 {% extends "layout.html" %}
+{% macro render_file_tree(tree) -%}
+<ul class="list-unstyled mb-0">
+    {% for directory in tree.dirs %}
+        <li class="mb-1">
+            <details>
+                <summary><code>{{ directory.name }}/</code></summary>
+                {{ render_file_tree(directory) }}
+            </details>
+        </li>
+    {% endfor %}
+    {% for file in tree.files %}
+        <li>
+            <button
+                type="button"
+                class="btn btn-link btn-sm p-0 text-left rule-tree-select"
+                data-select-path="{{ file.path }}"
+            >
+                {{ file.name }}
+            </button>
+        </li>
+    {% endfor %}
+</ul>
+{%- endmacro %}
 {% block header %}
 <br>
 <h1>Add Rules</h1>
@@ -50,6 +73,13 @@
                         {% endfor %}
                     {% endif %}
                </div>
+               <div class="form-group">
+                    <label class="form-control-label">Tree Browser</label>
+                    <div class="border rounded p-2" style="max-height: 22rem; overflow-y: auto;">
+                        {{ render_file_tree(selectable_tree) }}
+                    </div>
+                    <small class="text-muted d-block">Click a file in the tree to populate the selector.</small>
+               </div>
            {% endif %}
         </fieldset>
         {% if rules_root_exists and selectable_count > 0 %}
@@ -59,4 +89,15 @@
         {% endif %}
     </form>
 </div>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var select = document.getElementById('{{ form.existing_file.id }}');
+    document.querySelectorAll('.rule-tree-select').forEach(function (button) {
+        button.addEventListener('click', function () {
+            select.value = button.getAttribute('data-select-path');
+            select.dispatchEvent(new Event('change'));
+        });
+    });
+});
+</script>
 {% endblock content %}

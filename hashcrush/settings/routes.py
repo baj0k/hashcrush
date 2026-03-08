@@ -1,11 +1,10 @@
 """Flask routes to handle Settings"""
 import os
 import sys
-from flask import Blueprint, render_template, abort, url_for, flash, request, redirect
+from flask import Blueprint, render_template, abort, url_for, flash, redirect
 from flask_login import login_required, current_user
 from sqlalchemy import text
 import hashcrush
-from hashcrush.settings.forms import HashCrushSettingsForm
 from hashcrush.models import Settings
 from hashcrush.models import db
 
@@ -48,30 +47,21 @@ def _temp_folder_size_bytes() -> int:
 #############################################
 
 
-@settings.route("/settings", methods=['GET', 'POST'])
+@settings.route("/settings", methods=['GET'])
 @login_required
 def settings_list():
     """Function to return list of Settings"""
 
     if current_user.admin:
-        hashcrush_form = HashCrushSettingsForm()
         settings = Settings.query.first()
+        if not settings:
+            settings = Settings(retention_period=0, enabled_job_weights=False)
+            db.session.add(settings)
+            db.session.commit()
 
         os.makedirs(TEMP_FOLDER_PATH, exist_ok=True)
         tmp_folder_size = _temp_folder_size_bytes()
         tmp_folder_size_human = _format_bytes(tmp_folder_size)
-
-        if hashcrush_form.validate_on_submit():
-            # Retention culling is obsolete; keep data indefinitely.
-            settings.retention_period = 0
-            settings.max_runtime_jobs = hashcrush_form.max_runtime_jobs.data
-            settings.max_runtime_tasks = hashcrush_form.max_runtime_tasks.data
-            db.session.commit()
-            flash('Updated HashCrush settings!', 'success')
-            return redirect(url_for('settings.settings_list'))
-        elif request.method == 'GET':
-            hashcrush_form.max_runtime_jobs.data = settings.max_runtime_jobs
-            hashcrush_form.max_runtime_tasks.data = settings.max_runtime_tasks
 
         try:
             database_version = db.session.execute(text('SELECT version_num FROM alembic_version LIMIT 1;')).scalar()
@@ -82,8 +72,6 @@ def settings_list():
             'settings.html',
             title='settings',
             settings=settings,
-            HashCrushForm=hashcrush_form,
-            hashcrush_form=hashcrush_form,
             tmp_folder_size=tmp_folder_size,
             tmp_folder_size_human=tmp_folder_size_human,
             temp_folder_path=TEMP_FOLDER_PATH,

@@ -20,29 +20,24 @@ def upgrade():
     op.create_table(
         "users",
         sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("first_name", sa.String(length=20), nullable=False),
-        sa.Column("last_name", sa.String(length=20), nullable=False),
-        sa.Column("email_address", sa.String(length=50), nullable=False),
+        sa.Column("username", sa.String(length=50), nullable=False),
         sa.Column("password", sa.String(length=60), nullable=False),
         sa.Column("admin", sa.Boolean(), nullable=False),
         sa.Column("last_login_utc", sa.DateTime(), nullable=True),
-        sa.Column("api_key", sa.String(length=60), nullable=True),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("email_address"),
+        sa.UniqueConstraint("username"),
     )
 
     op.create_table(
         "settings",
         sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("retention_period", sa.Integer(), nullable=True),
-        sa.Column("max_runtime_jobs", sa.Integer(), nullable=True),
-        sa.Column("max_runtime_tasks", sa.Integer(), nullable=True),
+        sa.Column("retention_period", sa.Integer(), nullable=False),
         sa.Column("enabled_job_weights", sa.Boolean(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
     )
 
     op.create_table(
-        "customers",
+        "domains",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("name", sa.String(length=40), nullable=False),
         sa.PrimaryKeyConstraint("id"),
@@ -54,8 +49,10 @@ def upgrade():
         sa.Column("name", sa.String(length=256), nullable=False),
         sa.Column("uploaded_at", sa.DateTime(), nullable=False),
         sa.Column("runtime", sa.Integer(), nullable=True),
-        sa.Column("customer_id", sa.Integer(), nullable=False),
+        sa.Column("domain_id", sa.Integer(), nullable=False),
         sa.Column("owner_id", sa.Integer(), nullable=False),
+        sa.ForeignKeyConstraint(["domain_id"], ["domains.id"]),
+        sa.ForeignKeyConstraint(["owner_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
 
@@ -71,9 +68,9 @@ def upgrade():
         sa.Column("started_at", sa.DateTime(), nullable=True),
         sa.Column("ended_at", sa.DateTime(), nullable=True),
         sa.Column("hashfile_id", sa.Integer(), nullable=True),
-        sa.Column("customer_id", sa.Integer(), nullable=False),
+        sa.Column("domain_id", sa.Integer(), nullable=False),
         sa.Column("owner_id", sa.Integer(), nullable=False),
-        sa.ForeignKeyConstraint(["customer_id"], ["customers.id"]),
+        sa.ForeignKeyConstraint(["domain_id"], ["domains.id"]),
         sa.ForeignKeyConstraint(["owner_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -187,6 +184,6 @@ def downgrade():
     op.drop_table("rules")
     op.drop_table("jobs")
     op.drop_table("hashfiles")
-    op.drop_table("customers")
+    op.drop_table("domains")
     op.drop_table("settings")
     op.drop_table("users")

@@ -11,8 +11,6 @@ from hashcrush.models import db
 from hashcrush.models import Users, Jobs, Wordlists, Rules, TaskGroups, Tasks
 from hashcrush.users.forms import LoginForm, UsersForm, ProfileForm
 
-import uuid
-
 bcrypt = Bcrypt()
 
 
@@ -48,7 +46,7 @@ def login_post():
         current_app.logger.info('Login failed: form validation.')
         return failed()
 
-    user = Users.query.filter_by(email_address=form.username.data).first()
+    user = Users.query.filter_by(username=form.username.data).first()
     if not user:
         current_app.logger.info('Login failed: unknown user for username=%s.', form.username.data)
         return failed()
@@ -60,7 +58,7 @@ def login_post():
     login_user(user, remember=form.remember.data)
     user.last_login_utc = datetime.utcnow()
     db.session.commit()
-    current_app.logger.info('Login succeeded: user=%s.', user.email_address)
+    current_app.logger.info('Login succeeded: user=%s.', user.username)
     next_url = request.args.get("next")
     if next_url:
         parsed = urlparse(next_url)
@@ -99,9 +97,7 @@ def users_add():
         if form.validate_on_submit():
             hashed_password = bcrypt.generate_password_hash(form.password.data).decode('utf-8')
             user = Users(
-                first_name=form.first_name.data,
-                last_name=form.last_name.data,
-                email_address=form.username.data,
+                username=form.username.data,
                 admin=form.is_admin.data,
                 password=hashed_password,
             )
@@ -147,32 +143,12 @@ def profile():
 
             current_user.password = bcrypt.generate_password_hash(form.new_password.data).decode('utf-8')
             current_user.last_login_utc = datetime.utcnow()
-
-        current_user.first_name = form.first_name.data
-        current_user.last_name = form.last_name.data
-        db.session.commit()
-
-        if password_change_requested:
-            flash('Profile and password updated.', 'success')
+            db.session.commit()
+            flash('Password updated.', 'success')
         else:
-            flash('Profile Updated!', 'success')
-
+            flash('No profile fields to update. Submit password fields to rotate credentials.', 'info')
         return redirect(url_for('users.profile'))
-    elif request.method == 'GET':
-        form.first_name.data = current_user.first_name
-        form.last_name.data = current_user.last_name
     return render_template('profile.html', title='Profile', form=form, current_user=current_user)
-
-@users.route("/profile/generate_api_key", methods=['GET'])
-@login_required
-def generate_api_key():
-    """Function to generate API key"""
-
-    user = Users.query.get(current_user.id)
-    user.api_key = str(uuid.uuid4())
-    db.session.commit()
-    flash('New API Key Set', 'success')
-    return redirect(url_for('users.profile'))
 
 @users.route("/admin_reset_password/<int:user_id>", methods=['POST'])
 @login_required
@@ -202,5 +178,5 @@ def admin_reset(user_id):
     user.password = bcrypt.generate_password_hash(new_password).decode('utf-8')
     user.last_login_utc = datetime.utcnow()
     db.session.commit()
-    flash(f'Password updated for user {user.email_address}. Share it securely and ask the user to change it in Profile.', 'success')
+    flash(f'Password updated for user {user.username}. Share it securely and ask the user to change it in Profile.', 'success')
     return redirect(url_for('users.users_list'))

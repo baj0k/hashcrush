@@ -6,7 +6,7 @@ import pytest
 
 from hashcrush import create_app
 from hashcrush.models import (
-    Customers,
+    Domains,
     Hashes,
     HashfileHashes,
     Hashfiles,
@@ -48,12 +48,9 @@ def _load_cli_module():
 def _seed_admin_user() -> Users:
     valid_password_hash = bcrypt.generate_password_hash("test-admin-password").decode("utf-8")
     user = Users(
-        first_name="Admin",
-        last_name="User",
-        email_address="admin@example.com",
+        username="admin",
         password=valid_password_hash,
         admin=True,
-        api_key="admin-api-key",
     )
     db.session.add(user)
     db.session.commit()
@@ -63,8 +60,6 @@ def _seed_admin_user() -> Users:
 def _seed_settings() -> Settings:
     settings = Settings(
         retention_period=0,
-        max_runtime_jobs=0,
-        max_runtime_tasks=0,
         enabled_job_weights=False,
     )
     db.session.add(settings)
@@ -94,32 +89,32 @@ def test_ensure_settings_cli_adds_settings_only_when_missing():
 
 
 @pytest.mark.security
-def test_analytics_download_rejects_invalid_customer_id_and_uses_hashfile_id_in_filename():
+def test_analytics_download_rejects_invalid_domain_id_and_uses_hashfile_id_in_filename():
     app = _build_app()
     with app.app_context():
         db.create_all()
         user = _seed_admin_user()
         _seed_settings()
-        customer = Customers(name="ACME")
-        db.session.add(customer)
+        domain = Domains(name="ACME")
+        db.session.add(domain)
         db.session.commit()
-        hashfile = Hashfiles(name="sample.txt", customer_id=customer.id, owner_id=user.id)
+        hashfile = Hashfiles(name="sample.txt", domain_id=domain.id, owner_id=user.id)
         db.session.add(hashfile)
         db.session.commit()
 
         client = app.test_client()
         _login_client_as_user(client, user)
 
-        invalid = client.get("/analytics/download?type=found&customer_id=../../etc/passwd")
+        invalid = client.get("/analytics/download?type=found&domain_id=../../etc/passwd")
         assert invalid.status_code == 302
         assert invalid.headers["Location"].endswith("/analytics")
 
         valid = client.get(
-            f"/analytics/download?type=found&customer_id={customer.id}&hashfile_id={hashfile.id}"
+            f"/analytics/download?type=found&domain_id={domain.id}&hashfile_id={hashfile.id}"
         )
         assert valid.status_code == 200
         content_disposition = valid.headers.get("Content-Disposition", "")
-        assert f"found_{customer.id}_{hashfile.id}.txt" in content_disposition
+        assert f"found_{domain.id}_{hashfile.id}.txt" in content_disposition
 
 
 @pytest.mark.security
@@ -130,11 +125,11 @@ def test_hashfiles_delete_removes_orphan_hashes():
         user = _seed_admin_user()
         _seed_settings()
 
-        customer = Customers(name="ACME")
-        db.session.add(customer)
+        domain = Domains(name="ACME")
+        db.session.add(domain)
         db.session.commit()
 
-        hashfile = Hashfiles(name="to-delete.txt", customer_id=customer.id, owner_id=user.id)
+        hashfile = Hashfiles(name="to-delete.txt", domain_id=domain.id, owner_id=user.id)
         db.session.add(hashfile)
         db.session.commit()
 
@@ -230,8 +225,7 @@ def test_rules_selectable_files_support_nested_folders(tmp_path):
     non_rule_file.write_text("Z", encoding="utf-8")
     hidden_dir = rules_root / ".hidden"
     hidden_dir.mkdir(parents=True, exist_ok=True)
-    hidden_file = hidden_dir / "secret.rule"
-    hidden_file.write_text("Y", encoding="utf-8")
+    (hidden_dir / "secret.rule").write_text("Y", encoding="utf-8")
 
     selectable_files, truncated = _list_selectable_files(str(rules_root))
     assert truncated is False
@@ -241,7 +235,7 @@ def test_rules_selectable_files_support_nested_folders(tmp_path):
 
     resolved_nested = _resolve_selected_file("example_folder1/best64.rule", str(rules_root))
     assert resolved_nested == str(nested_file.resolve())
-    assert _resolve_selected_file(".hidden/secret.rule", str(rules_root)) == str(hidden_file.resolve())
+    assert _resolve_selected_file(".hidden/secret.rule", str(rules_root)) is None
     assert _resolve_selected_file("../etc/passwd", str(rules_root)) is None
     missing_files, missing_truncated = _list_selectable_files(str(rules_root / "does-not-exist"))
     assert missing_files == []
@@ -263,8 +257,7 @@ def test_wordlists_selectable_files_support_nested_folders(tmp_path):
     disallowed_file.write_text("x,y", encoding="utf-8")
     hidden_dir = wordlists_root / ".hidden"
     hidden_dir.mkdir(parents=True, exist_ok=True)
-    hidden_file = hidden_dir / "secret.txt"
-    hidden_file.write_text("secret", encoding="utf-8")
+    (hidden_dir / "secret.txt").write_text("secret", encoding="utf-8")
 
     selectable_files, truncated = _list_selectable_files(str(wordlists_root))
     assert truncated is False
@@ -278,7 +271,7 @@ def test_wordlists_selectable_files_support_nested_folders(tmp_path):
     resolved_nested_tar = _resolve_selected_file("example_folder1/rockyou.txt.tar.gz", str(wordlists_root))
     assert resolved_nested_tar is None
     assert _resolve_selected_file("example_folder1/ignore.csv", str(wordlists_root)) is None
-    assert _resolve_selected_file(".hidden/secret.txt", str(wordlists_root)) == str(hidden_file.resolve())
+    assert _resolve_selected_file(".hidden/secret.txt", str(wordlists_root)) is None
     assert _resolve_selected_file("../etc/passwd", str(wordlists_root)) is None
     missing_files, missing_truncated = _list_selectable_files(str(wordlists_root / "does-not-exist"))
     assert missing_files == []

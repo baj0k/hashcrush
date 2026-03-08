@@ -28,7 +28,7 @@ Tasks are predefined hashcat commands. Any number of tasks can be assigned to a 
                             <td>
                                 {% for user in users %}
                                     {% if user.id == task.owner_id %}
-                                        {{ user.first_name }} {{ user.last_name }}
+                                        {{ user.username }}
                                     {% endif %}
                                 {% endfor %}
                             </td>

@@ -1,9 +1,9 @@
 {% extends "layout.html"%}
 {% block header %}
 <br>
-<h1>Customers</h1>
+<h1>Domains</h1>
 <br>
-The following are a list of customers currently configured in HashCrush. All Jobs, passwords and hashes will be assigned to a single customer. Deleting a customer will remove ALL data from the system.
+The following are domains currently configured in HashCrush. All jobs, passwords, and hashes are assigned to a single domain. Deleting a domain removes all associated data.
 <br>
 <br>
 <br>
@@ -19,13 +19,13 @@ The following are a list of customers currently configured in HashCrush. All Job
                   </tr>
                 </thead>
                 <tbody>
-                    {% for customer in customers %}
+                    {% for domain in domains %}
                         <tr>
-                            <td>{{ customer.name }}</td>
+                            <td>{{ domain.name }}</td>
                             <td>
-                                <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{customer.id}}" title=Info></button> 
-                                <a class="fa fa-pie-chart btn btn-warning" href="/analytics?customer_id={{customer.id}}" role="button" title=Analytics></a> 
-                                <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{customer.id}}" title=Delete></button>
+                                <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{domain.id}}" title=Info></button>
+                                <a class="fa fa-pie-chart btn btn-warning" href="/analytics?domain_id={{domain.id}}" role="button" title=Analytics></a>
+                                <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{domain.id}}" title=Delete></button>
                             </td>
                         </tr>
                     {% endfor %}
@@ -33,13 +33,13 @@ The following are a list of customers currently configured in HashCrush. All Job
               </table>
         </div>
     </article>
-    {% for customer in customers %}
+    {% for domain in domains %}
     <!-- InfoModal -->
-    <div class="modal fade" id="infoModal{{customer.id}}" tabindex="-1" aria-labelledby="infoModal{{customer.id}}Label" aria-hidden="true">
+    <div class="modal fade" id="infoModal{{domain.id}}" tabindex="-1" aria-labelledby="infoModal{{domain.id}}Label" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header">
-            <h5 class="modal-title" id="infoModal{{customer.id}}Label">Info: {{customer.name}}</h5>
+            <h5 class="modal-title" id="infoModal{{domain.id}}Label">Info: {{domain.name}}</h5>
             <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                 <span aria-hidden="true">&times;</span>
             </button>
@@ -51,7 +51,7 @@ The following are a list of customers currently configured in HashCrush. All Job
                             <th scope="row">Associated Jobs</th>
                             <td>
                                 {% for job in jobs %}
-                                    {% if job.customer_id == customer.id %}
+                                    {% if job.domain_id == domain.id %}
                                         {{ job.name }} <br>
                                     {% endif %}
                                 {% endfor %}
@@ -61,10 +61,10 @@ The following are a list of customers currently configured in HashCrush. All Job
                             <th scope="row">Associated Hashfiles</th>
                             <td>
                                 {% for hashfile in hashfiles %}
-                                    {% if hashfile.customer_id == customer.id %}
+                                    {% if hashfile.domain_id == domain.id %}
                                         {{ hashfile.name }} <br>
                                     {% endif %}
-                                {% endfor %}    
+                                {% endfor %}
                             </td>
                           </tr>
                       </tbody>
@@ -77,23 +77,23 @@ The following are a list of customers currently configured in HashCrush. All Job
         </div>
     </div>
     {% endfor %}
-    {% for customer in customers %}
+    {% for domain in domains %}
     <!-- DeleteModal -->
-    <div class="modal fade" id="deleteModal{{customer.id}}" tabindex="-1" aria-labelledby="deleteModal{{customer.id}}Label" aria-hidden="true">
+    <div class="modal fade" id="deleteModal{{domain.id}}" tabindex="-1" aria-labelledby="deleteModal{{domain.id}}Label" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header">
-            <h5 class="modal-title" id="deleteModal{{customer.id}}Label">Delete: {{customer.name}} ?</h5>
+            <h5 class="modal-title" id="deleteModal{{domain.id}}Label">Delete: {{domain.name}} ?</h5>
             <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                 <span aria-hidden="true">&times;</span>
             </button>
             </div>
             <div class="modal-body">
-            This will permanently delete the customer and any associated hashfiles and hashes. Are you sure you want to continue?
+            This will permanently delete the domain and any associated hashfiles and hashes. Are you sure you want to continue?
             </div>
             <div class="modal-footer">
             <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
-            <form action="{{ url_for('customers.customers_delete', customer_id=customer.id) }}" method="POST">
+            <form action="{{ url_for('domains.domains_delete', domain_id=domain.id) }}" method="POST">
                 <input class="btn btn-danger" type="submit" value="Delete">
             </form>
             </div>

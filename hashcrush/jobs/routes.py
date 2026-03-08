@@ -7,7 +7,7 @@ from flask import Blueprint, render_template, redirect, flash, url_for, current_
 from flask_login import login_required, current_user
 from sqlalchemy import func, case
 from hashcrush.jobs.forms import JobsForm, JobsNewHashFileForm, JobSummaryForm
-from hashcrush.models import Jobs, Customers, Hashfiles, Users, HashfileHashes, Hashes, JobTasks, Tasks, TaskGroups, Settings
+from hashcrush.models import Jobs, Domains, Hashfiles, Users, HashfileHashes, Hashes, JobTasks, Tasks, TaskGroups
 from hashcrush.utils.utils import save_file, import_hashfilehashes, build_hashcat_command, validate_pwdump_hashfile, validate_netntlm_hashfile, validate_kerberos_hashfile, validate_shadow_hashfile, validate_user_hash_hashfile, validate_hash_only_hashfile
 from hashcrush.models import db
 
@@ -23,27 +23,27 @@ def _can_manage_job(job: Jobs | None) -> bool:
 def jobs_list():
     """Function to return list of Jobs"""
     jobs = Jobs.query.order_by(Jobs.created_at.desc()).all()
-    customers = Customers.query.all()
+    domains = Domains.query.all()
     users = Users.query.all()
     hashfiles = Hashfiles.query.all()
     job_tasks = JobTasks.query.all()
     tasks = Tasks.query.all()
-    return render_template('jobs.html', title='Jobs', jobs=jobs, customers=customers, users=users, hashfiles=hashfiles, job_tasks=job_tasks, tasks=tasks)
+    return render_template('jobs.html', title='Jobs', jobs=jobs, domains=domains, users=users, hashfiles=hashfiles, job_tasks=job_tasks, tasks=tasks)
 
 @jobs.route("/jobs/add", methods=['GET', 'POST'])
 @login_required
 def jobs_add():
     """Function to manage adding of new job"""
     jobs = Jobs.query.all()
-    customers = Customers.query.order_by(Customers.name).all()
+    domains = Domains.query.order_by(Domains.name).all()
     jobs_form = JobsForm()
     if jobs_form.validate_on_submit():
-        customer_id = jobs_form.customer_id.data
-        if jobs_form.customer_id.data == 'add_new':
-            customer = Customers(name=jobs_form.customer_name.data)
-            db.session.add(customer)
+        domain_id = jobs_form.domain_id.data
+        if jobs_form.domain_id.data == 'add_new':
+            domain = Domains(name=jobs_form.domain_name.data)
+            db.session.add(domain)
             db.session.commit()
-            customer_id = customer.id
+            domain_id = domain.id
 
         try:
             selected_priority = int(jobs_form.priority.data)
@@ -54,12 +54,12 @@ def jobs_add():
         job = Jobs( name = jobs_form.name.data,
                     priority = job_priority,
                     status = 'Incomplete',
-                    customer_id = customer_id,
+                    domain_id = domain_id,
                     owner_id = current_user.id)
         db.session.add(job)
         db.session.commit()
         return redirect(str(job.id)+"/assigned_hashfile/")
-    return render_template('jobs_add.html', title='Jobs', jobs=jobs, customers=customers, jobsForm=jobs_form)
+    return render_template('jobs_add.html', title='Jobs', jobs=jobs, domains=domains, jobsForm=jobs_form)
 
 @jobs.route("/jobs/<int:job_id>/assigned_hashfile/", methods=['GET', 'POST'])
 @login_required
@@ -71,7 +71,7 @@ def jobs_assigned_hashfile(job_id):
         flash('You do not have rights to modify this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
-    hashfiles = Hashfiles.query.filter_by(customer_id=job.customer_id).all()
+    hashfiles = Hashfiles.query.filter_by(domain_id=job.domain_id).all()
     jobs_new_hashfile_form = JobsNewHashFileForm()
     hashfile_cracked_rate = {}
 
@@ -151,7 +151,7 @@ def jobs_assigned_hashfile(job_id):
                 if not hashfile_name and jobs_new_hashfile_form.hashfile.data:
                     hashfile_name = jobs_new_hashfile_form.hashfile.data.filename
                 hashfile_name = hashfile_name or f'hashfile_{secrets.token_hex(4)}.txt'
-                hashfile = Hashfiles(name=hashfile_name, customer_id=job.customer_id, owner_id=current_user.id)
+                hashfile = Hashfiles(name=hashfile_name, domain_id=job.domain_id, owner_id=current_user.id)
                 db.session.add(hashfile)
                 db.session.commit()
 
@@ -408,7 +408,7 @@ def jobs_summary(job_id):
     form = JobSummaryForm()
     tasks = Tasks.query.all()
     hashfile = Hashfiles.query.get(job.hashfile_id)
-    customer = Customers.query.get(job.customer_id)
+    domain = Domains.query.get(job.domain_id)
     cracked_cnt = db.session.query(Hashes).outerjoin(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile.id).count()
     hash_total = db.session.query(Hashes).outerjoin(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(HashfileHashes.hashfile_id==hashfile.id).count()
     cracked_rate = str(cracked_cnt) + '/' + str(hash_total)
@@ -425,7 +425,7 @@ def jobs_summary(job_id):
 
         return redirect(url_for('jobs.jobs_list'))
 
-    return render_template('jobs_summary.html', title='Job Summary', job=job, form=form, cracked_rate=cracked_rate, job_tasks=job_tasks, customer=customer, hashfile=hashfile, tasks=tasks)
+    return render_template('jobs_summary.html', title='Job Summary', job=job, form=form, cracked_rate=cracked_rate, job_tasks=job_tasks, domain=domain, hashfile=hashfile, tasks=tasks)
 
 @jobs.route("/jobs/start/<int:job_id>", methods=['GET'])
 @login_required

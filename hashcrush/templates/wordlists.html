@@ -32,7 +32,7 @@ Configured root: <code>{{ wordlists_root }}</code>
                             <td>
                                 {% for user in users %}
                                     {% if user.id == wordlist.owner_id %}
-                                        {{ user.first_name }} {{ user.last_name }}
+                                        {{ user.username }}
                                     {% endif %}
                                 {% endfor %}
                             </td>

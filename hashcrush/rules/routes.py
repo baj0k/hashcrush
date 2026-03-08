@@ -14,6 +14,10 @@ rules = Blueprint('rules', __name__)
 MAX_SELECTABLE_RULE_FILES = 5000
 
 
+def _contains_hidden_segment(relative_path: str) -> bool:
+    return any(segment.startswith('.') for segment in relative_path.split('/') if segment not in ('', '.'))
+
+
 def _rules_root_path() -> str:
     configured = current_app.config.get('RULES_PATH')
     if configured:
@@ -43,12 +47,46 @@ def _list_selectable_files(base_dir: str, max_entries: int = MAX_SELECTABLE_RULE
     return [(path, path) for path in discovered], False
 
 
+def _build_file_tree(relative_paths: list[str]) -> dict:
+    root = {"dirs": {}, "files": []}
+    for relative_path in relative_paths:
+        parts = [segment for segment in relative_path.split('/') if segment]
+        if not parts:
+            continue
+        node = root
+        for segment in parts[:-1]:
+            node = node["dirs"].setdefault(segment, {"dirs": {}, "files": []})
+        node["files"].append(parts[-1])
+    return _serialize_file_tree(root, "")
+
+
+def _serialize_file_tree(node: dict, prefix: str) -> dict:
+    serialized_dirs = []
+    for dirname in sorted(node["dirs"].keys(), key=str.casefold):
+        child = node["dirs"][dirname]
+        child_prefix = f"{prefix}/{dirname}" if prefix else dirname
+        serialized_child = _serialize_file_tree(child, child_prefix)
+        serialized_child["name"] = dirname
+        serialized_child["path"] = child_prefix
+        serialized_dirs.append(serialized_child)
+
+    serialized_files = []
+    for filename in sorted(node["files"], key=str.casefold):
+        file_path = f"{prefix}/{filename}" if prefix else filename
+        serialized_files.append({"name": filename, "path": file_path})
+
+    return {"dirs": serialized_dirs, "files": serialized_files}
+
+
 def _resolve_selected_file(selected_relative_path: str, base_dir: str) -> str | None:
     selected = (selected_relative_path or '').strip()
     if not selected:
         return None
+    normalized_selected = selected.replace('\\', '/')
+    if _contains_hidden_segment(normalized_selected):
+        return None
 
-    candidate = os.path.abspath(os.path.join(base_dir, selected))
+    candidate = os.path.abspath(os.path.join(base_dir, normalized_selected))
     try:
         if os.path.commonpath([candidate, base_dir]) != base_dir:
             return None
@@ -83,6 +121,8 @@ def rules_add():
     rules_root = _rules_root_path()
     rules_root_exists = os.path.isdir(rules_root)
     selectable_files, selectable_truncated = _list_selectable_files(rules_root)
+    selectable_paths = [path for path, _ in selectable_files]
+    selectable_tree = _build_file_tree(selectable_paths)
     form.existing_file.choices = [('', '--SELECT FILE--')] + selectable_files
 
     if form.validate_on_submit():
@@ -96,6 +136,7 @@ def rules_add():
                 rules_root_exists=rules_root_exists,
                 selectable_count=len(selectable_files),
                 selectable_truncated=selectable_truncated,
+                selectable_tree=selectable_tree,
             )
 
         rules_path = _resolve_selected_file(form.existing_file.data, rules_root)
@@ -109,6 +150,7 @@ def rules_add():
                 rules_root_exists=rules_root_exists,
                 selectable_count=len(selectable_files),
                 selectable_truncated=selectable_truncated,
+                selectable_tree=selectable_tree,
             )
 
         rules_path = os.path.abspath(rules_path)
@@ -136,6 +178,7 @@ def rules_add():
         rules_root_exists=rules_root_exists,
         selectable_count=len(selectable_files),
         selectable_truncated=selectable_truncated,
+        selectable_tree=selectable_tree,
     )
 
 
