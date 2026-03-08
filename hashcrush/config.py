@@ -199,8 +199,8 @@ class Config:
     _default_wordlists_path = '/usr/share/seclists/Passwords'
     _default_rules_path = '/usr/share/hashcat/rules'
     _default_runtime_path = os.path.join(tempfile.gettempdir(), 'hashcrush-runtime')
-    _default_ssl_cert_path = os.path.join(os.path.dirname(__file__), 'ssl', 'cert.pem')
-    _default_ssl_key_path = os.path.join(os.path.dirname(__file__), 'ssl', 'key.pem')
+    _default_ssl_cert_path = '/etc/hashcrush/ssl/cert.pem'
+    _default_ssl_key_path = '/etc/hashcrush/ssl/key.pem'
 
     WORDLISTS_PATH = _normalize_dir_path(
         os.getenv('HASHCRUSH_WORDLISTS_PATH')

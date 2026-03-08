@@ -14,6 +14,33 @@ rules = Blueprint('rules', __name__)
 MAX_SELECTABLE_RULE_FILES = 5000
 
 
+def _visible_rules_query():
+    query = Rules.query
+    if not current_user.admin:
+        query = query.filter(Rules.owner_id == current_user.id)
+    return query
+
+
+def _visible_tasks_query():
+    query = Tasks.query
+    if not current_user.admin:
+        query = query.filter(Tasks.owner_id == current_user.id)
+    return query
+
+
+def _visible_jobs_query():
+    query = Jobs.query
+    if not current_user.admin:
+        query = query.filter(Jobs.owner_id == current_user.id)
+    return query
+
+
+def _visible_users():
+    if current_user.admin:
+        return Users.query.all()
+    return [current_user]
+
+
 def _contains_hidden_segment(relative_path: str) -> bool:
     return any(segment.startswith('.') for segment in relative_path.split('/') if segment not in ('', '.'))
 
@@ -105,11 +132,16 @@ def _resolve_selected_file(selected_relative_path: str, base_dir: str) -> str | 
 @login_required
 def rules_list():
     """Function to return list of rules"""
-    rules = Rules.query.all()
-    tasks = Tasks.query.all()
-    jobs = Jobs.query.all()
-    jobtasks = JobTasks.query.all()
-    users = Users.query.all()
+    rules = _visible_rules_query().all()
+    tasks = _visible_tasks_query().all()
+    jobs = _visible_jobs_query().all()
+    visible_job_ids = [job.id for job in jobs]
+    jobtasks = (
+        JobTasks.query.filter(JobTasks.job_id.in_(visible_job_ids)).all()
+        if visible_job_ids
+        else []
+    )
+    users = _visible_users()
     return render_template('rules.html', title='Rules', rules=rules, tasks=tasks, jobs=jobs, jobtasks=jobtasks, users=users, rules_root=_rules_root_path())
 
 

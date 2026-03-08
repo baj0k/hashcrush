@@ -257,7 +257,7 @@ def cli(args) -> int:
             werkzeug_logger.setLevel(logging.ERROR)
 
         if parsed_args.no_ssl:
-            app.run(debug=parsed_args.debug)
+            app.run(host='0.0.0.0', port=8080, debug=parsed_args.debug)
 
         else:
             ssl_context = _resolve_ssl_context(app)

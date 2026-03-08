@@ -67,7 +67,7 @@ export HASHCRUSH_SSL_KEY_PATH='/run/secrets/hashcrush-key.pem'
 Optional flags:
 
 - --debug
-- --no-ssl (default port 5000)
+- --no-ssl (default port 8080)
 - --reset-admin-password
 - --reset-admin-password --admin-username <admin_username>
 
@@ -101,4 +101,10 @@ pytest -q
 
 ## Docker
 
-currently not working as intended. completely unreliable
+Docker now uses Python 3.12 and runs with `gunicorn` on port `8080`.
+
+```bash
+docker compose up --build
+```
+
+App endpoint: `http://127.0.0.1:8080`

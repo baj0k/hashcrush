@@ -19,6 +19,7 @@ Jobs contain a series of tasks (hashcat commands). Jobs also have an associated 
                     <th scope="col">Name</th>
                     <th scope="col">Hash File</th>
                     <th scope="col">Status</th>
+                    <th scope="col">Recovered</th>
                     <th scope="col">% Done</th>
                     <th scope="col">ETA</th>
                     <th scope="col">Owner</th>
@@ -45,6 +46,7 @@ Jobs contain a series of tasks (hashcat commands). Jobs also have an associated 
                                 {% endfor %}
                             </td>
                             <td>{{ job.status }}</td>
+                            <td>{{ job_recovered.get(job.id, '0/0') }}</td>
                             <td>
                                 {% if runtime %}
                                     {{ runtime.percent_done }}

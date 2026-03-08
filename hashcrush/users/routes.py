@@ -186,6 +186,8 @@ def logout():
 @login_required
 def users_list():
     """Function to list users"""
+    if not current_user.admin:
+        abort(403)
 
     users = Users.query.all()
     jobs = Jobs.query.all()

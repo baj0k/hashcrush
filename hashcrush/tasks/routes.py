@@ -8,17 +8,64 @@ from hashcrush.models import db
 
 tasks = Blueprint('tasks', __name__)
 
+
+def _visible_tasks_query():
+    query = Tasks.query
+    if not current_user.admin:
+        query = query.filter(Tasks.owner_id == current_user.id)
+    return query
+
+
+def _visible_wordlists_query():
+    query = Wordlists.query
+    if not current_user.admin:
+        query = query.filter(Wordlists.owner_id == current_user.id)
+    return query
+
+
+def _visible_rules_query():
+    query = Rules.query
+    if not current_user.admin:
+        query = query.filter(Rules.owner_id == current_user.id)
+    return query
+
+
+def _visible_jobs_query():
+    query = Jobs.query
+    if not current_user.admin:
+        query = query.filter(Jobs.owner_id == current_user.id)
+    return query
+
+
+def _visible_task_groups_query():
+    query = TaskGroups.query
+    if not current_user.admin:
+        query = query.filter(TaskGroups.owner_id == current_user.id)
+    return query
+
+
+def _visible_users():
+    if current_user.admin:
+        return Users.query.all()
+    return [current_user]
+
+
 @tasks.route("/tasks", methods=['GET', 'POST'])
 @login_required
 def tasks_list():
     """Function to list tasks"""
 
-    tasks = Tasks.query.all()
-    users = Users.query.all()
-    jobs = Jobs.query.all()
-    job_tasks = JobTasks.query.all()
-    wordlists = Wordlists.query.all()
-    task_groups = TaskGroups.query.all()
+    tasks = _visible_tasks_query().all()
+    users = _visible_users()
+    jobs = _visible_jobs_query().all()
+    visible_job_ids = [job.id for job in jobs]
+    job_tasks = (
+        JobTasks.query.filter(JobTasks.job_id.in_(visible_job_ids)).all()
+        if visible_job_ids
+        else []
+    )
+    wordlists = _visible_wordlists_query().all()
+    task_groups = _visible_task_groups_query().all()
     return render_template('tasks.html', title='tasks', tasks=tasks, users=users, jobs=jobs, job_tasks=job_tasks, wordlists=wordlists, task_groups=task_groups)
 
 @tasks.route("/tasks/add", methods=['GET', 'POST'])
@@ -32,8 +79,8 @@ def tasks_add():
     tasksForm.rule_id.choices = []
     tasksForm.wl_id.choices = []
 
-    wordlists = Wordlists.query.all()
-    rules = Rules.query.all()
+    wordlists = _visible_wordlists_query().all()
+    rules = _visible_rules_query().all()
 
     for wordlist in wordlists:
         tasksForm.wl_id.choices += [(wordlist.id, wordlist.name)]
@@ -80,7 +127,7 @@ def tasks_add():
 def task_edit(task_id):
     """Function to edit task"""
 
-    task = Tasks.query.get_or_404(task_id)
+    task = _visible_tasks_query().filter(Tasks.id == task_id).first_or_404()
 
     # Check whether the task is currently assigned to any active job task.
     affected_jobs = JobTasks.query.filter_by(task_id=task_id).all()
@@ -88,105 +135,97 @@ def task_edit(task_id):
         flash('Can not edit this task. It is currently associated to one or more jobs.', 'danger')
         return redirect(url_for('tasks.tasks_list'))
 
-    if current_user.admin or task.owner_id == current_user.id:
-        tasksForm = TasksForm()
+    tasksForm = TasksForm()
 
-        # clear select field for wordlists and rules
-        tasksForm.rule_id.choices = []
-        tasksForm.wl_id.choices = []
+    # clear select field for wordlists and rules
+    tasksForm.rule_id.choices = []
+    tasksForm.wl_id.choices = []
 
-        wordlists = Wordlists.query.all()
-        # Add the current value for wordlist.
-        if task.hc_attackmode == 'dictionary':
-            edit_task_wl = Wordlists.query.get(task.wl_id)
-            if edit_task_wl:
-                tasksForm.wl_id.choices.append((edit_task_wl.id, edit_task_wl.name))
-        rules = Rules.query.all()
-        # Check if the current value for rule is an integer.
-        if isinstance(task.rule_id, int):
-            edit_task_rl = Rules.query.get(task.rule_id)
-            if edit_task_rl:
-                tasksForm.rule_id.choices.append((edit_task_rl.id, edit_task_rl.name))
-                tasksForm.rule_id.choices.append(('None', 'None'))
-        else:
-            # If it's not an integer, set rule_id and rule_name to 'None'.
+    wordlists = _visible_wordlists_query().all()
+    # Add the current value for wordlist.
+    if task.hc_attackmode == 'dictionary':
+        edit_task_wl = _visible_wordlists_query().filter(Wordlists.id == task.wl_id).first()
+        if edit_task_wl:
+            tasksForm.wl_id.choices.append((edit_task_wl.id, edit_task_wl.name))
+    rules = _visible_rules_query().all()
+    # Check if the current value for rule is an integer.
+    if isinstance(task.rule_id, int):
+        edit_task_rl = _visible_rules_query().filter(Rules.id == task.rule_id).first()
+        if edit_task_rl:
+            tasksForm.rule_id.choices.append((edit_task_rl.id, edit_task_rl.name))
             tasksForm.rule_id.choices.append(('None', 'None'))
+    else:
+        # If it's not an integer, set rule_id and rule_name to 'None'.
+        tasksForm.rule_id.choices.append(('None', 'None'))
 
-        # Populate the choices for wordlists excluding the current value.
-        tasksForm.wl_id.choices += [(wordlist.id, wordlist.name) for wordlist in wordlists if wordlist.id != task.wl_id]
+    # Populate the choices for wordlists excluding the current value.
+    tasksForm.wl_id.choices += [(wordlist.id, wordlist.name) for wordlist in wordlists if wordlist.id != task.wl_id]
 
-        # Populate the choices for rules excluding the current value.
-        tasksForm.rule_id.choices += [(rule.id, rule.name) for rule in rules if rule.id != task.rule_id]
+    # Populate the choices for rules excluding the current value.
+    tasksForm.rule_id.choices += [(rule.id, rule.name) for rule in rules if rule.id != task.rule_id]
 
-        tasksForm.submit.label.text = 'Update'
+    tasksForm.submit.label.text = 'Update'
 
-        if tasksForm.validate_on_submit():
-            if tasksForm.rule_id.data == 'None':
-                tasksForm.rule_id.data = None
+    if tasksForm.validate_on_submit():
+        if tasksForm.rule_id.data == 'None':
+            tasksForm.rule_id.data = None
 
-            if tasksForm.hc_attackmode.data == 'dictionary':
-                task.name = tasksForm.name.data
-                task.wl_id = tasksForm.wl_id.data
-                task.rule_id = tasksForm.rule_id.data
-                task.hc_attackmode = tasksForm.hc_attackmode.data
+        if tasksForm.hc_attackmode.data == 'dictionary':
+            task.name = tasksForm.name.data
+            task.wl_id = tasksForm.wl_id.data
+            task.rule_id = tasksForm.rule_id.data
+            task.hc_attackmode = tasksForm.hc_attackmode.data
 
-                db.session.add(task)
-                db.session.commit()
-                flash(f'Task {tasksForm.name.data} updated!', 'success')
-            elif tasksForm.hc_attackmode.data == 'maskmode':
+            db.session.add(task)
+            db.session.commit()
+            flash(f'Task {tasksForm.name.data} updated!', 'success')
+        elif tasksForm.hc_attackmode.data == 'maskmode':
 
-                task.name = tasksForm.name.data
-                task.wl_id = None
-                task.rule_id = None
-                task.hc_attackmode = tasksForm.hc_attackmode.data
-                task.hc_mask = tasksForm.mask.data
+            task.name = tasksForm.name.data
+            task.wl_id = None
+            task.rule_id = None
+            task.hc_attackmode = tasksForm.hc_attackmode.data
+            task.hc_mask = tasksForm.mask.data
 
-                db.session.add(task)
-                db.session.commit()
-                flash(f'Task {tasksForm.name.data} updated!', 'success')
-            else:
-                flash('Attack Mode not supported... yet...', 'danger')
-            return redirect(url_for('tasks.tasks_list'))
+            db.session.add(task)
+            db.session.commit()
+            flash(f'Task {tasksForm.name.data} updated!', 'success')
+        else:
+            flash('Attack Mode not supported... yet...', 'danger')
+        return redirect(url_for('tasks.tasks_list'))
 
-        tasksForm.name.data = task.name
-        tasksForm.hc_attackmode.data = task.hc_attackmode
-        tasksForm.wl_id.data = str(task.wl_id) if task.wl_id is not None else ''
-        tasksForm.rule_id.data = str(task.rule_id) if isinstance(task.rule_id, int) else 'None'
-        tasksForm.mask.data = task.hc_mask
+    tasksForm.name.data = task.name
+    tasksForm.hc_attackmode.data = task.hc_attackmode
+    tasksForm.wl_id.data = str(task.wl_id) if task.wl_id is not None else ''
+    tasksForm.rule_id.data = str(task.rule_id) if isinstance(task.rule_id, int) else 'None'
+    tasksForm.mask.data = task.hc_mask
 
-        return render_template('tasks_edit.html', title='Tasks Edit', tasksForm=tasksForm, task=task, wordlists=wordlists, rules=rules)
-
-    flash('You are unauthorized to edit this task.', 'danger')
-    return redirect(url_for('tasks.tasks_list'))
+    return render_template('tasks_edit.html', title='Tasks Edit', tasksForm=tasksForm, task=task, wordlists=wordlists, rules=rules)
 
 @tasks.route("/tasks/delete/<int:task_id>", methods=['POST'])
 @login_required
 def tasks_delete(task_id):
     """Function to delete task"""
 
-    task = Tasks.query.get_or_404(task_id)
-    task_groups = TaskGroups.query.all()
-    if current_user.admin or task.owner_id == current_user.id:
+    task = _visible_tasks_query().filter(Tasks.id == task_id).first_or_404()
+    task_groups = _visible_task_groups_query().all()
 
-        # Check if associated with JobTask (which implies its associated with a job)
-        jobtask = JobTasks.query.filter_by(task_id=task_id).first()
-        if jobtask:
-            flash('Can not delete. Task is associated to one or more jobs.', 'danger')
-            return redirect(url_for('tasks.tasks_list'))
-
-        for task_group in task_groups:
-            try:
-                task_ids = json.loads(task_group.tasks)
-            except (TypeError, ValueError):
-                task_ids = []
-            if task_id in task_ids:
-                flash('Can not delete. The Task is associated to one or more Task Groups.', 'danger')
-                return redirect(url_for('tasks.tasks_list'))
-
-        db.session.delete(task)
-        db.session.commit()
-        flash('Task has been deleted!', 'success')
+    # Check if associated with JobTask (which implies its associated with a job)
+    jobtask = JobTasks.query.filter_by(task_id=task_id).first()
+    if jobtask:
+        flash('Can not delete. Task is associated to one or more jobs.', 'danger')
         return redirect(url_for('tasks.tasks_list'))
 
-    flash('You are unauthorized to delete this task.', 'danger')
+    for task_group in task_groups:
+        try:
+            task_ids = json.loads(task_group.tasks)
+        except (TypeError, ValueError):
+            task_ids = []
+        if task_id in task_ids:
+            flash('Can not delete. The Task is associated to one or more Task Groups.', 'danger')
+            return redirect(url_for('tasks.tasks_list'))
+
+    db.session.delete(task)
+    db.session.commit()
+    flash('Task has been deleted!', 'success')
     return redirect(url_for('tasks.tasks_list'))

@@ -1,5 +1,6 @@
 from configparser import ConfigParser
 import importlib.util
+import io
 import json
 from pathlib import Path
 
@@ -265,7 +266,6 @@ def test_runtime_bootstrap_creates_required_directories(tmp_path):
     assert (root_path / "control" / "tmp").is_dir()
     assert (root_path / "control" / "hashes").is_dir()
     assert (root_path / "control" / "outfiles").is_dir()
-    assert (root_path / "ssl").is_dir()
 
 
 @pytest.mark.security
@@ -279,7 +279,6 @@ def test_runtime_bootstrap_uses_configured_runtime_root(tmp_path):
     assert (runtime_path / "tmp").is_dir()
     assert (runtime_path / "hashes").is_dir()
     assert (runtime_path / "outfiles").is_dir()
-    assert (root_path / "ssl").is_dir()
 
 
 @pytest.mark.security
@@ -471,6 +470,276 @@ def test_executor_import_stores_plaintext_in_hex_format(tmp_path):
         imported_hash = Hashes.query.get(hash_row.id)
         assert imported_hash.cracked is True
         assert imported_hash.plaintext == encode_plaintext_for_storage("Pa$$w0rd")
+
+
+@pytest.mark.security
+def test_executor_canceled_flow_imports_recovered_hashes(tmp_path, monkeypatch):
+    from hashcrush.executor.service import ActiveTask, LocalExecutorService
+    from hashcrush.utils.utils import encode_plaintext_for_storage, get_md5_hash
+
+    class _DoneProcess:
+        def __init__(self):
+            self.returncode = 1
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(
+        "hashcrush.executor.service.update_job_task_status",
+        lambda job_task_id, status: None,
+    )
+
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="ACME")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="input.txt", domain_id=domain.id, owner_id=user.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = Hashes(
+            sub_ciphertext=get_md5_hash("abc123"),
+            ciphertext="abc123",
+            hash_type=1000,
+            cracked=False,
+            plaintext=None,
+        )
+        db.session.add(hash_row)
+        db.session.commit()
+
+        db.session.add(HashfileHashes(hash_id=hash_row.id, hashfile_id=hashfile.id))
+        db.session.commit()
+
+        task = Tasks(
+            name="mask",
+            hc_attackmode="maskmode",
+            owner_id=user.id,
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a",
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        job = Jobs(
+            name="job-1",
+            status="Running",
+            domain_id=domain.id,
+            owner_id=user.id,
+            hashfile_id=hashfile.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        job_task = JobTasks(job_id=job.id, task_id=task.id, status="Canceled")
+        db.session.add(job_task)
+        db.session.commit()
+
+        crack_path = tmp_path / "cracked.txt"
+        crack_path.write_text("abc123:RecoveredDuringCancel\n", encoding="latin-1")
+        output_path = tmp_path / "hashcat_output.txt"
+        output_path.write_text("Status...........: Aborted\n", encoding="utf-8")
+        hash_path = tmp_path / "hashes.txt"
+        hash_path.write_text("abc123\n", encoding="utf-8")
+        output_file = output_path.open("a", encoding="utf-8")
+
+        service = LocalExecutorService(app)
+        service._active = ActiveTask(
+            job_task_id=job_task.id,
+            process=_DoneProcess(),
+            output_file=output_file,
+            output_path=str(output_path),
+            hash_path=str(hash_path),
+            crack_path=str(crack_path),
+            last_progress_log_at=0.0,
+            last_import_at=0.0,
+        )
+
+        service._monitor_active_task()
+
+        imported_hash = Hashes.query.get(hash_row.id)
+        assert imported_hash.cracked is True
+        assert imported_hash.plaintext == encode_plaintext_for_storage("RecoveredDuringCancel")
+
+
+@pytest.mark.security
+def test_recover_orphaned_tasks_imports_crackfile_before_requeue(tmp_path):
+    from hashcrush.executor.service import LocalExecutorService
+    from hashcrush.utils.utils import encode_plaintext_for_storage, get_md5_hash
+
+    app = _build_app({"RUNTIME_PATH": str(tmp_path)})
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="recover-domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="recover.txt", domain_id=domain.id, owner_id=user.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = Hashes(
+            sub_ciphertext=get_md5_hash("orphan-hash"),
+            ciphertext="orphan-hash",
+            hash_type=1000,
+            cracked=False,
+            plaintext=None,
+        )
+        db.session.add(hash_row)
+        db.session.commit()
+        db.session.add(HashfileHashes(hash_id=hash_row.id, hashfile_id=hashfile.id))
+        db.session.commit()
+
+        task = Tasks(
+            name="recover-task",
+            hc_attackmode="maskmode",
+            owner_id=user.id,
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a",
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        job = Jobs(
+            name="recover-job",
+            status="Running",
+            domain_id=domain.id,
+            owner_id=user.id,
+            hashfile_id=hashfile.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        orphan = JobTasks(job_id=job.id, task_id=task.id, status="Running")
+        db.session.add(orphan)
+        db.session.commit()
+
+        outfiles_dir = tmp_path / "outfiles"
+        outfiles_dir.mkdir(parents=True, exist_ok=True)
+        crack_path = outfiles_dir / f"hc_cracked_{job.id}_{task.id}.txt"
+        crack_path.write_text("orphan-hash:RecoveredAfterCrash\n", encoding="latin-1")
+
+        service = LocalExecutorService(app)
+        service._recover_orphaned_tasks()
+
+        db.session.refresh(orphan)
+        db.session.refresh(job)
+        imported_hash = Hashes.query.get(hash_row.id)
+        assert orphan.status == "Queued"
+        assert job.status == "Queued"
+        assert imported_hash.cracked is True
+        assert imported_hash.plaintext == encode_plaintext_for_storage("RecoveredAfterCrash")
+
+
+@pytest.mark.security
+def test_executor_running_checkpoint_imports_cracks(tmp_path):
+    from hashcrush.executor.service import ActiveTask, LocalExecutorService
+    from hashcrush.utils.utils import encode_plaintext_for_storage, get_md5_hash
+
+    class _RunningProcess:
+        returncode = None
+
+        @staticmethod
+        def poll():
+            return None
+
+    app = _build_app(
+        {
+            "RUNTIME_PATH": str(tmp_path),
+            "CRACK_IMPORT_INTERVAL_SECONDS": 1,
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="checkpoint-domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="checkpoint.txt", domain_id=domain.id, owner_id=user.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = Hashes(
+            sub_ciphertext=get_md5_hash("checkpoint-hash"),
+            ciphertext="checkpoint-hash",
+            hash_type=1000,
+            cracked=False,
+            plaintext=None,
+        )
+        db.session.add(hash_row)
+        db.session.commit()
+        db.session.add(HashfileHashes(hash_id=hash_row.id, hashfile_id=hashfile.id))
+        db.session.commit()
+
+        task = Tasks(
+            name="checkpoint-task",
+            hc_attackmode="maskmode",
+            owner_id=user.id,
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a",
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        job = Jobs(
+            name="checkpoint-job",
+            status="Running",
+            domain_id=domain.id,
+            owner_id=user.id,
+            hashfile_id=hashfile.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        running_task = JobTasks(job_id=job.id, task_id=task.id, status="Running")
+        db.session.add(running_task)
+        db.session.commit()
+
+        outfiles_dir = tmp_path / "outfiles"
+        outfiles_dir.mkdir(parents=True, exist_ok=True)
+        crack_path = outfiles_dir / f"hc_cracked_{job.id}_{task.id}.txt"
+        crack_path.write_text("checkpoint-hash:RecoveredDuringRun\n", encoding="latin-1")
+        output_path = outfiles_dir / f"hcoutput_{job.id}_{running_task.id}.txt"
+        output_path.write_text(
+            "Status...........: Running\nProgress.........: 1/10 (10.00%)\n",
+            encoding="utf-8",
+        )
+        hash_path = tmp_path / "hashes" / f"hashfile_{job.id}_{task.id}.txt"
+        hash_path.parent.mkdir(parents=True, exist_ok=True)
+        hash_path.write_text("checkpoint-hash\n", encoding="utf-8")
+        output_file = output_path.open("a", encoding="utf-8")
+
+        service = LocalExecutorService(app)
+        service._active = ActiveTask(
+            job_task_id=running_task.id,
+            process=_RunningProcess(),
+            output_file=output_file,
+            output_path=str(output_path),
+            hash_path=str(hash_path),
+            crack_path=str(crack_path),
+            last_progress_log_at=0.0,
+            last_import_at=0.0,
+        )
+
+        service._monitor_active_task()
+
+        imported_hash = Hashes.query.get(hash_row.id)
+        assert imported_hash.cracked is True
+        assert imported_hash.plaintext == encode_plaintext_for_storage("RecoveredDuringRun")
 
 
 @pytest.mark.security
@@ -1092,6 +1361,228 @@ def test_task_group_mutation_blocks_non_owner():
 
         db.session.refresh(task_group)
         assert json.loads(task_group.tasks) == []
+
+
+@pytest.mark.security
+def test_analytics_download_scopes_non_admin_to_owned_hashfiles():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        owner = _seed_user("analytics-owner", password="owner-user-password", admin=False)
+        other = _seed_user("analytics-other", password="other-user-password", admin=False)
+        _seed_settings()
+
+        domain = Domains(name="SharedDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        owner_hashfile = Hashfiles(name="owner.txt", domain_id=domain.id, owner_id=owner.id)
+        other_hashfile = Hashfiles(name="other.txt", domain_id=domain.id, owner_id=other.id)
+        db.session.add_all([owner_hashfile, other_hashfile])
+        db.session.commit()
+
+        owner_hash = Hashes(
+            sub_ciphertext="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ciphertext="owner-ciphertext",
+            hash_type=1000,
+            cracked=True,
+            plaintext=encode_plaintext_for_storage("owner-password"),
+        )
+        other_hash = Hashes(
+            sub_ciphertext="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ciphertext="other-ciphertext",
+            hash_type=1000,
+            cracked=True,
+            plaintext=encode_plaintext_for_storage("other-password"),
+        )
+        db.session.add_all([owner_hash, other_hash])
+        db.session.commit()
+
+        db.session.add(HashfileHashes(hash_id=owner_hash.id, hashfile_id=owner_hashfile.id))
+        db.session.add(HashfileHashes(hash_id=other_hash.id, hashfile_id=other_hashfile.id))
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, owner)
+
+        response = client.get("/analytics/download?type=found")
+        assert response.status_code == 200
+        content = response.data.decode("utf-8")
+        assert "owner-ciphertext" in content
+        assert "other-ciphertext" not in content
+
+
+@pytest.mark.security
+def test_search_hash_id_lookup_scopes_non_admin_to_owned_hashfiles():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        owner = _seed_user("search-owner", password="owner-user-password", admin=False)
+        other = _seed_user("search-other", password="other-user-password", admin=False)
+        _seed_settings()
+
+        domain = Domains(name="SharedDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        owner_hashfile = Hashfiles(name="owner.txt", domain_id=domain.id, owner_id=owner.id)
+        other_hashfile = Hashfiles(name="other.txt", domain_id=domain.id, owner_id=other.id)
+        db.session.add_all([owner_hashfile, other_hashfile])
+        db.session.commit()
+
+        owner_hash = Hashes(
+            sub_ciphertext="cccccccccccccccccccccccccccccccc",
+            ciphertext="owner-search-ciphertext",
+            hash_type=1000,
+            cracked=False,
+            plaintext=None,
+        )
+        other_hash = Hashes(
+            sub_ciphertext="dddddddddddddddddddddddddddddddd",
+            ciphertext="other-search-ciphertext",
+            hash_type=1000,
+            cracked=False,
+            plaintext=None,
+        )
+        db.session.add_all([owner_hash, other_hash])
+        db.session.commit()
+
+        db.session.add(HashfileHashes(hash_id=owner_hash.id, hashfile_id=owner_hashfile.id))
+        db.session.add(HashfileHashes(hash_id=other_hash.id, hashfile_id=other_hashfile.id))
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, owner)
+
+        response = client.get(f"/search?hash_id={other_hash.id}")
+        assert response.status_code == 200
+        assert b"other-search-ciphertext" not in response.data
+
+
+@pytest.mark.security
+def test_task_group_export_only_includes_current_user_owned_items():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        owner = _seed_user("tg-export-owner", password="owner-user-password", admin=False)
+        other = _seed_user("tg-export-other", password="other-user-password", admin=False)
+        _seed_settings()
+
+        owner_task = Tasks(
+            name="owner-mask",
+            hc_attackmode="maskmode",
+            owner_id=owner.id,
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a?a",
+        )
+        other_task = Tasks(
+            name="other-mask",
+            hc_attackmode="maskmode",
+            owner_id=other.id,
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a?a?a",
+        )
+        db.session.add_all([owner_task, other_task])
+        db.session.commit()
+
+        owner_group = TaskGroups(name="owner-group", owner_id=owner.id, tasks=json.dumps([owner_task.id]))
+        other_group = TaskGroups(name="other-group", owner_id=other.id, tasks=json.dumps([other_task.id]))
+        db.session.add_all([owner_group, other_group])
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, owner)
+
+        response = client.get("/task_groups/export")
+        assert response.status_code == 200
+
+        payload = json.loads(response.data.decode("utf-8"))
+        exported_task_names = [entry["name"] for entry in payload["tasks"]]
+        exported_group_names = [entry["name"] for entry in payload["task_groups"]]
+
+        assert "owner-mask" in exported_task_names
+        assert "other-mask" not in exported_task_names
+        assert "owner-group" in exported_group_names
+        assert "other-group" not in exported_group_names
+
+
+@pytest.mark.security
+def test_task_group_import_creates_tasks_and_groups():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        owner = _seed_user("tg-import-owner", password="owner-user-password", admin=False)
+        _seed_settings()
+
+        wordlist = Wordlists(
+            name="rockyou",
+            owner_id=owner.id,
+            type="static",
+            path="/tmp/rockyou.txt",
+            size=1,
+            checksum="0" * 64,
+        )
+        rule = Rules(
+            name="best64",
+            owner_id=owner.id,
+            path="/tmp/best64.rule",
+            size=1,
+            checksum="1" * 64,
+        )
+        db.session.add_all([wordlist, rule])
+        db.session.commit()
+
+        import_payload = {
+            "version": 1,
+            "tasks": [
+                {
+                    "name": "import-dict",
+                    "hc_attackmode": "dictionary",
+                    "wordlist_name": "rockyou",
+                    "rule_name": "best64",
+                },
+                {
+                    "name": "import-mask",
+                    "hc_attackmode": "maskmode",
+                    "hc_mask": "?a?a?a",
+                },
+            ],
+            "task_groups": [
+                {
+                    "name": "import-group",
+                    "tasks": ["import-dict", "import-mask"],
+                }
+            ],
+        }
+
+        client = app.test_client()
+        _login_client_as_user(client, owner)
+        response = client.post(
+            "/task_groups/import",
+            data={
+                "import_file": (
+                    io.BytesIO(json.dumps(import_payload).encode("utf-8")),
+                    "task_groups.json",
+                )
+            },
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        imported_dict_task = Tasks.query.filter_by(name="import-dict", owner_id=owner.id).first()
+        imported_mask_task = Tasks.query.filter_by(name="import-mask", owner_id=owner.id).first()
+        imported_group = TaskGroups.query.filter_by(name="import-group", owner_id=owner.id).first()
+
+        assert imported_dict_task is not None
+        assert imported_dict_task.wl_id == wordlist.id
+        assert imported_dict_task.rule_id == rule.id
+        assert imported_dict_task.hc_attackmode == "dictionary"
+        assert imported_mask_task is not None
+        assert imported_mask_task.hc_mask == "?a?a?a"
+        assert imported_group is not None
+        assert set(json.loads(imported_group.tasks)) == {imported_dict_task.id, imported_mask_task.id}
 
 
 @pytest.mark.security

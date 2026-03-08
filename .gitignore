@@ -9,7 +9,6 @@
 !.pylintrc
 !LICENSE
 !README.md
-!TODO.md
 
 # Project configuration and entry points
 !Dockerfile

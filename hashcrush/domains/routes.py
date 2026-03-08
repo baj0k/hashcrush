@@ -1,7 +1,7 @@
 """Flask routes to handle Domains"""
 from flask import Blueprint, render_template, redirect, url_for, flash, current_app
 from flask_login import login_required, current_user
-from sqlalchemy import exists
+from sqlalchemy import exists, or_
 from hashcrush.models import Domains, Jobs, Hashfiles, HashfileHashes, Hashes, JobTasks
 from hashcrush.models import db
 
@@ -12,13 +12,30 @@ ACTIVE_JOB_STATUSES = {'Running', 'Queued', 'Paused', 'Ready', 'Incomplete'}
 # Domains
 #############################################
 
+
+def _visible_domains_query():
+    query = Domains.query.order_by(Domains.name)
+    if current_user.admin:
+        return query
+
+    return query.filter(
+        or_(
+            exists().where(Jobs.domain_id == Domains.id).where(Jobs.owner_id == current_user.id),
+            exists().where(Hashfiles.domain_id == Domains.id).where(Hashfiles.owner_id == current_user.id),
+        )
+    )
+
 @domains.route("/domains", methods=['GET'])
 @login_required
 def domains_list():
     """Function to return list of domains"""
-    domains = Domains.query.order_by(Domains.name).all()
-    jobs = Jobs.query.all()
-    hashfiles = Hashfiles.query.all()
+    domains = _visible_domains_query().all()
+    if current_user.admin:
+        jobs = Jobs.query.all()
+        hashfiles = Hashfiles.query.all()
+    else:
+        jobs = Jobs.query.filter_by(owner_id=current_user.id).all()
+        hashfiles = Hashfiles.query.filter_by(owner_id=current_user.id).all()
     return render_template('domains.html', title='Domains', domains=domains, jobs=jobs, hashfiles=hashfiles)
 
 @domains.route("/domains/delete/<int:domain_id>", methods=['POST'])

@@ -14,6 +14,26 @@ wordlists = Blueprint('wordlists', __name__)
 MAX_SELECTABLE_WORDLIST_FILES = 5000
 
 
+def _visible_wordlists_query():
+    query = Wordlists.query
+    if not current_user.admin:
+        query = query.filter(Wordlists.owner_id == current_user.id)
+    return query
+
+
+def _visible_tasks_query():
+    query = Tasks.query
+    if not current_user.admin:
+        query = query.filter(Tasks.owner_id == current_user.id)
+    return query
+
+
+def _visible_users():
+    if current_user.admin:
+        return Users.query.all()
+    return [current_user]
+
+
 def _contains_hidden_segment(relative_path: str) -> bool:
     return any(segment.startswith('.') for segment in relative_path.split('/') if segment not in ('', '.'))
 
@@ -108,11 +128,12 @@ def _resolve_selected_file(selected_relative_path: str, base_dir: str) -> str | 
 def wordlists_list():
     """Function to present list of wordlists"""
 
-    static_wordlists = Wordlists.query.filter_by(type='static').all()
-    dynamic_wordlists = Wordlists.query.filter_by(type='dynamic').all()
-    wordlists = Wordlists.query.all()
-    tasks = Tasks.query.all()
-    users = Users.query.all()
+    visible_wordlists = _visible_wordlists_query()
+    static_wordlists = visible_wordlists.filter_by(type='static').all()
+    dynamic_wordlists = visible_wordlists.filter_by(type='dynamic').all()
+    wordlists = visible_wordlists.all()
+    tasks = _visible_tasks_query().all()
+    users = _visible_users()
     return render_template(
         'wordlists.html',
         title='Wordlists',

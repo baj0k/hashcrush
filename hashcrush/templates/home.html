@@ -58,6 +58,7 @@
                                     <tr>
                                         <th scope="col">Task Name</th>
                                         <th scope="col">Status</th>
+                                        <th scope="col">Recovered</th>
                                         <th scope="col">Rate</th>
                                         <th scope="col">% Done</th>
                                         <th scope="col">ETA</th>
@@ -77,6 +78,7 @@
                                                     {% endfor %}
                                                 </td>
                                                 <td>{{ job_task.status }}</td>
+                                                <td>{{ job_recovered.get(job.id, '0/0') }}</td>
                                                 <td>{{ job_task.benchmark or '' }}</td>
                                                 <td>
                                                     {% if runtime %}
@@ -142,6 +144,7 @@
                                     <tr>
                                         <th scope="col">Task Name</th>
                                         <th scope="col">Status</th>
+                                        <th scope="col">Recovered</th>
                                         <th scope="col">% Done</th>
                                         <th scope="col">ETA</th>
                                     </tr>
@@ -159,6 +162,7 @@
                                                     {% endfor %}
                                                 </td>
                                                 <td>{{ job_task.status }}</td>
+                                                <td>{{ job_recovered.get(job.id, '0/0') }}</td>
                                                 <td>
                                                     {% if runtime %}
                                                         {{ runtime.percent_done }}

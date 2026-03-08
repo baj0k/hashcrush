@@ -28,7 +28,6 @@ def _ensure_runtime_directories(root_path: str, runtime_root: str | None = None)
         os.path.join(runtime_base, 'tmp'),
         os.path.join(runtime_base, 'hashes'),
         os.path.join(runtime_base, 'outfiles'),
-        os.path.join(root_path, 'ssl'),
     )
     for runtime_dir in runtime_dirs:
         os.makedirs(runtime_dir, exist_ok=True)

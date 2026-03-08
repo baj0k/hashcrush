@@ -5,13 +5,22 @@ import re
 
 from flask import Blueprint, render_template, redirect, flash
 from flask_login import login_required, current_user
-from sqlalchemy import or_
 
-from hashcrush.models import Jobs, JobTasks, Users, Domains, Tasks
+from sqlalchemy import case, func
+
+from hashcrush.models import Jobs, JobTasks, Users, Domains, Tasks, HashfileHashes, Hashes
+from hashcrush.models import db
 from hashcrush.utils.utils import update_job_task_status
 
 
 main = Blueprint('main', __name__)
+
+
+def _visible_jobs_query():
+    query = Jobs.query
+    if not current_user.admin:
+        query = query.filter(Jobs.owner_id == current_user.id)
+    return query
 
 
 def _parse_jobtask_progress(progress_payload: str | None) -> tuple[str | None, str | None]:
@@ -42,13 +51,60 @@ def _parse_jobtask_progress(progress_payload: str | None) -> tuple[str | None, s
 @login_required
 def home():
     """Function to return the home page"""
-    jobs = Jobs.query.filter(or_((Jobs.status.like('Running')),(Jobs.status.like('Queued'))))
-    running_jobs = Jobs.query.filter_by(status = 'Running').order_by(Jobs.priority.desc(), Jobs.queued_at.asc()).all()
-    queued_jobs = Jobs.query.filter_by(status = 'Queued').order_by(Jobs.priority.desc(), Jobs.queued_at.asc()).all()
-    users = Users.query.all()
-    domains = Domains.query.all()
-    job_tasks = JobTasks.query.all()
-    tasks = Tasks.query.all()
+    running_jobs = (
+        _visible_jobs_query()
+        .filter_by(status='Running')
+        .order_by(Jobs.priority.desc(), Jobs.queued_at.asc())
+        .all()
+    )
+    queued_jobs = (
+        _visible_jobs_query()
+        .filter_by(status='Queued')
+        .order_by(Jobs.priority.desc(), Jobs.queued_at.asc())
+        .all()
+    )
+    jobs = running_jobs + queued_jobs
+    users = Users.query.all() if current_user.admin else [current_user]
+    domain_ids = sorted({job.domain_id for job in jobs})
+    domains = (
+        Domains.query.filter(Domains.id.in_(domain_ids)).all()
+        if domain_ids
+        else []
+    )
+    visible_job_ids = [job.id for job in jobs]
+    job_tasks = (
+        JobTasks.query.filter(JobTasks.job_id.in_(visible_job_ids)).all()
+        if visible_job_ids
+        else []
+    )
+    visible_task_ids = sorted({job_task.task_id for job_task in job_tasks})
+    tasks = (
+        Tasks.query.filter(Tasks.id.in_(visible_task_ids)).all()
+        if visible_task_ids
+        else []
+    )
+    hashfile_ids = [job.hashfile_id for job in jobs if job.hashfile_id]
+    hashfile_stats = {}
+    if hashfile_ids:
+        stats_rows = (
+            db.session.query(
+                HashfileHashes.hashfile_id,
+                func.count(Hashes.id).label('total_count'),
+                func.sum(case((Hashes.cracked.is_(True), 1), else_=0)).label('cracked_count'),
+            )
+            .join(Hashes, Hashes.id == HashfileHashes.hash_id)
+            .filter(HashfileHashes.hashfile_id.in_(hashfile_ids))
+            .group_by(HashfileHashes.hashfile_id)
+            .all()
+        )
+        hashfile_stats = {
+            row.hashfile_id: (int(row.cracked_count or 0), int(row.total_count or 0))
+            for row in stats_rows
+        }
+    job_recovered = {}
+    for job in jobs:
+        cracked, total = hashfile_stats.get(job.hashfile_id, (0, 0))
+        job_recovered[job.id] = f'{cracked}/{total}'
 
     job_task_runtime_progress: dict[int, dict[str, str]] = {}
     for job_task in job_tasks:
@@ -73,6 +129,7 @@ def home():
         tasks=tasks,
         collapse_all=collapse_all,
         job_task_runtime_progress=job_task_runtime_progress,
+        job_recovered=job_recovered,
     )
 
 @main.route("/job_task/stop/<int:job_task_id>", methods=['POST'])
@@ -81,6 +138,8 @@ def stop_job_task(job_task_id):
     """Function to stop specific task on a running job"""
 
     job_task = JobTasks.query.get(job_task_id)
+    if not job_task:
+        return redirect("/")
     job = Jobs.query.get(job_task.job_id)
 
     if job_task and job:

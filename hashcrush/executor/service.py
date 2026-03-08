@@ -110,6 +110,7 @@ class ActiveTask:
     hash_path: str
     crack_path: str
     last_progress_log_at: float
+    last_import_at: float
 
 
 class LocalExecutorService:
@@ -156,14 +157,31 @@ class LocalExecutorService:
 
     def _tick(self) -> None:
         if not self._recovered_once:
-            self._cleanup_runtime_artifacts()
             self._recover_orphaned_tasks()
+            self._cleanup_runtime_artifacts()
             self._recovered_once = True
 
         if self._active is not None:
             self._monitor_active_task()
             return
         self._claim_and_start_next()
+
+    @staticmethod
+    def _checkpoint_import_interval_seconds() -> float:
+        try:
+            interval = float(current_app.config.get("CRACK_IMPORT_INTERVAL_SECONDS", 15))
+        except (TypeError, ValueError):
+            interval = 15.0
+        return max(1.0, interval)
+
+    @staticmethod
+    def _crack_file_path_for_job_task(job_task: JobTasks) -> str | None:
+        job = Jobs.query.get(job_task.job_id)
+        if not job:
+            return None
+        outfiles_dir = get_runtime_subdir("outfiles")
+        os.makedirs(outfiles_dir, exist_ok=True)
+        return os.path.join(outfiles_dir, f"hc_cracked_{job.id}_{job_task.task_id}.txt")
 
     def _recover_orphaned_tasks(self) -> None:
         """Requeue tasks that were running when the process exited."""
@@ -172,7 +190,11 @@ class LocalExecutorService:
             return
 
         touched_job_ids = set()
+        imported_total = 0
         for job_task in orphaned:
+            crack_path = self._crack_file_path_for_job_task(job_task)
+            if crack_path:
+                imported_total += self._safe_import_crack_file(job_task, crack_path)
             job_task.status = "Queued"
             job_task.worker_pid = None
             touched_job_ids.add(job_task.job_id)
@@ -194,7 +216,11 @@ class LocalExecutorService:
                 job.status = "Queued"
         db.session.commit()
 
-        current_app.logger.warning("Recovered %s orphaned running task(s) to Queued state.", len(orphaned))
+        current_app.logger.warning(
+            "Recovered %s orphaned running task(s) to Queued state (imported_hashes=%s).",
+            len(orphaned),
+            imported_total,
+        )
 
     def _claim_and_start_next(self) -> None:
         next_task = (
@@ -258,6 +284,7 @@ class LocalExecutorService:
             hash_path=hash_path,
             crack_path=crack_path,
             last_progress_log_at=0.0,
+            last_import_at=0.0,
         )
         current_app.logger.info("Started local job_task id=%s pid=%s", job_task.id, process.pid)
 
@@ -316,17 +343,25 @@ class LocalExecutorService:
         if job_task.status in ("Paused", "Canceled"):
             self._terminate_process(active.process)
             if active.process.poll() is not None:
+                imported_count = self._safe_import_crack_file(job_task, active.crack_path)
+                if imported_count:
+                    current_app.logger.info(
+                        "Imported %s recovered hash(es) for job_task id=%s during %s flow",
+                        imported_count,
+                        job_task.id,
+                        job_task.status.lower(),
+                    )
                 self._finalize_active_task(final_status=job_task.status)
             return
 
         if active.process.poll() is None:
+            now = time.monotonic()
             status = _parse_hashcat_status(active.output_path)
             if status:
                 job_task.progress = json.dumps(status)
                 if status.get("Speed #"):
                     job_task.benchmark = status.get("Speed #")
                 db.session.commit()
-                now = time.monotonic()
                 if (now - active.last_progress_log_at) >= 30:
                     current_app.logger.info(
                         "Progress job_task id=%s recovered=%s speed=%s eta=%s progress=%s",
@@ -337,6 +372,15 @@ class LocalExecutorService:
                         status.get("Progress", "n/a"),
                     )
                     active.last_progress_log_at = now
+            if (now - active.last_import_at) >= self._checkpoint_import_interval_seconds():
+                imported_count = self._safe_import_crack_file(job_task, active.crack_path)
+                if imported_count:
+                    current_app.logger.info(
+                        "Checkpoint import job_task id=%s imported_hashes=%s",
+                        job_task.id,
+                        imported_count,
+                    )
+                active.last_import_at = now
             return
 
         return_code = active.process.returncode
@@ -349,7 +393,7 @@ class LocalExecutorService:
         _log_status_snapshot(job_task.id, final_status_snapshot, prefix="Final status")
 
         if _is_successful_hashcat_exit(return_code, final_status_snapshot) and job_task.status not in ("Paused", "Canceled"):
-            imported_count = self._import_crack_file_for_task(job_task, active.crack_path)
+            imported_count = self._safe_import_crack_file(job_task, active.crack_path)
             current_app.logger.info(
                 "Completed local job_task id=%s return_code=%s imported_hashes=%s",
                 job_task.id,
@@ -359,6 +403,13 @@ class LocalExecutorService:
             self._finalize_active_task(final_status="Completed")
             return
 
+        imported_count = self._safe_import_crack_file(job_task, active.crack_path)
+        if imported_count:
+            current_app.logger.info(
+                "Imported %s recovered hash(es) for job_task id=%s before non-success finalize",
+                imported_count,
+                job_task.id,
+            )
         current_app.logger.warning(
             "Local job_task id=%s ended with return_code=%s status=%s",
             job_task.id,
@@ -398,6 +449,19 @@ class LocalExecutorService:
         db.session.commit()
         update_job_task_status(job_task.id, final_status)
         self._remove_files(active.output_path, active.crack_path, active.hash_path)
+
+    def _safe_import_crack_file(self, job_task: JobTasks, crack_path: str) -> int:
+        """Import recovered hashes from crack file, protecting caller flow on errors."""
+        try:
+            return self._import_crack_file_for_task(job_task, crack_path)
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception(
+                "Failed importing crack file for job_task id=%s path=%s",
+                job_task.id,
+                crack_path,
+            )
+            return 0
 
     def _import_crack_file_for_task(self, job_task: JobTasks, crack_path: str) -> int:
         if not os.path.exists(crack_path):

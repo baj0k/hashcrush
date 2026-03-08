@@ -1,10 +1,12 @@
-"""Flask routes to handle Analytics"""
+"""Flask routes to handle Analytics."""
 import io
 import operator
 import re
-from flask import Blueprint, render_template, request, redirect, send_file
-from flask_login import login_required
-from hashcrush.models import Domains, HashfileHashes, Hashes, Hashfiles
+
+from flask import Blueprint, redirect, render_template, request, send_file
+from flask_login import current_user, login_required
+
+from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles
 from hashcrush.models import db
 from hashcrush.utils.utils import decode_plaintext_from_storage
 
@@ -16,82 +18,157 @@ def _decoded_plaintext(value: str | None) -> str:
     return decoded if decoded is not None else ''
 
 
+def _parse_positive_int(value):
+    if value in (None, ''):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _visible_hashfiles_query():
+    query = Hashfiles.query
+    if not current_user.admin:
+        query = query.filter(Hashfiles.owner_id == current_user.id)
+    return query
+
+
+def _resolve_scope(domain_id: int | None, hashfile_id: int | None):
+    visible_hashfiles = _visible_hashfiles_query().order_by(Hashfiles.name.asc()).all()
+    visible_hashfiles_by_id = {hashfile.id: hashfile for hashfile in visible_hashfiles}
+    visible_domain_ids = sorted({hashfile.domain_id for hashfile in visible_hashfiles})
+
+    if domain_id is not None and domain_id not in visible_domain_ids:
+        return None
+
+    selected_hashfile = None
+    if hashfile_id is not None:
+        selected_hashfile = visible_hashfiles_by_id.get(hashfile_id)
+        if not selected_hashfile:
+            return None
+        if domain_id is not None and selected_hashfile.domain_id != domain_id:
+            return None
+        domain_id = selected_hashfile.domain_id
+
+    if domain_id is not None:
+        scoped_hashfiles = [hashfile for hashfile in visible_hashfiles if hashfile.domain_id == domain_id]
+    else:
+        scoped_hashfiles = visible_hashfiles
+
+    if selected_hashfile:
+        scoped_hashfiles = [selected_hashfile]
+
+    scoped_hashfile_ids = [hashfile.id for hashfile in scoped_hashfiles]
+    return {
+        'domain_id': domain_id,
+        'hashfile_id': hashfile_id,
+        'visible_hashfiles': visible_hashfiles,
+        'scoped_hashfiles': scoped_hashfiles,
+        'scoped_hashfile_ids': scoped_hashfile_ids,
+        'visible_domain_ids': visible_domain_ids,
+    }
+
+
+def _scoped_hash_rows_query(scoped_hashfile_ids: list[int]):
+    return (
+        db.session.query(Hashes, HashfileHashes)
+        .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+        .filter(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
+    )
+
+
 @analytics.route('/analytics', methods=['GET'])
 @login_required
 def get_analytics():
-    """Function to list Analytics Page"""
+    """Function to list Analytics Page."""
+    domain_id_arg = request.args.get('domain_id')
+    hashfile_id_arg = request.args.get('hashfile_id')
+    domain_id = _parse_positive_int(domain_id_arg)
+    hashfile_id = _parse_positive_int(hashfile_id_arg)
+    if domain_id_arg and domain_id is None:
+        return redirect('/analytics')
+    if hashfile_id_arg and hashfile_id is None:
+        return redirect('/analytics')
 
-    if request.args.get("domain_id"):
-        domain_id = request.args["domain_id"]
-    else:
-        domain_id = None
-    if request.args.get("hashfile_id"):
-        hashfile_id = request.args["hashfile_id"]
-    else:
-        hashfile_id = None
+    scope = _resolve_scope(domain_id, hashfile_id)
+    if scope is None:
+        return redirect('/analytics')
 
-    hashfiles, domains = [], []
-    results =  db.session.query(Domains, Hashfiles).join(Hashfiles, Domains.id==Hashfiles.domain_id).order_by(Domains.name)
+    domain_rows = (
+        Domains.query.filter(Domains.id.in_(scope['visible_domain_ids'])).order_by(Domains.name.asc()).all()
+        if scope['visible_domain_ids']
+        else []
+    )
+    hashfile_rows = scope['visible_hashfiles']
+    scoped_hashfile_ids = scope['scoped_hashfile_ids']
+    domain_id = scope['domain_id']
+    hashfile_id = scope['hashfile_id']
 
-    #Put all hashes in a list (hashfiles) and pull out all unique domains into a separate list (domains)
-    for rows in results:
-        domains.append(rows.Domains) if rows.Domains not in domains else domains
-        hashfiles.append(rows.Hashfiles)
+    if not scoped_hashfile_ids:
+        return render_template(
+            'analytics.html',
+            title='analytics',
+            fig1_labels=[],
+            fig1_values=[],
+            fig1_percent=0,
+            fig2_labels=[],
+            fig2_values=[],
+            fig3_labels=[],
+            fig3_values=[],
+            fig3_percent=0,
+            fig4_labels=[],
+            fig4_values=[],
+            fig5_labels=[],
+            fig5_values=[],
+            fig6_labels=[],
+            fig6_values=[],
+            fig7_values={},
+            fig7_total=0,
+            fig8_table=[],
+            domains=domain_rows,
+            hashfiles=hashfile_rows,
+            hashfile_id=hashfile_id,
+            domain_id=domain_id,
+            total_runtime=0,
+            total_accounts=format_display(0),
+            total_unique_hashes=format_display(0),
+        )
 
-    # Figure 1 (Cracked vs uncracked)
-    if domain_id:
-        # we have a domain
-        if hashfile_id: # with a hashfile
-            fig1_cracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile_id).count()
-            fig1_uncracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '0').filter(HashfileHashes.hashfile_id==hashfile_id).count()
-        else:
-            # just a domain, no specific hashfile
-            fig1_cracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '1').count()
-            fig1_uncracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '0').count()
-    else:
-        fig1_cracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='1').count()
-        fig1_uncracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='0').count()
+    scoped_hash_rows = _scoped_hash_rows_query(scoped_hashfile_ids)
 
+    # Figure 1 (Recovered vs unrecovered account rows)
+    fig1_cracked_cnt = scoped_hash_rows.filter(Hashes.cracked.is_(True)).count()
+    fig1_uncracked_cnt = scoped_hash_rows.filter(Hashes.cracked.is_(False)).count()
     fig1_data = [
         ("Recovered: " + str(format_display(fig1_cracked_cnt)), fig1_cracked_cnt),
-        ("Unrecovered: " + str(format_display(fig1_uncracked_cnt)), fig1_uncracked_cnt)
+        ("Unrecovered: " + str(format_display(fig1_uncracked_cnt)), fig1_uncracked_cnt),
     ]
-
     fig1_labels = [row[0] for row in fig1_data]
     fig1_values = [row[1] for row in fig1_data]
     fig1_total = fig1_cracked_cnt + fig1_uncracked_cnt
+    fig1_percent = 0 if fig1_total == 0 else [str(round((fig1_cracked_cnt / fig1_total) * 100, 1)) + '%']
 
-    # Cracked Percent
-    fig1_percent = 0 if (0 == fig1_total) else [str(round(((fig1_cracked_cnt / fig1_total)*100),1)) + '%']
-
-    # Figure 2 (Cracked Complexity Breakdown)
-    if domain_id:
-        # we have a domain
-        if hashfile_id:
-            fig2_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile_id).with_entities(Hashes.plaintext).all()
-            fig2_uncracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '0').filter(HashfileHashes.hashfile_id==hashfile_id).count()
-        else:
-            # just a domain, no specific hashfile
-            fig2_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '1').with_entities(Hashes.plaintext).all()
-            fig2_uncracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '0').count()
-    else:
-        fig2_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='1').with_entities(Hashes.plaintext).all()
-        fig2_uncracked_cnt = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='0').count()
-
+    # Figure 2 (Password complexity)
+    fig2_cracked_hashes = (
+        scoped_hash_rows.filter(Hashes.cracked.is_(True)).with_entities(Hashes.plaintext).all()
+    )
+    fig2_uncracked_cnt = scoped_hash_rows.filter(Hashes.cracked.is_(False)).count()
     fig2_fails_complexity_cnt = 0
     fig2_meets_complexity_cnt = 0
-
     for entry in fig2_cracked_hashes:
         flags = 0
-        if len(_decoded_plaintext(entry[0])) < 8:
-            flags = -3 # set to negative 3 so that there's no way we can meet complexity
-        if re.search(r"[a-z]", _decoded_plaintext(entry[0])):
+        decoded_plaintext = _decoded_plaintext(entry[0])
+        if len(decoded_plaintext) < 8:
+            flags = -3
+        if re.search(r"[a-z]", decoded_plaintext):
             flags = flags + 1
-        if re.search(r"[A-Z]", _decoded_plaintext(entry[0])):
+        if re.search(r"[A-Z]", decoded_plaintext):
             flags = flags + 1
-        if re.search(r"[0-9]", _decoded_plaintext(entry[0])):
+        if re.search(r"[0-9]", decoded_plaintext):
             flags = flags + 1
-        if re.search(r"[^0-9A-Za-z]", _decoded_plaintext(entry[0])):
+        if re.search(r"[^0-9A-Za-z]", decoded_plaintext):
             flags = flags + 1
 
         if flags < 3:
@@ -102,76 +179,50 @@ def get_analytics():
     fig2_data = [
         ("Fails Complexity: " + str(format_display(fig2_fails_complexity_cnt)), fig2_fails_complexity_cnt),
         ("Meets Complexity: " + str(format_display(fig2_meets_complexity_cnt)), fig2_meets_complexity_cnt),
-        ("Unrecovered: " + str(format_display(fig2_uncracked_cnt)), fig2_uncracked_cnt)
+        ("Unrecovered: " + str(format_display(fig2_uncracked_cnt)), fig2_uncracked_cnt),
     ]
-
     fig2_labels = [row[0] for row in fig2_data]
     fig2_values = [row[1] for row in fig2_data]
 
-    # Figure 3 Recovered Hashes
-    if domain_id:
-        # we have a domain
-        if hashfile_id: # with a hashfile
-            fig3_cracked_cnt = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile_id).distinct(Hashes.plaintext).count()
-            fig3_uncracked_cnt = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '0').filter(HashfileHashes.hashfile_id==hashfile_id).distinct(Hashes.ciphertext).count()
-        else:
-            # just a domain, no specific hashfile
-            fig3_cracked_cnt = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '1').distinct(Hashes.plaintext).count()
-            fig3_uncracked_cnt = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '0').distinct(Hashes.ciphertext).count()
-    else:
-        fig3_cracked_cnt = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='1').distinct(Hashes.plaintext).count()
-        fig3_uncracked_cnt = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='0').distinct(Hashes.ciphertext).count()
-
+    # Figure 3 (Recovered Hashes)
+    fig3_cracked_cnt = (
+        scoped_hash_rows
+        .filter(Hashes.cracked.is_(True))
+        .with_entities(Hashes.plaintext)
+        .distinct()
+        .count()
+    )
+    fig3_uncracked_cnt = (
+        scoped_hash_rows
+        .filter(Hashes.cracked.is_(False))
+        .with_entities(Hashes.ciphertext)
+        .distinct()
+        .count()
+    )
     fig3_data = [
         ("Recovered: " + str(format_display(fig3_cracked_cnt)), fig3_cracked_cnt),
-        ("Unrecovered: " + str(format_display(fig3_uncracked_cnt)), fig3_uncracked_cnt)
+        ("Unrecovered: " + str(format_display(fig3_uncracked_cnt)), fig3_uncracked_cnt),
     ]
-
     fig3_labels = [row[0] for row in fig3_data]
     fig3_values = [row[1] for row in fig3_data]
     fig3_total = fig3_cracked_cnt + fig3_uncracked_cnt
-
-    # Cracked Percent
-    fig3_percent = 0 if (0 == fig3_total) else [str(round(((fig3_cracked_cnt / fig3_total)*100),1)) + '%']
+    fig3_percent = 0 if fig3_total == 0 else [str(round((fig3_cracked_cnt / fig3_total) * 100, 1)) + '%']
 
     # General Stats Table
-    total_runtime = 0
-    total_accounts = 0
-    total_unique_hashes = 0
-    if domain_id:
-        # we have a domain
-        if hashfile_id:
-            hashfile = Hashfiles.query.get(hashfile_id)
-            total_runtime = hashfile.runtime
-            total_accounts = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(HashfileHashes.hashfile_id==hashfile_id).count()
-            total_unique_hashes = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(HashfileHashes.hashfile_id==hashfile_id).distinct('ciphertext').count()
-        else:
-            # just a domain, no specific hashfile
-            hashfiles = Hashfiles.query.filter_by(domain_id=domain_id).all()
-            for hashfile in hashfiles:
-                total_runtime = total_runtime + hashfile.runtime
-            total_accounts = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).count()
-            total_unique_hashes = db.session.query(Hashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).distinct('ciphertext').count()
-    else:
-        hashfiles = Hashfiles.query.all()
-        for hashfile in hashfiles:
-            total_runtime = total_runtime + hashfile.runtime
-        total_accounts = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).count()
-        total_unique_hashes = db.session.query(Hashes).count()
-
+    total_runtime = sum(hashfile.runtime or 0 for hashfile in scope['scoped_hashfiles'])
+    total_accounts = scoped_hash_rows.count()
+    total_unique_hashes = (
+        scoped_hash_rows.with_entities(Hashes.ciphertext).distinct().count()
+    )
     total_accounts = format_display(total_accounts)
     total_unique_hashes = format_display(total_unique_hashes)
 
     # Figure 4 (Charset Breakdown)
-    # Reusing fig2_cracked_hashes data
-
     blank = 0
-
     numeric = 0
     loweralpha = 0
     upperalpha = 0
     special = 0
-
     mixedalpha = 0
     mixedalphanum = 0
     loweralphanum = 0
@@ -179,12 +230,10 @@ def get_analytics():
     loweralphaspecial = 0
     upperalphaspecial = 0
     specialnum = 0
-
     mixedalphaspecial = 0
     upperalphaspecialnum = 0
     loweralphaspecialnum = 0
     mixedalphaspecialnum = 0
-
     other = 0
 
     for entry in fig2_cracked_hashes:
@@ -231,16 +280,14 @@ def get_analytics():
 
     fig4_labels = []
     fig4_values = []
-
-    # We only want the top 4 with the 5th being other
     fig4_dict = {
         "Blank (unset): " + str(format_display(blank)): blank,
-        "Numeric Only: " + str(format_display(numeric)) : numeric,
+        "Numeric Only: " + str(format_display(numeric)): numeric,
         "LowerAlpha Only: " + str(format_display(loweralpha)): loweralpha,
         "UpperAlpha Only: " + str(format_display(upperalpha)): upperalpha,
         "Special Only: " + str(format_display(special)): special,
         "MixedAlpha: " + str(format_display(mixedalpha)): mixedalpha,
-        "MixedAlphaNumeric: " +str(format_display(mixedalphanum)): mixedalphanum,
+        "MixedAlphaNumeric: " + str(format_display(mixedalphanum)): mixedalphanum,
         "LowerAlphaNumeric: " + str(format_display(loweralphanum)): loweralphanum,
         "LowerAlphaSpecial: " + str(format_display(loweralphaspecial)): loweralphaspecial,
         "UpperAlphaSpecial: " + str(format_display(upperalphaspecial)): upperalphaspecial,
@@ -250,10 +297,8 @@ def get_analytics():
         "LowerAlphaSpecialNumeric: " + str(format_display(loweralphaspecialnum)): loweralphaspecialnum,
         "MixedAlphaSpecialNumeric: " + str(format_display(mixedalphaspecialnum)): mixedalphaspecialnum,
         "Other: " + str(format_display(other)): other,
-        }
-
-    fig4_array_sorted = dict(sorted(fig4_dict.items(), key=operator.itemgetter(1),reverse=True))
-
+    }
+    fig4_array_sorted = dict(sorted(fig4_dict.items(), key=operator.itemgetter(1), reverse=True))
     limit = 0
     fig4_other = 0
     for key in fig4_array_sorted:
@@ -263,33 +308,20 @@ def get_analytics():
             limit += 1
         else:
             fig4_other += fig4_array_sorted[key]
-
     fig4_labels.append('Other: ' + str(fig4_other))
     fig4_values.append(fig4_other)
 
-    # Figure 4 (Passwords by Length)
-    if domain_id:
-        # we have a domain
-        if hashfile_id:
-            fig5_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile_id).with_entities(Hashes.plaintext).all()
-        else:
-            # just a domain, no specific hashfile
-            fig5_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '1').with_entities(Hashes.plaintext).all()
-    else:
-        fig5_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='1').with_entities(Hashes.plaintext).all()
-
+    # Figure 5 (Passwords by Length)
+    fig5_cracked_hashes = fig2_cracked_hashes
     fig5_data = {}
-
     for entry in fig5_cracked_hashes:
-        if len(_decoded_plaintext(entry[0])) in fig5_data:
-            fig5_data[len(_decoded_plaintext(entry[0]))] += 1
+        password_length = len(_decoded_plaintext(entry[0]))
+        if password_length in fig5_data:
+            fig5_data[password_length] += 1
         else:
-            fig5_data[len(_decoded_plaintext(entry[0]))] = 1
-
-    fig5_labels =[]
+            fig5_data[password_length] = 1
+    fig5_labels = []
     fig5_values = []
-
-    # Sort by length and limit to 20
     for entry in sorted(fig5_data):
         if len(fig5_labels) < 20:
             fig5_labels.append(entry)
@@ -297,45 +329,32 @@ def get_analytics():
         else:
             break
 
-    # Figure 5 (Top 10 Passwords)
-    if domain_id:
-        # we have a domain
-        if hashfile_id:
-            fig6_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile_id).with_entities(Hashes.plaintext).all()
-        else:
-            # just a domain, no specific hashfile
-            fig6_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '1').with_entities(Hashes.plaintext).all()
-    else:
-        fig6_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='1').with_entities(Hashes.plaintext).all()
-
+    # Figure 6 (Top 10 Passwords)
+    fig6_cracked_hashes = fig2_cracked_hashes
     fig6_data = {}
-
     blank_label = 'Blank (unset)'
     for entry in fig6_cracked_hashes:
-        if len(_decoded_plaintext(entry[0])) > 0:
-            if _decoded_plaintext(entry[0]) in fig6_data:
-                fig6_data[_decoded_plaintext(entry[0])] += 1
+        decoded_plaintext = _decoded_plaintext(entry[0])
+        if len(decoded_plaintext) > 0:
+            if decoded_plaintext in fig6_data:
+                fig6_data[decoded_plaintext] += 1
             else:
-                fig6_data[_decoded_plaintext(entry[0])] = 1
+                fig6_data[decoded_plaintext] = 1
         else:
             if blank_label in fig6_data:
                 fig6_data[blank_label] += 1
             else:
                 fig6_data[blank_label] = 1
-
     fig6_labels = []
     fig6_values = []
-
-    # Sort by Highest and Limit to 10
     for entry in sorted(fig6_data, key=fig6_data.__getitem__, reverse=True):
-        if len (fig6_labels) < 10:
+        if len(fig6_labels) < 10:
             fig6_labels.append(entry)
             fig6_values.append(fig6_data[entry])
         else:
             break
 
-    # Figure 6 (Top 10 Masks)
-    # Using Fig 5 data for this
+    # Figure 7 (Top 10 Masks)
     fig7_values = {}
     fig7_data = {}
     fig7_total = 0
@@ -345,94 +364,78 @@ def get_analytics():
         tmp_plaintext = re.sub(r"[a-z]", 'L', tmp_plaintext)
         tmp_plaintext = re.sub(r"[0-9]", 'D', tmp_plaintext)
         tmp_plaintext = re.sub(r"[^0-9A-Za-z]", 'S', tmp_plaintext)
-        # Shhh... i know this is ugly
         tmp_plaintext = re.sub(r"U", '?u', tmp_plaintext)
         tmp_plaintext = re.sub(r"L", '?l', tmp_plaintext)
         tmp_plaintext = re.sub(r"D", '?d', tmp_plaintext)
         tmp_plaintext = re.sub(r"S", '?s', tmp_plaintext)
-
         if tmp_plaintext not in fig7_data:
             fig7_data[tmp_plaintext] = 1
         else:
             fig7_data[tmp_plaintext] += 1
-        fig7_total +=1
-
-    # Sort by Highest and Limit to 10
+        fig7_total += 1
     for entry in sorted(fig7_data, key=fig7_data.__getitem__, reverse=True):
-        if len (fig7_values) < 10:
+        if len(fig7_values) < 10:
             fig7_values[entry] = fig7_data[entry]
         else:
             break
 
-    # Figure 8 (Users where Passwords are the same as the username)
-
-    if domain_id:
-        # we have a domain
-        if hashfile_id:
-            fig8_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile_id).with_entities(Hashes.plaintext, HashfileHashes.username).all()
-        else:
-            # just a domain, no specific hashfile
-            fig8_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '1').with_entities(Hashes.plaintext, HashfileHashes.username).all()
-    else:
-        fig8_cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='1').with_entities(Hashes.plaintext, HashfileHashes.username).all()
-
+    # Figure 8 (Users where password == username)
+    fig8_cracked_hashes = (
+        scoped_hash_rows
+        .filter(Hashes.cracked.is_(True))
+        .with_entities(Hashes.plaintext, HashfileHashes.username)
+        .all()
+    )
     fig8_table = []
     for entry in fig8_cracked_hashes:
         if entry[1] and entry[0]:
-            # check if username has domain in it
-            if '\\' in bytes.fromhex(entry[1]).decode('latin-1'):
-                username = bytes.fromhex(entry[1]).decode('latin-1').split('\\')[1]
-            # check if username has astrix in it (found with some kerb tickets)
-            elif '*' in  bytes.fromhex(entry[1]).decode('latin-1'):
-                username = bytes.fromhex(entry[1]).decode('latin-1').split('*')[1]
+            try:
+                decoded_username = bytes.fromhex(entry[1]).decode('latin-1')
+            except (TypeError, ValueError):
+                continue
+            if '\\' in decoded_username:
+                username = decoded_username.split('\\')[1]
+            elif '*' in decoded_username:
+                username = decoded_username.split('*')[1]
             else:
-                username = bytes.fromhex(entry[1]).decode('latin-1')
+                username = decoded_username
             if _decoded_plaintext(entry[0]) == username:
                 fig8_table.append(_decoded_plaintext(entry[0]))
 
+    return render_template(
+        'analytics.html',
+        title='analytics',
+        fig1_labels=fig1_labels,
+        fig1_values=fig1_values,
+        fig1_percent=fig1_percent,
+        fig2_labels=fig2_labels,
+        fig2_values=fig2_values,
+        fig3_labels=fig3_labels,
+        fig3_values=fig3_values,
+        fig3_percent=fig3_percent,
+        fig4_labels=fig4_labels,
+        fig4_values=fig4_values,
+        fig5_labels=fig5_labels,
+        fig5_values=fig5_values,
+        fig6_labels=fig6_labels,
+        fig6_values=fig6_values,
+        fig7_values=fig7_values,
+        fig7_total=fig7_total,
+        fig8_table=fig8_table,
+        domains=domain_rows,
+        hashfiles=hashfile_rows,
+        hashfile_id=hashfile_id,
+        domain_id=domain_id,
+        total_runtime=total_runtime,
+        total_accounts=total_accounts,
+        total_unique_hashes=total_unique_hashes,
+    )
 
-    return render_template('analytics.html',
-                            title='analytics',
-                            fig1_labels=fig1_labels,
-                            fig1_values=fig1_values,
-                            fig1_percent=fig1_percent,
-                            fig2_labels=fig2_labels,
-                            fig2_values=fig2_values,
-                            fig3_labels=fig3_labels,
-                            fig3_values=fig3_values,
-                            fig3_percent=fig3_percent,
-                            fig4_labels=fig4_labels,
-                            fig4_values=fig4_values,
-                            fig5_labels=fig5_labels,
-                            fig5_values=fig5_values,
-                            fig6_labels=fig6_labels,
-                            fig6_values=fig6_values,
-                            fig7_values=fig7_values,
-                            fig7_total=fig7_total,
-                            fig8_table=fig8_table,
-                            domains=domains,
-                            hashfiles=hashfiles,
-                            hashfile_id=hashfile_id,
-                            domain_id=domain_id,
-                            total_runtime=total_runtime,
-                            total_accounts=total_accounts,
-                            total_unique_hashes=total_unique_hashes)
 
-# serve a list of cracks
 @analytics.route('/analytics/download', methods=['GET'])
 @login_required
 def analytics_download_hashes():
-    """Function to download hashes"""
-
-    def _parse_positive_int(value):
-        if value in (None, ''):
-            return None
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
-
+    """Function to download hashes."""
     export_type = request.args.get('type')
     if export_type == 'found':
         filename = 'found'
@@ -441,51 +444,67 @@ def analytics_download_hashes():
     else:
         return redirect('/analytics')
 
-    domain_id_arg = request.args.get("domain_id")
+    domain_id_arg = request.args.get('domain_id')
+    hashfile_id_arg = request.args.get('hashfile_id')
     domain_id = _parse_positive_int(domain_id_arg)
+    hashfile_id = _parse_positive_int(hashfile_id_arg)
     if domain_id_arg and domain_id is None:
         return redirect('/analytics')
-    if domain_id is not None:
-        filename += '_' + str(domain_id)
-
-    hashfile_id_arg = request.args.get("hashfile_id")
-    hashfile_id = _parse_positive_int(hashfile_id_arg)
     if hashfile_id_arg and hashfile_id is None:
         return redirect('/analytics')
+
+    scope = _resolve_scope(domain_id, hashfile_id)
+    if scope is None:
+        return redirect('/analytics')
+    scoped_hashfile_ids = scope['scoped_hashfile_ids']
+
+    if domain_id is not None:
+        filename += '_' + str(domain_id)
     if hashfile_id is not None:
         filename += '_' + str(hashfile_id)
     else:
         filename += '_all'
-
     filename += '.txt'
 
-    if domain_id:
-        # we have a domain
-        if hashfile_id:
-            cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '1').filter(HashfileHashes.hashfile_id==hashfile_id).all()
-            uncracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked == '0').filter(HashfileHashes.hashfile_id==hashfile_id).all()
-        else:
-            # just a domain, no specific hashfile
-            cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '1').all()
-            uncracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).join(Hashfiles, HashfileHashes.hashfile_id==Hashfiles.id).filter(Hashfiles.domain_id == domain_id).filter(Hashes.cracked == '0').all()
+    if not scoped_hashfile_ids:
+        cracked_hashes = []
+        uncracked_hashes = []
     else:
-        cracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='1').all()
-        uncracked_hashes = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id==HashfileHashes.hash_id).filter(Hashes.cracked=='0').all()
+        scoped_query = _scoped_hash_rows_query(scoped_hashfile_ids)
+        cracked_hashes = scoped_query.filter(Hashes.cracked.is_(True)).all()
+        uncracked_hashes = scoped_query.filter(Hashes.cracked.is_(False)).all()
 
     output = io.StringIO()
     if export_type == 'found':
         for entry in cracked_hashes:
             if entry[1].username:
-                output.write(str(bytes.fromhex(entry[1].username).decode('latin-1')) + ":" + str(entry[0].ciphertext) + ':' + str(_decoded_plaintext(entry[0].plaintext)) + "\n")
-            else:
-                output.write(str(entry[0].ciphertext) + ':' + str(_decoded_plaintext(entry[0].plaintext)) + "\n")
+                try:
+                    username = bytes.fromhex(entry[1].username).decode('latin-1')
+                except (TypeError, ValueError):
+                    username = None
+                if username:
+                    output.write(
+                        str(username)
+                        + ":"
+                        + str(entry[0].ciphertext)
+                        + ':'
+                        + str(_decoded_plaintext(entry[0].plaintext))
+                        + "\n"
+                    )
+                    continue
+            output.write(str(entry[0].ciphertext) + ':' + str(_decoded_plaintext(entry[0].plaintext)) + "\n")
 
     if export_type == 'left':
         for entry in uncracked_hashes:
             if entry[1].username:
-                output.write(str(bytes.fromhex(entry[1].username).decode('latin-1')) + ":" + str(entry[0].ciphertext) + "\n")
-            else:
-                output.write(str(entry[0].ciphertext) + "\n")
+                try:
+                    username = bytes.fromhex(entry[1].username).decode('latin-1')
+                except (TypeError, ValueError):
+                    username = None
+                if username:
+                    output.write(str(username) + ":" + str(entry[0].ciphertext) + "\n")
+                    continue
+            output.write(str(entry[0].ciphertext) + "\n")
 
     buffer = io.BytesIO(output.getvalue().encode('utf-8'))
     buffer.seek(0)
@@ -496,6 +515,7 @@ def analytics_download_hashes():
         mimetype='text/plain; charset=utf-8',
     )
 
+
 def format_display(number):
-    """Function to commas to the number after every thousand places"""
+    """Function to add commas to numbers."""
     return "{:,}".format(number)

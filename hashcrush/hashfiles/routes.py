@@ -1,24 +1,41 @@
 """Flask routes to handle Hashfiles"""
 from flask import Blueprint, render_template, url_for, redirect, flash
 from flask_login import login_required, current_user
-from sqlalchemy.sql import exists
 from sqlalchemy import func, case
+from sqlalchemy.sql import exists
 from hashcrush.models import Hashfiles, Domains, Jobs, HashfileHashes, Hashes
 from hashcrush.models import db
 
 hashfiles = Blueprint('hashfiles', __name__)
+
+
+def _visible_hashfiles_query():
+    query = Hashfiles.query
+    if not current_user.admin:
+        query = query.filter(Hashfiles.owner_id == current_user.id)
+    return query
+
+
+def _visible_jobs_query():
+    query = Jobs.query
+    if not current_user.admin:
+        query = query.filter(Jobs.owner_id == current_user.id)
+    return query
+
 
 @hashfiles.route("/hashfiles", methods=['GET', 'POST'])
 @login_required
 
 def hashfiles_list():
     """Function to return list of hashfiles"""
-    hashfiles = Hashfiles.query.order_by(Hashfiles.uploaded_at.desc()).all()
-    # domains = Domains.query.order_by(Domains.name).all()
-    domains = Domains.query.filter(exists().where(Domains.id == Hashfiles.domain_id)).all()
-    # Hashes.query.filter(~ exists().where(Hashes.id==HashfileHashes.hash_id)).filter_by(cracked = '0')
-    # select * from domains where id in (select domain_id from hashfiles);
-    jobs = Jobs.query.all()
+    hashfiles = _visible_hashfiles_query().order_by(Hashfiles.uploaded_at.desc()).all()
+    domain_ids = sorted({hashfile.domain_id for hashfile in hashfiles})
+    domains = (
+        Domains.query.filter(Domains.id.in_(domain_ids)).all()
+        if domain_ids
+        else []
+    )
+    jobs = _visible_jobs_query().all()
 
     cracked_rate = {}
     hash_type_dict = {}

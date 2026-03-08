@@ -1,11 +1,16 @@
 # syntax=docker/dockerfile:1
-FROM python:3.8-alpine
-WORKDIR /
-ENV FLASK_APP=hashcrush
-ENV FLASK_RUN_HOST=0.0.0.0
-RUN apk add --no-cache gcc musl-dev linux-headers libffi-dev
+FROM python:3.12-slim
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
 COPY requirements.txt requirements.txt
-RUN pip install -r requirements.txt
-EXPOSE 5000
+RUN python -m pip install --no-cache-dir -r requirements.txt
+
 COPY . .
-CMD ["flask", "run"]
+
+EXPOSE 8080
+
+CMD ["gunicorn", "--workers=2", "--threads=4", "--bind=0.0.0.0:8080", "--access-logfile=-", "--error-logfile=-", "hashcrush:create_app()"]

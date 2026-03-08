@@ -6,7 +6,7 @@ import re
 from datetime import datetime
 from flask import Blueprint, render_template, redirect, flash, url_for, current_app, request
 from flask_login import login_required, current_user
-from sqlalchemy import func, case
+from sqlalchemy import func, case, exists, or_
 from hashcrush.jobs.forms import JobsForm, JobsNewHashFileForm, JobSummaryForm
 from hashcrush.models import Jobs, Domains, Hashfiles, Users, HashfileHashes, Hashes, JobTasks, Tasks, TaskGroups
 from hashcrush.utils.utils import save_file, import_hashfilehashes, build_hashcat_command, validate_pwdump_hashfile, validate_netntlm_hashfile, validate_kerberos_hashfile, validate_shadow_hashfile, validate_user_hash_hashfile, validate_hash_only_hashfile, get_runtime_subdir
@@ -33,6 +33,46 @@ def _visible_hashfiles_for_job(job: Jobs) -> list[Hashfiles]:
     if not current_user.admin:
         query = query.filter(Hashfiles.owner_id == current_user.id)
     return query.all()
+
+
+def _visible_jobs_query():
+    query = Jobs.query
+    if not current_user.admin:
+        query = query.filter(Jobs.owner_id == current_user.id)
+    return query
+
+
+def _visible_domains_query():
+    query = Domains.query.order_by(Domains.name)
+    if current_user.admin:
+        return query
+    return query.filter(
+        or_(
+            exists().where(Jobs.domain_id == Domains.id).where(Jobs.owner_id == current_user.id),
+            exists().where(Hashfiles.domain_id == Domains.id).where(Hashfiles.owner_id == current_user.id),
+        )
+    )
+
+
+def _visible_hashfiles_query():
+    query = Hashfiles.query
+    if not current_user.admin:
+        query = query.filter(Hashfiles.owner_id == current_user.id)
+    return query
+
+
+def _visible_tasks_query():
+    query = Tasks.query
+    if not current_user.admin:
+        query = query.filter(Tasks.owner_id == current_user.id)
+    return query
+
+
+def _visible_task_groups_query():
+    query = TaskGroups.query
+    if not current_user.admin:
+        query = query.filter(TaskGroups.owner_id == current_user.id)
+    return query
 
 
 def _get_assignable_hashfile(job: Jobs, raw_hashfile_id) -> Hashfiles | None:
@@ -78,12 +118,44 @@ def _parse_jobtask_progress(progress_payload: str | None) -> tuple[str | None, s
 @login_required
 def jobs_list():
     """Function to return list of Jobs"""
-    jobs = Jobs.query.order_by(Jobs.created_at.desc()).all()
-    domains = Domains.query.all()
-    users = Users.query.all()
-    hashfiles = Hashfiles.query.all()
-    job_tasks = JobTasks.query.all()
-    tasks = Tasks.query.all()
+    jobs = _visible_jobs_query().order_by(Jobs.created_at.desc()).all()
+    domains = _visible_domains_query().all()
+    users = Users.query.all() if current_user.admin else [current_user]
+    hashfiles = _visible_hashfiles_query().all()
+    visible_job_ids = [job.id for job in jobs]
+    job_tasks = (
+        JobTasks.query.filter(JobTasks.job_id.in_(visible_job_ids)).all()
+        if visible_job_ids
+        else []
+    )
+    visible_task_ids = sorted({job_task.task_id for job_task in job_tasks})
+    tasks = (
+        _visible_tasks_query().filter(Tasks.id.in_(visible_task_ids)).all()
+        if visible_task_ids
+        else []
+    )
+    hashfile_ids = [job.hashfile_id for job in jobs if job.hashfile_id]
+    hashfile_stats = {}
+    if hashfile_ids:
+        stats_rows = (
+            db.session.query(
+                HashfileHashes.hashfile_id,
+                func.count(Hashes.id).label('total_count'),
+                func.sum(case((Hashes.cracked.is_(True), 1), else_=0)).label('cracked_count'),
+            )
+            .join(Hashes, Hashes.id == HashfileHashes.hash_id)
+            .filter(HashfileHashes.hashfile_id.in_(hashfile_ids))
+            .group_by(HashfileHashes.hashfile_id)
+            .all()
+        )
+        hashfile_stats = {
+            row.hashfile_id: (int(row.cracked_count or 0), int(row.total_count or 0))
+            for row in stats_rows
+        }
+    job_recovered = {}
+    for job in jobs:
+        cracked, total = hashfile_stats.get(job.hashfile_id, (0, 0))
+        job_recovered[job.id] = f'{cracked}/{total}'
 
     # Surface latest active task telemetry per job for jobs table (ETA + % done).
     status_rank = {'Running': 0, 'Importing': 1, 'Paused': 2, 'Queued': 3}
@@ -113,14 +185,15 @@ def jobs_list():
         job_tasks=job_tasks,
         tasks=tasks,
         job_runtime_progress=job_runtime_progress,
+        job_recovered=job_recovered,
     )
 
 @jobs.route("/jobs/add", methods=['GET', 'POST'])
 @login_required
 def jobs_add():
     """Function to manage adding of new job"""
-    jobs = Jobs.query.all()
-    domains = Domains.query.order_by(Domains.name).all()
+    jobs = _visible_jobs_query().all()
+    domains = _visible_domains_query().all()
     jobs_form = JobsForm()
     if jobs_form.validate_on_submit():
         domain_id = jobs_form.domain_id.data
@@ -129,6 +202,16 @@ def jobs_add():
             db.session.add(domain)
             db.session.commit()
             domain_id = domain.id
+        else:
+            parsed_domain_id = _parse_positive_int(jobs_form.domain_id.data)
+            if parsed_domain_id is None:
+                flash('Invalid domain selection.', 'danger')
+                return redirect(url_for('jobs.jobs_add'))
+            visible_domain = _visible_domains_query().filter(Domains.id == parsed_domain_id).first()
+            if not visible_domain:
+                flash('Selected domain is outside your access scope.', 'danger')
+                return redirect(url_for('jobs.jobs_add'))
+            domain_id = visible_domain.id
 
         try:
             selected_priority = int(jobs_form.priority.data)
@@ -139,7 +222,7 @@ def jobs_add():
         job = Jobs( name = jobs_form.name.data,
                     priority = job_priority,
                     status = 'Incomplete',
-                    domain_id = domain_id,
+                    domain_id = int(domain_id),
                     owner_id = current_user.id)
         db.session.add(job)
         db.session.commit()
@@ -301,7 +384,12 @@ def jobs_assigned_hashfile_cracked(job_id, hashfile_id):
         return redirect(url_for('jobs.jobs_list'))
 
     hashfile = Hashfiles.query.get(hashfile_id)
-    if not hashfile or hashfile.id != job.hashfile_id or hashfile.domain_id != job.domain_id:
+    if (
+        not hashfile
+        or hashfile.id != job.hashfile_id
+        or hashfile.domain_id != job.domain_id
+        or (not current_user.admin and hashfile.owner_id != current_user.id)
+    ):
         flash('Invalid hashfile for this job.', 'danger')
         return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job.id))
     # Can be optimized to only return the hash and plaintext
@@ -322,9 +410,9 @@ def jobs_list_tasks(job_id):
         flash('You do not have rights to view this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
-    tasks = Tasks.query.all()
+    tasks = _visible_tasks_query().all()
     job_tasks = JobTasks.query.filter_by(job_id=job_id)
-    task_groups = TaskGroups.query.all()
+    task_groups = _visible_task_groups_query().all()
     # Right now we're doing nested loops in the template, this could probably be solved with a left/join select
 
     return render_template('jobs_assigned_tasks.html', title='Jobs Assigned Tasks', job=job, tasks=tasks, job_tasks=job_tasks, task_groups=task_groups)
@@ -338,7 +426,10 @@ def jobs_assigned_task(job_id, task_id):
         flash('You do not have rights to modify this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
-    Tasks.query.get_or_404(task_id)
+    task = _visible_tasks_query().filter(Tasks.id == task_id).first()
+    if not task:
+        flash('Task is outside your access scope.', 'danger')
+        return redirect(url_for('jobs.jobs_list_tasks', job_id=job.id))
 
     exists = JobTasks.query.filter_by(job_id=job_id, task_id=task_id).first()
     if exists:
@@ -360,14 +451,17 @@ def jobs_assign_task_group(job_id, task_group_id):
         flash('You do not have rights to modify this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
-    task_group = TaskGroups.query.get_or_404(task_group_id)
+    task_group = _visible_task_groups_query().filter(TaskGroups.id == task_group_id).first()
+    if not task_group:
+        flash('Task Group is outside your access scope.', 'danger')
+        return redirect(url_for('jobs.jobs_list_tasks', job_id=job.id))
     try:
         task_group_entries = json.loads(task_group.tasks)
     except (TypeError, ValueError):
         task_group_entries = []
 
     for task_group_entry in task_group_entries:
-        if not Tasks.query.get(task_group_entry):
+        if not _visible_tasks_query().filter(Tasks.id == task_group_entry).first():
             continue
         job_task = JobTasks(job_id=job_id, task_id=task_group_entry, status='Not Started')
         db.session.add(job_task)
@@ -518,9 +612,9 @@ def jobs_summary(job_id):
         return redirect("/jobs/"+str(job_id)+"/tasks")
 
     form = JobSummaryForm()
-    tasks = Tasks.query.all()
+    tasks = _visible_tasks_query().all()
     hashfile = Hashfiles.query.get(job.hashfile_id)
-    if not hashfile:
+    if (not hashfile) or ((not current_user.admin) and hashfile.owner_id != current_user.id):
         flash('You must assign a valid hashfile before reviewing summary.', 'danger')
         return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job.id))
     domain = Domains.query.get(job.domain_id)
@@ -561,6 +655,10 @@ def jobs_start(job_id):
     job.status = 'Queued'
     job.queued_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     for job_task in job_tasks:
+        if not _visible_tasks_query().filter(Tasks.id == job_task.task_id).first():
+            db.session.rollback()
+            flash('One or more assigned tasks are outside your access scope.', 'danger')
+            return redirect(url_for('jobs.jobs_list_tasks', job_id=job.id))
         job_task.status = 'Queued'
         job_task.priority = job.priority
         try:
