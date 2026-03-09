@@ -93,18 +93,51 @@ rules_path = /path/to/hashcat/rules
 
 ## Testing
 
-Install test dependencies:
+Install test dependencies and Playwright browser:
 ```bash
-python3 -m pip install -r requirements-test.txt
-pytest -q
+python3 -m pip install -r requirements.txt -r requirements-test.txt
+python3 -m playwright install chromium
 ```
+
+Run non-E2E tests only (no live server required):
+```bash
+PYTHONPATH=. pytest -q -m "not e2e" -rs
+```
+
+Run the full suite (including E2E):
+
+Terminal 1 (start app with HTTPS):
+```bash
+python3 ./hashcrush.py
+```
+
+Terminal 2 (set E2E variables and run):
+```bash
+export HASHCRUSH_E2E_BASE_URL="https://127.0.0.1:8443"
+export HASHCRUSH_E2E_VERIFY_TLS=0
+export HASHCRUSH_E2E_USERNAME="admin"
+export HASHCRUSH_E2E_PASSWORD="<admin-password>"
+PYTHONPATH=. pytest -q -rs
+```
+
+Optional E2E variables to reduce skips:
+```bash
+export HASHCRUSH_E2E_DOMAIN_ID="1"
+export HASHCRUSH_E2E_HASHFILE_ID="1"
+export HASHCRUSH_E2E_TASK_ID="1"
+export HASHCRUSH_E2E_TASK_NAME="?a [1]"
+export HASHCRUSH_E2E_SECOND_USERNAME="user2"
+export HASHCRUSH_E2E_SECOND_PASSWORD="<user2-password>"
+export HASHCRUSH_E2E_SECOND_IS_ADMIN=0
+```
+
+You can store these values in `.env.test` at repo root; tests auto-load it.
+
+Common skip/failure causes:
+- `External server not reachable`: app is not running or `HASHCRUSH_E2E_BASE_URL` is wrong.
+- Login-related skips: invalid E2E credentials or account throttled by login protection.
+- HTTP/CSRF issues: use HTTPS endpoint for E2E (`https://127.0.0.1:8443`).
 
 ## Docker
 
-Docker now uses Python 3.12 and runs with `gunicorn` on port `8080`.
-
-```bash
-docker compose up --build
-```
-
-App endpoint: `http://127.0.0.1:8080`
+Currently completely unreliable. 

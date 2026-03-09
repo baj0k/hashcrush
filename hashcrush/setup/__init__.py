@@ -16,14 +16,29 @@ def default_tasks_need_added(db: SQLAlchemy) -> bool:
     return db.session.query(Tasks).count() == 0
 
 
+def _default_seed_owner_id(db: SQLAlchemy) -> int:
+    admin_row = db.session.query(Users.id).filter_by(admin=True).order_by(Users.id.asc()).first()
+    if admin_row:
+        owner_id, *_ = admin_row
+        return int(owner_id)
+
+    user_row = db.session.query(Users.id).order_by(Users.id.asc()).first()
+    if user_row:
+        owner_id, *_ = user_row
+        return int(owner_id)
+
+    raise RuntimeError('Cannot seed default tasks without at least one user.')
+
+
 def add_default_tasks(db: SQLAlchemy):
+    owner_id = _default_seed_owner_id(db)
     task_ids = []
 
     for length in range(1, 11):
         mask = '?a' * length
         task = Tasks(
             name=f'{mask} [{length}]',
-            owner_id=1,
+            owner_id=owner_id,
             wl_id=None,
             rule_id=None,
             hc_attackmode='maskmode',
@@ -33,11 +48,11 @@ def add_default_tasks(db: SQLAlchemy):
         db.session.flush()
         task_ids.append(task.id)
 
-    default_group_name = 'bruteforce 1-10'
+    default_group_name = 'maskmode 1-10'
     if not db.session.query(TaskGroups).filter_by(name=default_group_name).first():
         task_group = TaskGroups(
             name=default_group_name,
-            owner_id=1,
+            owner_id=owner_id,
             tasks=str(task_ids),
         )
         db.session.add(task_group)

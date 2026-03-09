@@ -132,24 +132,16 @@ def tasks_add():
             db.session.commit()
             flash(f'Task {tasksForm.name.data} created!', 'success')
         elif tasksForm.hc_attackmode.data == 'maskmode':
+            selected_mask = (tasksForm.mask.data or '').strip()
+            if not selected_mask:
+                flash('Maskmode tasks require a non-empty hashcat mask.', 'danger')
+                return render_template('tasks_add.html', title='Tasks Add', tasksForm=tasksForm)
             task = Tasks(   name=tasksForm.name.data,
                             owner_id=current_user.id,
                             wl_id=None,
                             rule_id=None,
                             hc_attackmode=tasksForm.hc_attackmode.data,
-                            hc_mask=tasksForm.mask.data
-            )
-            db.session.add(task)
-            db.session.commit()
-            flash(f'Task {tasksForm.name.data} created!', 'success')
-        elif tasksForm.hc_attackmode.data == 'bruteforce':
-            task = Tasks(
-                name=tasksForm.name.data,
-                owner_id=current_user.id,
-                wl_id=None,
-                rule_id=None,
-                hc_attackmode=tasksForm.hc_attackmode.data,
-                hc_mask=None,
+                            hc_mask=selected_mask
             )
             db.session.add(task)
             db.session.commit()
@@ -172,7 +164,7 @@ def task_edit(task_id):
         flash('Can not edit this task. It is currently associated to one or more jobs.', 'danger')
         return redirect(url_for('tasks.tasks_list'))
 
-    tasksForm = TasksForm()
+    tasksForm = TasksForm(current_task_id=task.id)
 
     # clear select field for wordlists and rules
     tasksForm.rule_id.choices = []
@@ -231,27 +223,21 @@ def task_edit(task_id):
             task.wl_id = selected_wordlist.id
             task.rule_id = selected_rule_id
             task.hc_attackmode = tasksForm.hc_attackmode.data
+            task.hc_mask = None
 
             db.session.add(task)
             db.session.commit()
             flash(f'Task {tasksForm.name.data} updated!', 'success')
         elif tasksForm.hc_attackmode.data == 'maskmode':
-
+            selected_mask = (tasksForm.mask.data or '').strip()
+            if not selected_mask:
+                flash('Maskmode tasks require a non-empty hashcat mask.', 'danger')
+                return render_template('tasks_edit.html', title='Tasks Edit', tasksForm=tasksForm, task=task, wordlists=wordlists, rules=rules)
             task.name = tasksForm.name.data
             task.wl_id = None
             task.rule_id = None
             task.hc_attackmode = tasksForm.hc_attackmode.data
-            task.hc_mask = tasksForm.mask.data
-
-            db.session.add(task)
-            db.session.commit()
-            flash(f'Task {tasksForm.name.data} updated!', 'success')
-        elif tasksForm.hc_attackmode.data == 'bruteforce':
-            task.name = tasksForm.name.data
-            task.wl_id = None
-            task.rule_id = None
-            task.hc_attackmode = tasksForm.hc_attackmode.data
-            task.hc_mask = None
+            task.hc_mask = selected_mask
 
             db.session.add(task)
             db.session.commit()

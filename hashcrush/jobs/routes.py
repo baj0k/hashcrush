@@ -15,6 +15,7 @@ from hashcrush.models import db
 
 jobs = Blueprint('jobs', __name__)
 ACTIVE_JOB_TASK_MUTATION_STATUSES = {'Running', 'Queued', 'Paused'}
+ACTIVE_JOB_TASK_EXECUTION_STATUSES = {'Running', 'Importing', 'Queued', 'Paused'}
 
 
 def _utc_now_naive() -> datetime:
@@ -821,8 +822,8 @@ def jobs_stop(job_id):
         job.ended_at = _utc_now_naive()
 
         for job_task in job_tasks:
-            job_task.status = 'Canceled'
-            job_task.worker_pid = None
+            if job_task.status in ACTIVE_JOB_TASK_EXECUTION_STATUSES:
+                job_task.status = 'Canceled'
         db.session.commit()
         flash('Job has been stopped!', 'success')
     else:

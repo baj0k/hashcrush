@@ -1,14 +1,15 @@
 """Flask routes to handle Rules"""
 import csv
 import io
-from flask import Blueprint, render_template, redirect, url_for, request, flash, send_file
+from flask import Blueprint, flash, redirect, render_template, request, send_file, url_for
 from flask_login import login_required, current_user
-from sqlalchemy import or_
+from sqlalchemy import func, or_
+
 from hashcrush.searches.forms import SearchForm
 from hashcrush.models import Domains, Hashfiles, HashfileHashes, Hashes
 from hashcrush.models import db
 from hashcrush import jinja_hex_decode
-from hashcrush.utils.utils import encode_plaintext_for_storage
+from hashcrush.utils.utils import encode_plaintext_for_storage, get_md5_hash
 
 searches = Blueprint('searches', __name__)
 
@@ -33,6 +34,39 @@ def _scoped_search_query():
         query = query.join(Hashfiles, HashfileHashes.hashfile_id == Hashfiles.id).filter(Hashfiles.owner_id == current_user.id)
     return query
 
+
+def _normalized_query_text(raw_value: str | None) -> str:
+    return (raw_value or '').strip()
+
+
+def _hash_search_filters(query_text: str):
+    query_lower = query_text.lower()
+    return or_(
+        Hashes.ciphertext == query_text,
+        func.lower(Hashes.ciphertext) == query_lower,
+        Hashes.sub_ciphertext == get_md5_hash(query_text),
+    )
+
+
+def _password_search_filters(query_text: str):
+    candidates = {query_text}
+
+    try:
+        encoded_query = encode_plaintext_for_storage(query_text)
+    except UnicodeEncodeError:
+        encoded_query = None
+
+    if encoded_query is not None:
+        # Canonical format is lowercase hex, but include uppercase for legacy rows.
+        candidates.add(encoded_query)
+        candidates.add(encoded_query.upper())
+
+    # Some legacy databases may still contain raw plaintext rows.
+    candidates.add(query_text.lower())
+    candidates.add(query_text.upper())
+
+    return or_(*[Hashes.plaintext == candidate for candidate in sorted(candidates)])
+
 @searches.route("/search", methods=['GET', 'POST'])
 @login_required
 def searches_list():
@@ -43,36 +77,31 @@ def searches_list():
     search_form = SearchForm()
     # Domain and hashfile labels are resolved at render/export time.
     if search_form.validate_on_submit():
+        query_text = _normalized_query_text(search_form.query.data)
+        search_form.query.data = query_text
+        if not query_text:
+            flash('No results found', 'warning')
+            return redirect(url_for('searches.searches_list'))
+
         if search_form.search_type.data == 'hash':
-            results = _scoped_search_query().filter(Hashes.ciphertext == search_form.query.data).all()
+            results = _scoped_search_query().filter(_hash_search_filters(query_text)).all()
         elif search_form.search_type.data == 'user':
-            results = _scoped_search_query().filter(
-                HashfileHashes.username.like('%' + search_form.query.data.encode('latin-1').hex() + '%')
-            ).all()
-        elif search_form.search_type.data == 'password':
-            query_text = search_form.query.data or ''
+            user_filters = [HashfileHashes.username == query_text]
             try:
-                encoded_query = encode_plaintext_for_storage(query_text)
+                encoded_username = query_text.encode('latin-1').hex()
             except UnicodeEncodeError:
-                encoded_query = None
-            legacy_query = query_text.upper()
-
-            password_filters = []
-            if encoded_query is not None:
-                password_filters.append(Hashes.plaintext == encoded_query)
-            password_filters.append(Hashes.plaintext == legacy_query)
-
-            results = (
-                _scoped_search_query()
-                .filter(or_(*password_filters))
-                .all()
-            )
+                encoded_username = None
+            if encoded_username:
+                user_filters.append(HashfileHashes.username.like('%' + encoded_username + '%'))
+            results = _scoped_search_query().filter(or_(*user_filters)).all()
+        elif search_form.search_type.data == 'password':
+            results = _scoped_search_query().filter(_password_search_filters(query_text)).all()
         else:
             flash('No results found', 'warning')
             return redirect(url_for('searches.searches_list'))
     elif request.args.get("hash_id"):
-        results = _scoped_search_query().filter(Hashes.id == request.args.get("hash_id"))
-        first_result = results.first()
+        results = _scoped_search_query().filter(Hashes.id == request.args.get("hash_id")).all()
+        first_result = results[0] if results else None
         if first_result: #Without a value in the search input the export button will not pass the form validation
             search_form.query.data = first_result[0].ciphertext #All hashs should be the same, so set the search input as the first rows hash value
             search_form.search_type.data = 'hash' #Set the search type to hash

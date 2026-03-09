@@ -185,21 +185,39 @@ class LocalExecutorService:
         return os.path.join(outfiles_dir, f"hc_cracked_{job.id}_{job_task.task_id}.txt")
 
     def _recover_orphaned_tasks(self) -> None:
-        """Requeue tasks that were running when the process exited."""
-        orphaned = JobTasks.query.filter(JobTasks.status.in_(("Running", "Importing"))).all()
+        """Recover tasks left behind by an unexpected process exit.
+
+        Running/importing tasks are re-queued. Paused/canceled tasks with a stale
+        worker PID are cleaned up in-place so an orphaned hashcat process cannot
+        continue after restart.
+        """
+        orphaned = JobTasks.query.filter(
+            (JobTasks.status.in_(("Running", "Importing")))
+            | (
+                (JobTasks.status.in_(("Paused", "Canceled")))
+                & (JobTasks.worker_pid.isnot(None))
+            )
+        ).all()
         if not orphaned:
             return
 
         touched_job_ids = set()
         imported_total = 0
+        requeued_total = 0
+        cleaned_total = 0
         for job_task in orphaned:
+            original_status = job_task.status
             self._terminate_orphaned_pid(job_task)
             crack_path = self._crack_file_path_for_job_task(job_task)
             if crack_path:
                 imported_total += self._safe_import_crack_file(job_task, crack_path)
-            job_task.status = "Queued"
             job_task.worker_pid = None
-            touched_job_ids.add(job_task.job_id)
+            if original_status in ("Running", "Importing"):
+                job_task.status = "Queued"
+                touched_job_ids.add(job_task.job_id)
+                requeued_total += 1
+            else:
+                cleaned_total += 1
         db.session.commit()
 
         for job_id in touched_job_ids:
@@ -219,8 +237,10 @@ class LocalExecutorService:
         db.session.commit()
 
         current_app.logger.warning(
-            "Recovered %s orphaned running task(s) to Queued state (imported_hashes=%s).",
+            "Recovered orphaned tasks: total=%s requeued=%s cleaned=%s imported_hashes=%s.",
             len(orphaned),
+            requeued_total,
+            cleaned_total,
             imported_total,
         )
 

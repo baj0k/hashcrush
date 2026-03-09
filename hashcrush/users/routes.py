@@ -10,7 +10,7 @@ from flask_login import LoginManager
 from flask_bcrypt import Bcrypt
 
 from hashcrush.models import db
-from hashcrush.models import AuthThrottle, Users, Jobs, Wordlists, Rules, TaskGroups, Tasks
+from hashcrush.models import AuthThrottle, Hashfiles, Jobs, Rules, TaskGroups, Tasks, Users, Wordlists
 from hashcrush.users.forms import LoginForm, UsersForm, ProfileForm
 
 bcrypt = Bcrypt()
@@ -31,6 +31,17 @@ users = Blueprint('users', __name__)
 def _admin_count() -> int:
     """Return number of admin accounts currently present."""
     return Users.query.filter_by(admin=True).count()
+
+
+def _owned_asset_counts(user_id: int) -> dict[str, int]:
+    return {
+        'jobs': Jobs.query.filter_by(owner_id=user_id).count(),
+        'hashfiles': Hashfiles.query.filter_by(owner_id=user_id).count(),
+        'wordlists': Wordlists.query.filter_by(owner_id=user_id).count(),
+        'rules': Rules.query.filter_by(owner_id=user_id).count(),
+        'tasks': Tasks.query.filter_by(owner_id=user_id).count(),
+        'task_groups': TaskGroups.query.filter_by(owner_id=user_id).count(),
+    }
 
 
 def _utc_now_naive() -> datetime:
@@ -263,6 +274,17 @@ def users_delete(user_id):
 
     if user.admin and _admin_count() <= 1:
         flash('Cannot delete the last admin account.', 'danger')
+        return redirect(url_for('users.users_list'))
+
+    owned_counts = _owned_asset_counts(user.id)
+    non_zero_owned_counts = {name: count for name, count in owned_counts.items() if count > 0}
+    if non_zero_owned_counts:
+        details = ', '.join(f'{name}={count}' for name, count in non_zero_owned_counts.items())
+        flash(
+            f'Cannot delete user while they own records ({details}). '
+            'Transfer or delete owned records first.',
+            'danger',
+        )
         return redirect(url_for('users.users_list'))
 
     db.session.delete(user)

@@ -455,9 +455,7 @@ def build_hashcat_argv(job_id, task_id, hashcat_bin=None):
     ]
 
     if attackmode == 'combinator':
-        raise ValueError("Task attack mode 'combinator' is not supported yet. Edit the task and choose 'dictionary', 'maskmode', or 'bruteforce'.")
-    if attackmode == 'bruteforce':
-        return common + ['-a', '3', target_file]
+        raise ValueError("Task attack mode 'combinator' is not supported yet. Edit the task and choose 'dictionary' or 'maskmode'.")
     if attackmode == 'maskmode':
         if not mask:
             raise ValueError("Task attack mode 'maskmode' requires a hashcat mask.")
