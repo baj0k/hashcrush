@@ -218,16 +218,13 @@ def jobs_add():
     jobs = Jobs.query.all()
     domains = _visible_domains_query().all()
     jobs_form = JobsForm()
+    jobs_form.domain_id.choices = [(0, "--SELECT--")] + [
+        (domain.id, domain.name) for domain in domains
+    ]
     if jobs_form.validate_on_submit():
-        if jobs_form.domain_id.data == 'add_new':
-            flash('Create shared domains from the Domains page. Jobs can only use existing domains.', 'danger')
-            return _render_jobs_add_form(jobs, domains, jobs_form)
-
-        parsed_domain_id = _parse_positive_int(jobs_form.domain_id.data)
-        if parsed_domain_id is None:
-            flash('Invalid domain selection.', 'danger')
-            return redirect(url_for('jobs.jobs_add'))
-        visible_domain = _visible_domains_query().filter(Domains.id == parsed_domain_id).first()
+        visible_domain = _visible_domains_query().filter(
+            Domains.id == jobs_form.domain_id.data
+        ).first()
         if not visible_domain:
             flash('Selected domain is invalid or no longer available.', 'danger')
             return redirect(url_for('jobs.jobs_add'))

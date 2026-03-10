@@ -26,10 +26,12 @@ class JobsForm(FlaskForm):
         default=3,
         validators=[DataRequired()],
     )
-    domain_id = StringField(
-        "Domain ID", validators=[DataRequired()], filters=[normalize_text_input]
+    domain_id = SelectField(
+        "Domain",
+        choices=[],
+        coerce=int,
+        validators=[DataRequired()],
     )
-    domain_name = StringField("Domain Name", filters=[normalize_text_input])
     submit = SubmitField("Next")
 
     def validate_name(self, name):

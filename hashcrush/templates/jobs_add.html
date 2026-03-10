@@ -41,13 +41,17 @@ Provide the name of the job and select an existing shared domain.
                 {% endif %}
             </div>
             <div class="form-group">
-                <label class="form-control-label" for="domain_id">Domain</label>
-                <select class="form-control form-control-lg" id="domain_id" name="domain_id" required>
-                    <option value>--SELECT--</option>
-                    {% for domain in domains %}
-                        <option value='{{domain.id}}'>{{domain.name}}</option>
-                    {% endfor %}
-                </select>
+                {{ jobsForm.domain_id.label(class="form-control-label") }}
+                {% if jobsForm.domain_id.errors %}
+                    {{ jobsForm.domain_id(class="form-control form-control-lg is-invalid") }}
+                    <div class="invalid-feedback">
+                        {% for error in jobsForm.domain_id.errors %}
+                            <span>{{ error }}</span>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    {{ jobsForm.domain_id(class="form-control form-control-lg") }}
+                {% endif %}
                 <small class="form-text text-muted">
                     Need a new domain? Ask an admin to create it from the Domains page.
                 </small>

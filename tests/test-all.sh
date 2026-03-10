@@ -12,35 +12,32 @@ if [[ -f .env.test ]]; then
 fi
 
 export PYTHONPATH="${PYTHONPATH:-.}"
+export HASHCRUSH_E2E_MODE="${HASHCRUSH_E2E_MODE:-local}"
 
 echo "[1/2] Running non-E2E tests"
-pytest -q -m "not e2e" -rs
+pytest -q -m "not e2e and not e2e_external" -rs
 
-required_e2e_vars=(
-  HASHCRUSH_E2E_BASE_URL
-  HASHCRUSH_E2E_USERNAME
-  HASHCRUSH_E2E_PASSWORD
-  HASHCRUSH_E2E_SECOND_USERNAME
-  HASHCRUSH_E2E_SECOND_PASSWORD
-  HASHCRUSH_E2E_DOMAIN_ID
-  HASHCRUSH_E2E_HASHFILE_ID
-  HASHCRUSH_E2E_TASK_ID
-  HASHCRUSH_E2E_TASK_NAME
-)
+if [[ "${HASHCRUSH_E2E_MODE}" == "external" ]]; then
+  echo "[2/2] Running E2E tests against external host ${HASHCRUSH_E2E_BASE_URL}"
+  e2e_marker="e2e_external"
+else
+  echo "[2/2] Running E2E tests against self-bootstrapped local app"
+  e2e_marker="e2e"
+fi
+e2e_log="$(mktemp)"
+trap 'rm -f "$e2e_log"' EXIT
 
-missing_vars=()
-for var_name in "${required_e2e_vars[@]}"; do
-  if [[ -z "${!var_name:-}" ]]; then
-    missing_vars+=("$var_name")
-  fi
-done
+set +e
+pytest -q -m "$e2e_marker" -rs | tee "$e2e_log"
+pytest_status=${PIPESTATUS[0]}
+set -e
 
-if (( ${#missing_vars[@]} > 0 )); then
-  echo >&2
-  echo "Missing E2E variables: ${missing_vars[*]}" >&2
-  echo "Run python3 ./hashcrush.py setup --test to generate a ready-to-use .env.test." >&2
-  exit 1
+if (( pytest_status != 0 )); then
+  exit "$pytest_status"
 fi
 
-echo "[2/2] Running E2E tests"
-pytest -q -m e2e -rs
+if [[ "${HASHCRUSH_ALLOW_E2E_SKIPS:-0}" != "1" ]] && grep -q '^SKIPPED ' "$e2e_log"; then
+  echo >&2
+  echo "E2E suite reported skipped tests. Fix the live credentials/fixtures or set HASHCRUSH_ALLOW_E2E_SKIPS=1 to allow skips." >&2
+  exit 1
+fi

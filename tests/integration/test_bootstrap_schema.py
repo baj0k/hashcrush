@@ -1,5 +1,7 @@
 """Integration tests for CLI bootstrap, setup, schema, and runtime bootstrap."""
 # ruff: noqa: F403,F405
+from sqlalchemy import text
+
 from tests.integration.support import *
 
 
@@ -97,7 +99,6 @@ def test_hashcrush_cli_upgrade_subcommand_runs_schema_upgrade(monkeypatch):
                     upgrade=lambda: None,
                 ),
             ),
-            adopted_unversioned_schema=False,
             initialized_empty_schema=True,
             dry_run=dry_run,
         )
@@ -165,10 +166,10 @@ def test_upgrade_database_initializes_empty_schema_and_tracks_version():
         assert state.version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
-def test_upgrade_database_adopts_unversioned_schema_without_data_loss():
+def test_upgrade_database_rejects_unversioned_non_empty_schema():
     app = _build_app()
     with app.app_context():
-        from hashcrush.db_upgrade import CURRENT_SCHEMA_VERSION, upgrade_database
+        from hashcrush.db_upgrade import upgrade_database
 
         db.create_all()
         user = _seed_admin_user()
@@ -179,12 +180,10 @@ def test_upgrade_database_adopts_unversioned_schema_without_data_loss():
 
         SchemaVersion.__table__.drop(bind=db.engine)
 
-        result = upgrade_database()
+        with pytest.raises(RuntimeError, match="non-empty database without schema version tracking"):
+            upgrade_database()
 
-        state = db.session.get(SchemaVersion, 1)
-        assert result.adopted_unversioned_schema is True
-        assert state is not None
-        assert state.version == CURRENT_SCHEMA_VERSION
+        assert not inspect(db.engine).has_table(SchemaVersion.__tablename__)
         assert Users.query.filter_by(id=user.id).count() == 1
         assert Domains.query.filter_by(name="legacy-domain").count() == 1
 
@@ -203,7 +202,37 @@ def test_upgrade_database_migrates_v1_schema_to_v2_audit_log_table():
         result = upgrade_database()
 
         assert inspect(db.engine).has_table(AuditLog.__tablename__)
-        assert [step.version for step in result.applied_steps] == [2]
+        assert [step.version for step in result.applied_steps] == [2, 3]
+        assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
+
+@pytest.mark.security
+def test_upgrade_database_migrates_v2_schema_to_v3_settings_cleanup():
+    app = _build_app()
+    with app.app_context():
+        from hashcrush.db_upgrade import CURRENT_SCHEMA_VERSION, upgrade_database
+
+        db.create_all()
+        db.session.execute(
+            text(
+                'ALTER TABLE "settings" ADD COLUMN "retention_period" INTEGER NOT NULL DEFAULT 0'
+            )
+        )
+        db.session.execute(
+            text(
+                'ALTER TABLE "settings" ADD COLUMN "enabled_job_weights" BOOLEAN NOT NULL DEFAULT 0'
+            )
+        )
+        db.session.add(SchemaVersion(id=1, version=2, app_version="1.0"))
+        db.session.commit()
+
+        result = upgrade_database()
+
+        settings_columns = {
+            column["name"] for column in inspect(db.engine).get_columns("settings")
+        }
+        assert "retention_period" not in settings_columns
+        assert "enabled_job_weights" not in settings_columns
+        assert [step.version for step in result.applied_steps] == [3]
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -472,7 +501,6 @@ def test_create_app_bootstraps_schema_for_empty_database(tmp_path):
             "SQLALCHEMY_DATABASE_URI": f"sqlite:///{db_path}",
             "SQLALCHEMY_TRACK_MODIFICATIONS": False,
             "AUTO_SETUP_DEFAULTS": False,
-            "ENABLE_SCHEDULER": False,
             "ENABLE_LOCAL_EXECUTOR": False,
             "SKIP_RUNTIME_BOOTSTRAP": True,
             "AUTO_NORMALIZE_PLAINTEXT_STORAGE": False,
@@ -497,6 +525,42 @@ def test_create_app_bootstraps_schema_for_empty_database(tmp_path):
             "hashes",
             "auth_throttle",
         }.issubset(table_names)
+
+@pytest.mark.security
+def test_create_app_rejects_unversioned_non_empty_database(tmp_path):
+    db_path = tmp_path / "legacy-untracked.db"
+    bootstrap_app = create_app(
+        testing=True,
+        config_overrides={
+            "SECRET_KEY": "phase1-test-secret",
+            "SQLALCHEMY_DATABASE_URI": f"sqlite:///{db_path}",
+            "SQLALCHEMY_TRACK_MODIFICATIONS": False,
+            "AUTO_SETUP_DEFAULTS": False,
+            "ENABLE_LOCAL_EXECUTOR": False,
+            "SKIP_RUNTIME_BOOTSTRAP": True,
+            "AUTO_NORMALIZE_PLAINTEXT_STORAGE": False,
+        },
+    )
+
+    with bootstrap_app.app_context():
+        db.create_all()
+        db.session.add(Domains(name="legacy-domain"))
+        db.session.commit()
+        SchemaVersion.__table__.drop(bind=db.engine)
+
+    with pytest.raises(RuntimeError, match="non-empty database without schema version tracking"):
+        create_app(
+            testing=False,
+            config_overrides={
+                "SECRET_KEY": "phase1-test-secret",
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{db_path}",
+                "SQLALCHEMY_TRACK_MODIFICATIONS": False,
+                "AUTO_SETUP_DEFAULTS": False,
+                "ENABLE_LOCAL_EXECUTOR": False,
+                "SKIP_RUNTIME_BOOTSTRAP": True,
+                "AUTO_NORMALIZE_PLAINTEXT_STORAGE": False,
+            },
+        )
 
 @pytest.mark.security
 def test_schema_unique_constraints_reject_duplicate_names_and_paths():
@@ -1009,7 +1073,6 @@ def test_production_session_cookie_defaults_are_hardened():
             "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
             "SQLALCHEMY_TRACK_MODIFICATIONS": False,
             "AUTO_SETUP_DEFAULTS": False,
-            "ENABLE_SCHEDULER": False,
             "ENABLE_LOCAL_EXECUTOR": False,
             "SKIP_RUNTIME_BOOTSTRAP": True,
             "AUTO_NORMALIZE_PLAINTEXT_STORAGE": False,

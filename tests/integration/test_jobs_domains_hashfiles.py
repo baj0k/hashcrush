@@ -750,7 +750,7 @@ def test_jobs_assign_task_group_normalizes_string_ids_and_skips_duplicates():
         assert assigned_task_ids.count(task_b.id) == 1
 
 @pytest.mark.security
-def test_jobs_add_rejects_new_domain_creation_from_job_flow():
+def test_jobs_add_rejects_invalid_domain_selection():
     app = _build_app()
     with app.app_context():
         db.create_all()
@@ -769,15 +769,11 @@ def test_jobs_add_rejects_new_domain_creation_from_job_flow():
             data={
                 "name": "blocked-domain-job",
                 "priority": "3",
-                "domain_id": "add_new",
-                "domain_name": "TransientDomain",
+                "domain_id": "999999",
             },
         )
         assert response.status_code == 200
-        assert (
-            b"Create shared domains from the Domains page. Jobs can only use existing domains."
-            in response.data
-        )
+        assert b"Not a valid choice." in response.data
         assert Domains.query.count() == 0
         assert Jobs.query.count() == 0
 
@@ -802,7 +798,6 @@ def test_jobs_add_uses_existing_selected_domain():
                 "name": "selected-domain-job",
                 "priority": "3",
                 "domain_id": str(existing_domain.id),
-                "domain_name": "",
             },
         )
         assert response.status_code == 302
@@ -833,14 +828,13 @@ def test_jobs_add_rejects_whitespace_only_name():
                 "name": "   ",
                 "priority": "3",
                 "domain_id": str(domain.id),
-                "domain_name": "",
             },
         )
         assert response.status_code == 200
         assert Jobs.query.count() == 0
 
 @pytest.mark.security
-def test_jobs_add_rolls_back_new_domain_when_job_commit_conflicts(monkeypatch):
+def test_jobs_add_handles_job_commit_conflict_without_mutating_domains(monkeypatch):
     app = _build_app()
     with app.app_context():
         db.create_all()
@@ -864,7 +858,6 @@ def test_jobs_add_rolls_back_new_domain_when_job_commit_conflicts(monkeypatch):
                 "name": "conflicting-job",
                 "priority": "3",
                 "domain_id": str(domain.id),
-                "domain_name": "",
             },
         )
         assert response.status_code == 200

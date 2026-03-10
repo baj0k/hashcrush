@@ -3,7 +3,6 @@ import logging
 import os
 import sqlite3
 import tempfile
-from functools import partial
 from logging.config import dictConfig as loggingDictConfig
 
 from flask import Flask, redirect, request, url_for
@@ -52,10 +51,7 @@ def _ensure_database_schema(app: Flask) -> None:
             upgrade_database()
             return
         if not schema_status["tracked"]:
-            raise RuntimeError(
-                "Database schema is not version-tracked. Run `hashcrush.py upgrade` "
-                "before starting this version."
-            )
+            raise RuntimeError(str(schema_status["detail"]))
         current_version = int(schema_status["current_version"])
         target_version = int(schema_status["target_version"])
         if current_version < target_version:
@@ -154,25 +150,6 @@ def setup_defaults_if_needed():
 
     from hashcrush.models import db
 
-    if current_app.config.get("ENABLE_SCHEDULER", False):
-        try:
-            from hashcrush.scheduler import data_retention_cleanup, scheduler
-
-            logger.info("Clearing Scheduled Jobs.")
-            scheduler.remove_all_jobs()
-            logger.info("Scheduling default jobs.")
-            scheduler.add_job(
-                id="DATA_RETENTION",
-                func=partial(data_retention_cleanup, current_app),
-                trigger="cron",
-                hour="*",
-            )
-            logger.info("Default job scheduling complete.")
-        except Exception:
-            logger.exception("Adding Default Scheduled Jobs failed.")
-    else:
-        logger.info("ENABLE_SCHEDULER disabled; skipping default job scheduling.")
-
     try:
         from hashcrush.setup import add_admin_user, admin_user_needs_added
         from hashcrush.users.routes import bcrypt
@@ -243,7 +220,6 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     # Sensible defaults; can be overridden via config_overrides or app config.
     # These are intentionally conservative for production deployments.
     app.config.setdefault("AUTO_SETUP_DEFAULTS", True)
-    app.config.setdefault("ENABLE_SCHEDULER", False)
     app.config.setdefault("ENABLE_LOCAL_EXECUTOR", True)
     app.config.setdefault("SKIP_RUNTIME_BOOTSTRAP", False)
     app.config.setdefault("AUTO_NORMALIZE_PLAINTEXT_STORAGE", True)
@@ -291,21 +267,6 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
 
     csrf = CSRFProtect()
     csrf.init_app(app)
-
-    from hashcrush.scheduler import scheduler
-
-    scheduler.init_app(app)
-
-    # Avoid starting background scheduler automatically in multi-worker deployments.
-    # Enable explicitly via config to prevent duplicate jobs.
-    if (
-        (not app.config.get("TESTING"))
-        and (not app.config.get("SKIP_RUNTIME_BOOTSTRAP"))
-        and app.config.get("ENABLE_SCHEDULER", False)
-    ):
-        # Flask's reloader starts the app twice; only start scheduler in the reloader child.
-        if (not app.debug) or (os.environ.get("WERKZEUG_RUN_MAIN") == "true"):
-            scheduler.start()
 
     from hashcrush.users.routes import bcrypt
 

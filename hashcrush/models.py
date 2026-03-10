@@ -28,8 +28,6 @@ class Settings(db.Model):
     """Class object to represent Settings"""
 
     id = db.Column(db.Integer, primary_key=True)
-    retention_period = db.Column(db.Integer, nullable=False, default=0)
-    enabled_job_weights = db.Column(db.Boolean, nullable=False, default=False)
 
 
 class Jobs(db.Model):

@@ -121,10 +121,7 @@ def settings_post():
         logger.info('%s: Form was not valid.', settings_post.__name__)
         return render_template('setup_settings.html.j2', form=form)
 
-    settings = Settings(
-        retention_period=0,
-        enabled_job_weights=False,
-    )
+    settings = Settings()
     db.session.add(settings)
     db.session.commit()
     flash('Settings added!', 'success')

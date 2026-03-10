@@ -103,6 +103,8 @@ python3 ./hashcrush.py
 
 `hashcrush.py upgrade` is non-destructive. It applies tracked schema/data migrations in place and preserves existing data.
 If the database schema is older than the code expects, app startup now stops with an explicit error until `hashcrush.py upgrade` is run.
+Tracked in-place upgrades are supported only for schema-versioned deployments created from this release onward.
+Non-empty unversioned legacy databases are not auto-adopted; rebuild them with `hashcrush.py setup` or migrate them manually before using `hashcrush.py upgrade`.
 
 ## External Wordlists and Rules
 `hashcrush.py setup` prompts for paths and writes them to `hashcrush/config.conf`.
@@ -132,16 +134,64 @@ python3 -m pip install -r requirements.txt -r requirements-test.txt
 python3 -m playwright install chromium
 ```
 
-Fastest disposable live-test path:
+Default fully automated test path:
 ```bash
-python3 ./hashcrush.py setup --test
-python3 ./hashcrush.py
 ./tests/test-all.sh
 ```
 
-`hashcrush.py setup --test` writes the `.env.test`.  
-`tests/test-all.sh` auto-loads `.env.test`, runs non-E2E tests first, then runs E2E tests.
+`tests/test-all.sh` is the supported test entrypoint.
+It runs:
+- non-E2E tests first
+- then a self-bootstrapped local browser suite by default
 
-## Docker
+The local browser path:
+- starts a temporary app instance automatically
+- uses a temporary SQLite database
+- seeds its own users, domain, hashfile, wordlist, and task
+- does not require `hashcrush.py setup --test`
+- is the authoritative CI path
 
-Currently completely unreliable.
+GitHub Actions runs the same wrapper from [.github/workflows/tests.yml](/home/bajok/hashcrush/.github/workflows/tests.yml).
+
+Direct pytest entrypoints:
+```bash
+PYTHONPATH=. pytest -q -m "not e2e and not e2e_external" -rs
+PYTHONPATH=. pytest -q -m e2e -rs
+```
+
+Optional external-host smoke path:
+```bash
+python3 ./hashcrush.py setup --test
+python3 ./hashcrush.py
+export HASHCRUSH_E2E_MODE=external
+./tests/test-all.sh
+```
+
+When `HASHCRUSH_E2E_MODE=external` is set, `tests/test-all.sh` switches to the smaller `e2e_external` smoke suite against the already running host from `.env.test` / `HASHCRUSH_E2E_BASE_URL`.
+
+Use external mode for:
+- post-deploy smoke checks
+- validating the real PostgreSQL/TLS/config deployment shape
+- checking the actual running instance rather than the temporary local harness
+
+Direct external smoke entrypoint:
+```bash
+PYTHONPATH=. pytest -q -m e2e_external -rs
+```
+
+Recommended post-deploy smoke checklist:
+1. deploy the new code
+2. run `python3 ./hashcrush.py upgrade --dry-run`
+3. run `python3 ./hashcrush.py upgrade`
+4. restart the app
+5. confirm the target URL responds over HTTPS
+6. run:
+```bash
+export HASHCRUSH_E2E_MODE=external
+./tests/test-all.sh
+```
+
+By default the wrapper treats any E2E skip as a failure, so stale credentials, missing fixtures, or an unreachable host do not produce a false-green run.
+Set `HASHCRUSH_ALLOW_E2E_SKIPS=1` only if you intentionally want a permissive external smoke run.
+
+Detailed testing documentation is in [tests/README.md](/home/bajok/hashcrush/tests/README.md).

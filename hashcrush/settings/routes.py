@@ -298,7 +298,7 @@ def settings_list():
     if current_user.admin:
         settings = Settings.query.first()
         if not settings:
-            settings = Settings(retention_period=0, enabled_job_weights=False)
+            settings = Settings()
             db.session.add(settings)
             db.session.commit()
 

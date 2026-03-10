@@ -55,7 +55,6 @@ def _build_app(extra_overrides: dict | None = None):
         "SQLALCHEMY_TRACK_MODIFICATIONS": False,
         "WTF_CSRF_ENABLED": False,
         "AUTO_SETUP_DEFAULTS": False,
-        "ENABLE_SCHEDULER": False,
     }
     if extra_overrides:
         base_overrides.update(extra_overrides)
@@ -115,8 +114,6 @@ def _seed_user(
 
 def _seed_settings() -> Settings:
     settings = Settings(
-        retention_period=0,
-        enabled_job_weights=False,
     )
     db.session.add(settings)
     db.session.commit()

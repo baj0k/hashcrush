@@ -7,12 +7,12 @@
 # Repository metadata and docs
 !.gitignore
 !.pylintrc
+!.github/
+!.github/workflows/**
 !LICENSE
 !README.md
 
 # Project configuration and entry points
-!Dockerfile
-!docker-compose.yml
 !pyproject.toml
 !pytest.ini
 !requirements.txt

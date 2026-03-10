@@ -8,7 +8,6 @@ import os
 import sys
 import traceback
 from datetime import datetime
-from functools import partial
 from pathlib import Path
 
 
@@ -147,10 +146,7 @@ def ensure_settings_cli(db):
         print("Settings exist in database.")
         return
 
-    settings = Settings(
-        retention_period=0,
-        enabled_job_weights=False,
-    )
+    settings = Settings()
     db.session.add(settings)
     db.session.commit()
 
@@ -325,7 +321,6 @@ def _run_serve(parsed_args: argparse.Namespace) -> int:
     app = create_app()
     with app.app_context():
         from hashcrush.models import db
-        from hashcrush.scheduler import data_retention_cleanup
         from hashcrush.users.routes import bcrypt
 
         if parsed_args.reset_admin_password:
@@ -335,15 +330,6 @@ def _run_serve(parsed_args: argparse.Namespace) -> int:
         ensure_admin_account_cli(db, bcrypt)
 
         print("Done! Running HashCrush! Enjoy.")
-
-        scheduler = app.apscheduler
-        scheduler.remove_all_jobs()
-        scheduler.add_job(
-            id="DATA_RETENTION",
-            func=partial(data_retention_cleanup, app),
-            trigger="cron",
-            hour="*",
-        )
 
     if parsed_args.debug:
         app_state.debug = True
@@ -372,7 +358,6 @@ def _run_upgrade(parsed_args: argparse.Namespace) -> int:
     app = create_app(
         config_overrides={
             "ENABLE_LOCAL_EXECUTOR": False,
-            "ENABLE_SCHEDULER": False,
             "AUTO_SETUP_DEFAULTS": False,
             "AUTO_NORMALIZE_PLAINTEXT_STORAGE": False,
             "SKIP_RUNTIME_BOOTSTRAP": True,
@@ -388,8 +373,6 @@ def _run_upgrade(parsed_args: argparse.Namespace) -> int:
         f"Schema version: {result.starting_version} -> {result.target_version}"
         + (" (dry-run)" if result.dry_run else "")
     )
-    if result.adopted_unversioned_schema:
-        print("Adopting existing unversioned schema without dropping data.")
     if result.initialized_empty_schema:
         print("Initializing empty schema with version tracking.")
     if result.applied_steps:
