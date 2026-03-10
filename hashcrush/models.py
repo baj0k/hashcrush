@@ -255,3 +255,25 @@ class SchemaVersion(db.Model):
     version = db.Column(db.Integer, nullable=False)
     app_version = db.Column(db.String(32), nullable=False)
     updated_at = db.Column(db.DateTime, nullable=False, default=utc_now_naive)
+
+
+class AuditLog(db.Model):
+    """Immutable audit trail for sensitive app actions."""
+
+    __tablename__ = "audit_logs"
+    __table_args__ = (
+        db.Index("ix_audit_logs_created_at", "created_at"),
+        db.Index("ix_audit_logs_event_type_created_at", "event_type", "created_at"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now_naive)
+    actor_user_id = db.Column(db.Integer, nullable=True)
+    actor_username = db.Column(db.String(64), nullable=False, default="<unknown>")
+    actor_admin = db.Column(db.Boolean, nullable=False, default=False)
+    actor_ip = db.Column(db.String(64), nullable=True)
+    event_type = db.Column(db.String(64), nullable=False)
+    target_type = db.Column(db.String(64), nullable=False)
+    target_id = db.Column(db.String(64), nullable=True)
+    summary = db.Column(db.String(255), nullable=False)
+    details_json = db.Column(db.Text, nullable=False, default="{}")

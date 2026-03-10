@@ -25,9 +25,10 @@ def _select_domain(page):
         if option.count() > 0:
             page.locator("#domain_id").select_option(str(domain_id))
             return
-    page.locator("#domain_id").select_option("add_new")
-    domain_name = os.getenv("HASHCRUSH_E2E_DOMAIN_NAME", "E2E Domain")
-    page.locator("#new_domain_div input[name='domain_name']").fill(domain_name)
+    pytest.skip(
+        "Configured HASHCRUSH_E2E_DOMAIN_ID is missing from the job form. "
+        "Create the shared domain first or refresh the E2E fixture set."
+    )
 
 
 def _detect_login_failure(page) -> tuple[str, str] | None:
@@ -85,35 +86,18 @@ def _login(page, live_server, username, password):
 @pytest.mark.e2e
 def test_domain_name_xss_is_escaped(page, live_server, login):
     login()
-    payload = "<svg onload=alert(1)>"
-
-    page.get_by_role("link", name="Jobs").click()
-    page.get_by_role("link", name="Create a New Job").click()
-    expect(page.get_by_role("heading", name="Create a new Job")).to_be_visible()
-
-    page.locator("input[name='name']").fill(f"E2E XSS Domain {uuid.uuid4().hex[:6]}")
-    if page.locator("#priority").count() > 0:
-        page.locator("#priority").select_option("3")
-    domain_select = page.locator("#domain_id")
-    domain_select.select_option("add_new")
-    if domain_select.input_value() != "add_new":
-        page.evaluate(
-            "const el=document.querySelector('#domain_id');"
-            "if(el){el.value='add_new';el.dispatchEvent(new Event('change'));}"
-        )
-    page.locator("input[name='domain_name']").fill(payload)
-    page.get_by_role("button", name="Next").click()
-    try:
-        expect(
-            page.get_by_role("heading", name=re.compile(r"Assign Hashes for"))
-        ).to_be_visible()
-    except AssertionError:
-        pytest.skip("Job creation failed; domain not created.")
+    payload_token = uuid.uuid4().hex[:6]
+    payload = f"<svg id=x{payload_token}>"
 
     page.goto(f"{live_server}/domains", wait_until="domcontentloaded")
+    expect(page.get_by_role("heading", name="Domains")).to_be_visible()
+    page.locator("input[name='name']").fill(payload)
+    page.get_by_role("button", name="Add Domain").click()
+    expect(page.locator("body")).to_contain_text(payload)
+
     content = page.content()
-    assert "<svg onload=alert(1)>" not in content
-    assert "&lt;svg onload=alert(1)&gt;" in content
+    assert payload not in content
+    assert f"&lt;svg id=x{payload_token}&gt;" in content
 
 
 @pytest.mark.e2e

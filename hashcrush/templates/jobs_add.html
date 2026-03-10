@@ -3,26 +3,12 @@
 <br>
 <h1>Create a new Job</h1>
 <br>
-Provide the Name of the Job and the Domain it is for.
+Provide the name of the job and select an existing shared domain.
 <br>
 <br>
 <br>
 {% endblock header %}
 {% block content %}
-<script>
-    function showDiv(){
-        var Index = document.getElementById('domain_id'); 
-        // support all other attack types
-        if(Index.value == 'add_new')
-        {
-          document.getElementById('new_domain_div').style.display = 'inline';
-        }
-        else
-        {
-          document.getElementById('new_domain_div').style.display = 'none';
-        }
-    }
-</script>
 <div class="content-section">
     <form method="POST" action="" enctype="multipart/form-data">
         {{ jobsForm.hidden_tag() }}
@@ -56,17 +42,15 @@ Provide the Name of the Job and the Domain it is for.
             </div>
             <div class="form-group">
                 <label class="form-control-label" for="domain_id">Domain</label>
-                <select class="form-control form-control-lg" id="domain_id" name="domain_id" onchange="showDiv()" required>
+                <select class="form-control form-control-lg" id="domain_id" name="domain_id" required>
                     <option value>--SELECT--</option>
                     {% for domain in domains %}
                         <option value='{{domain.id}}'>{{domain.name}}</option>
                     {% endfor %}
-                    <option value='add_new'>New Domain</option>
                 </select>
-            </div>
-            <div class="form-group" style=display:none id="new_domain_div">
-                <label class="control-label col-xs-2" for="">Domain Name</label>
-                <input class="form-control" id="name" name="domain_name" type="textbox">
+                <small class="form-text text-muted">
+                    Need a new domain? Ask an admin to create it from the Domains page.
+                </small>
             </div>
         </fieldset>
         <div class="form-group">

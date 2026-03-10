@@ -15,6 +15,7 @@ from flask import (
 from flask_login import current_user, login_required
 from sqlalchemy import func
 
+from hashcrush.audit import record_audit_event
 from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles, db
 from hashcrush.utils.utils import decode_plaintext_from_storage
 
@@ -518,6 +519,18 @@ def analytics_download_hashes():
                     continue
             output.write(str(entry[0].ciphertext) + "\n")
 
+    record_audit_event(
+        'analytics.download',
+        'analytics_export',
+        target_id=filename,
+        summary=f'Downloaded analytics export "{filename}".',
+        details={
+            'export_type': export_type,
+            'domain_id': domain_id,
+            'hashfile_id': hashfile_id,
+            'row_count': len(cracked_hashes) if export_type == 'found' else len(uncracked_hashes),
+        },
+    )
     buffer = io.BytesIO(output.getvalue().encode('utf-8'))
     buffer.seek(0)
     return send_file(

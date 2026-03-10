@@ -18,6 +18,7 @@ from flask_login import current_user, login_required
 from sqlalchemy import case, func
 from sqlalchemy.exc import IntegrityError
 
+from hashcrush.audit import record_audit_event
 from hashcrush.authz import PUBLIC_JOB_VIEW_STATUSES, visible_jobs_query
 from hashcrush.jobs.forms import JobsForm, JobsNewHashFileForm, JobSummaryForm
 from hashcrush.models import (
@@ -229,39 +230,19 @@ def jobs_add():
     domains = _visible_domains_query().all()
     jobs_form = JobsForm()
     if jobs_form.validate_on_submit():
-        domain_id = jobs_form.domain_id.data
         if jobs_form.domain_id.data == 'add_new':
-            domain_name = (jobs_form.domain_name.data or '').strip()
-            if not domain_name:
-                flash('Domain name is required when creating a new domain.', 'danger')
-                return _render_jobs_add_form(jobs, domains, jobs_form)
-            existing_domain = Domains.query.filter_by(name=domain_name).first()
-            if existing_domain:
-                domain_id = existing_domain.id
-            else:
-                domain = Domains(name=domain_name)
-                db.session.add(domain)
-                try:
-                    db.session.flush()
-                except IntegrityError:
-                    db.session.rollback()
-                    existing_domain = Domains.query.filter_by(name=domain_name).first()
-                    if not existing_domain:
-                        flash('Domain could not be created. Refresh and retry.', 'danger')
-                        return _render_jobs_add_form(jobs, domains, jobs_form)
-                    domain_id = existing_domain.id
-                else:
-                    domain_id = domain.id
-        else:
-            parsed_domain_id = _parse_positive_int(jobs_form.domain_id.data)
-            if parsed_domain_id is None:
-                flash('Invalid domain selection.', 'danger')
-                return redirect(url_for('jobs.jobs_add'))
-            visible_domain = _visible_domains_query().filter(Domains.id == parsed_domain_id).first()
-            if not visible_domain:
-                flash('Selected domain is invalid or no longer available.', 'danger')
-                return redirect(url_for('jobs.jobs_add'))
-            domain_id = visible_domain.id
+            flash('Create shared domains from the Domains page. Jobs can only use existing domains.', 'danger')
+            return _render_jobs_add_form(jobs, domains, jobs_form)
+
+        parsed_domain_id = _parse_positive_int(jobs_form.domain_id.data)
+        if parsed_domain_id is None:
+            flash('Invalid domain selection.', 'danger')
+            return redirect(url_for('jobs.jobs_add'))
+        visible_domain = _visible_domains_query().filter(Domains.id == parsed_domain_id).first()
+        if not visible_domain:
+            flash('Selected domain is invalid or no longer available.', 'danger')
+            return redirect(url_for('jobs.jobs_add'))
+        domain_id = visible_domain.id
 
         try:
             selected_priority = int(jobs_form.priority.data)
@@ -281,6 +262,19 @@ def jobs_add():
             db.session.rollback()
             flash('Job could not be created because its name already exists or the selected domain changed. Refresh and retry.', 'danger')
             return _render_jobs_add_form(jobs, domains, jobs_form)
+        record_audit_event(
+            'job.create',
+            'job',
+            target_id=job.id,
+            summary=f'Created draft job "{job.name}".',
+            details={
+                'job_name': job.name,
+                'status': job.status,
+                'domain_id': job.domain_id,
+                'priority': job.priority,
+                'owner_id': job.owner_id,
+            },
+        )
         return redirect(str(job.id)+"/assigned_hashfile/")
     return render_template('jobs_add.html', title='Jobs', jobs=jobs, domains=domains, jobsForm=jobs_form)
 
@@ -734,6 +728,9 @@ def jobs_delete(job_id):
 
     job = Jobs.query.get_or_404(job_id)
     if _can_manage_job(job):
+        deleted_job_name = job.name
+        deleted_job_status = job.status
+        deleted_owner_id = job.owner_id
         JobTasks.query.filter_by(job_id=job_id).delete()
 
         db.session.delete(job)
@@ -743,6 +740,17 @@ def jobs_delete(job_id):
             db.session.rollback()
             flash('Job could not be deleted because it changed concurrently. Refresh and retry.', 'danger')
             return redirect(url_for('jobs.jobs_list'))
+        record_audit_event(
+            'job.delete',
+            'job',
+            target_id=job_id,
+            summary=f'Deleted job "{deleted_job_name}".',
+            details={
+                'job_name': deleted_job_name,
+                'previous_status': deleted_job_status,
+                'owner_id': deleted_owner_id,
+            },
+        )
         flash('Job has been deleted!', 'success')
         return redirect(url_for('jobs.jobs_list'))
 
@@ -798,6 +806,18 @@ def jobs_summary(job_id):
         job.status = 'Ready'
         job.updated_at = _utc_now_naive()
         db.session.commit()
+        record_audit_event(
+            'job.finalize',
+            'job',
+            target_id=job.id,
+            summary=f'Finalized job "{job.name}" and queued it for scheduling.',
+            details={
+                'job_name': job.name,
+                'job_task_count': len(job_tasks),
+                'hashfile_id': job.hashfile_id,
+                'domain_id': job.domain_id,
+            },
+        )
 
         flash('Job successfully created', 'success')
 
@@ -832,6 +852,7 @@ def jobs_start(job_id):
         flash('Error in starting job', 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
+    previous_status = job.status
     job.status = 'Queued'
     job.queued_at = _utc_now_naive()
     visible_task_ids = {
@@ -852,6 +873,17 @@ def jobs_start(job_id):
             return redirect(url_for('jobs.jobs_summary', job_id=job.id))
 
     db.session.commit()
+    record_audit_event(
+        'job.start',
+        'job',
+        target_id=job.id,
+        summary=f'Started job "{job.name}".',
+        details={
+            'job_name': job.name,
+            'previous_status': previous_status,
+            'job_task_count': len(job_tasks),
+        },
+    )
     flash('Job has been Started!', 'success')
     return redirect(url_for('main.home'))
 
@@ -868,6 +900,7 @@ def jobs_stop(job_id):
         return redirect(url_for('jobs.jobs_list'))
 
     if job.status in ('Running', 'Queued', 'Paused'):
+        previous_status = job.status
         job.status = 'Canceled'
         job.ended_at = _utc_now_naive()
 
@@ -875,6 +908,19 @@ def jobs_stop(job_id):
             if job_task.status in ACTIVE_JOB_TASK_EXECUTION_STATUSES:
                 job_task.status = 'Canceled'
         db.session.commit()
+        record_audit_event(
+            'job.stop',
+            'job',
+            target_id=job.id,
+            summary=f'Stopped job "{job.name}".',
+            details={
+                'job_name': job.name,
+                'previous_status': previous_status,
+                'canceled_task_count': sum(
+                    1 for job_task in job_tasks if job_task.status == 'Canceled'
+                ),
+            },
+        )
         flash('Job has been stopped!', 'success')
     else:
         flash('Job is not actively running.', 'danger')
@@ -896,11 +942,19 @@ def jobs_pause(job_id):
         flash('Job is not running or queued.', 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
+    previous_status = job.status
     job.status = 'Paused'
     for job_task in job_tasks:
         if job_task.status in ('Running', 'Importing', 'Queued'):
             job_task.status = 'Paused'
     db.session.commit()
+    record_audit_event(
+        'job.pause',
+        'job',
+        target_id=job.id,
+        summary=f'Paused job "{job.name}".',
+        details={'job_name': job.name, 'previous_status': previous_status},
+    )
 
     flash('Job has been paused!', 'success')
     return redirect(url_for('jobs.jobs_list'))
@@ -921,6 +975,7 @@ def jobs_resume(job_id):
         flash('Job is not paused.', 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
+    previous_status = job.status
     for job_task in job_tasks:
         if job_task.status == 'Paused':
             job_task.status = 'Queued'
@@ -938,5 +993,16 @@ def jobs_resume(job_id):
         job.status = 'Paused'
 
     db.session.commit()
+    record_audit_event(
+        'job.resume',
+        'job',
+        target_id=job.id,
+        summary=f'Resumed job "{job.name}".',
+        details={
+            'job_name': job.name,
+            'previous_status': previous_status,
+            'new_status': job.status,
+        },
+    )
     flash('Job has been resumed!', 'success')
     return redirect(url_for('jobs.jobs_list'))

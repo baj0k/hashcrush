@@ -12,6 +12,7 @@ from flask_login import current_user, login_required
 from sqlalchemy import exists
 from sqlalchemy.exc import IntegrityError
 
+from hashcrush.audit import record_audit_event
 from hashcrush.authz import visible_jobs_query
 from hashcrush.domains.forms import DomainsForm
 from hashcrush.models import (
@@ -143,6 +144,13 @@ def domains_add():
         )
         return redirect(url_for('domains.domains_list'))
 
+    record_audit_event(
+        'domain.create',
+        'domain',
+        target_id=domain.id,
+        summary=f'Created shared domain "{domain.name}".',
+        details={'domain_name': domain.name},
+    )
     flash('Domain created!', 'success')
     return redirect(url_for('domains.domains_list'))
 
@@ -151,6 +159,7 @@ def domains_add():
 def domains_delete(domain_id):
     """Function to delete a domain."""
     domain = Domains.query.get_or_404(domain_id)
+    domain_name = domain.name
 
     if not current_user.admin:
         flash('Permission Denied', 'danger')
@@ -187,11 +196,24 @@ def domains_delete(domain_id):
         current_app.logger.info(
             'Deleted domain id=%s name=%s impact inactive_jobs=%s hashfiles=%s hash_links=%s orphan_uncracked=%s',
             domain.id,
-            domain.name,
+            domain_name,
             impact['inactive_jobs'],
             impact['hashfiles'],
             impact['hash_links'],
             impact['orphan_uncracked_hashes'],
+        )
+        record_audit_event(
+            'domain.delete',
+            'domain',
+            target_id=domain_id,
+            summary=f'Deleted shared domain "{domain_name}".',
+            details={
+                'domain_name': domain_name,
+                'inactive_jobs_removed': impact['inactive_jobs'],
+                'hashfiles_removed': impact['hashfiles'],
+                'hash_links_removed': impact['hash_links'],
+                'orphan_uncracked_hashes_removed': impact['orphan_uncracked_hashes'],
+            },
         )
         flash(
             'Domain has been deleted. '

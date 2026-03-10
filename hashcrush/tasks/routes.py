@@ -5,6 +5,7 @@ from flask import Blueprint, flash, redirect, render_template, url_for
 from flask_login import login_required
 from sqlalchemy.exc import IntegrityError
 
+from hashcrush.audit import record_audit_event
 from hashcrush.authz import admin_required_redirect, visible_jobs_query
 from hashcrush.models import JobTasks, Rules, TaskGroups, Tasks, Wordlists, db
 from hashcrush.tasks.forms import TasksForm
@@ -143,6 +144,18 @@ def tasks_add():
                 db.session.commit()
             except IntegrityError:
                 return _task_save_conflict_response('tasks_add.html', 'Tasks Add', tasksForm)
+            record_audit_event(
+                'task.create',
+                'task',
+                target_id=task.id,
+                summary=f'Created shared task "{task.name}".',
+                details={
+                    'task_name': task.name,
+                    'attack_mode': task.hc_attackmode,
+                    'wordlist_id': task.wl_id,
+                    'rule_id': task.rule_id,
+                },
+            )
             flash(f'Task {tasksForm.name.data} created!', 'success')
         elif tasksForm.hc_attackmode.data == 'maskmode':
             selected_mask = (tasksForm.mask.data or '').strip()
@@ -160,6 +173,17 @@ def tasks_add():
                 db.session.commit()
             except IntegrityError:
                 return _task_save_conflict_response('tasks_add.html', 'Tasks Add', tasksForm)
+            record_audit_event(
+                'task.create',
+                'task',
+                target_id=task.id,
+                summary=f'Created shared task "{task.name}".',
+                details={
+                    'task_name': task.name,
+                    'attack_mode': task.hc_attackmode,
+                    'mask': task.hc_mask,
+                },
+            )
             flash(f'Task {tasksForm.name.data} created!', 'success')
         else:
             flash('Invalid attack mode selection.', 'danger')
@@ -212,6 +236,8 @@ def task_edit(task_id):
     tasksForm.submit.label.text = 'Update'
 
     if tasksForm.validate_on_submit():
+        previous_name = task.name
+        previous_attack_mode = task.hc_attackmode
         if tasksForm.hc_attackmode.data == 'dictionary':
             selected_wl_id = _parse_positive_int(tasksForm.wl_id.data)
             selected_wordlist = (
@@ -253,6 +279,20 @@ def task_edit(task_id):
                     wordlists=wordlists,
                     rules=rules,
                 )
+            record_audit_event(
+                'task.update',
+                'task',
+                target_id=task.id,
+                summary=f'Updated shared task "{task.name}".',
+                details={
+                    'task_name': task.name,
+                    'previous_name': previous_name,
+                    'previous_attack_mode': previous_attack_mode,
+                    'attack_mode': task.hc_attackmode,
+                    'wordlist_id': task.wl_id,
+                    'rule_id': task.rule_id,
+                },
+            )
             flash(f'Task {tasksForm.name.data} updated!', 'success')
         elif tasksForm.hc_attackmode.data == 'maskmode':
             selected_mask = (tasksForm.mask.data or '').strip()
@@ -277,6 +317,19 @@ def task_edit(task_id):
                     wordlists=wordlists,
                     rules=rules,
                 )
+            record_audit_event(
+                'task.update',
+                'task',
+                target_id=task.id,
+                summary=f'Updated shared task "{task.name}".',
+                details={
+                    'task_name': task.name,
+                    'previous_name': previous_name,
+                    'previous_attack_mode': previous_attack_mode,
+                    'attack_mode': task.hc_attackmode,
+                    'mask': task.hc_mask,
+                },
+            )
             flash(f'Task {tasksForm.name.data} updated!', 'success')
         else:
             flash('Invalid attack mode selection.', 'danger')
@@ -310,6 +363,8 @@ def tasks_delete(task_id):
             flash('Cannot delete. Task is associated with one or more task groups.', 'danger')
             return redirect(url_for('tasks.tasks_list'))
 
+    deleted_task_name = task.name
+    deleted_attack_mode = task.hc_attackmode
     db.session.delete(task)
     try:
         db.session.commit()
@@ -317,5 +372,15 @@ def tasks_delete(task_id):
         db.session.rollback()
         flash('Cannot delete. Task is associated with one or more jobs or task groups.', 'danger')
         return redirect(url_for('tasks.tasks_list'))
+    record_audit_event(
+        'task.delete',
+        'task',
+        target_id=task_id,
+        summary=f'Deleted shared task "{deleted_task_name}".',
+        details={
+            'task_name': deleted_task_name,
+            'attack_mode': deleted_attack_mode,
+        },
+    )
     flash('Task has been deleted!', 'success')
     return redirect(url_for('tasks.tasks_list'))

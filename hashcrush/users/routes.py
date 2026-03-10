@@ -24,6 +24,7 @@ from flask_login import (
 )
 from sqlalchemy.exc import IntegrityError
 
+from hashcrush.audit import record_audit_event
 from hashcrush.models import AuthThrottle, Jobs, Users, db
 from hashcrush.users.forms import LoginForm, ProfileForm, UsersForm
 
@@ -267,6 +268,13 @@ def users_add():
                 db.session.rollback()
                 flash('Account could not be created because that username already exists. Refresh and retry.', 'danger')
                 return render_template('users_add.html', title='User Add', form=form)
+            record_audit_event(
+                'user.create',
+                'user',
+                target_id=user.id,
+                summary=f'Created user account "{user.username}".',
+                details={'username': user.username, 'admin': bool(user.admin)},
+            )
             flash(f'Account created for {form.username.data}!', 'success')
             return redirect(url_for('users.users_list'))
         return render_template('users_add.html', title='User Add', form=form)
@@ -301,6 +309,9 @@ def users_delete(user_id):
         )
         return redirect(url_for('users.users_list'))
 
+    deleted_user_id = user.id
+    deleted_username = user.username
+    deleted_was_admin = bool(user.admin)
     db.session.delete(user)
     try:
         db.session.commit()
@@ -311,6 +322,13 @@ def users_delete(user_id):
             'danger',
         )
         return redirect(url_for('users.users_list'))
+    record_audit_event(
+        'user.delete',
+        'user',
+        target_id=deleted_user_id,
+        summary=f'Deleted user account "{deleted_username}".',
+        details={'username': deleted_username, 'admin': deleted_was_admin},
+    )
     flash('User has been deleted!', 'success')
     return redirect(url_for('users.users_list'))
 
@@ -337,6 +355,13 @@ def profile():
             current_user.password = bcrypt.generate_password_hash(form.new_password.data).decode('utf-8')
             current_user.last_login_utc = _utc_now_naive()
             db.session.commit()
+            record_audit_event(
+                'user.password_change',
+                'user',
+                target_id=current_user.id,
+                summary='Changed own account password.',
+                details={'username': current_user.username},
+            )
             flash('Password updated.', 'success')
         else:
             flash('No profile fields to update. Submit password fields to rotate credentials.', 'info')
@@ -375,5 +400,12 @@ def admin_reset(user_id):
     user.password = bcrypt.generate_password_hash(new_password).decode('utf-8')
     user.last_login_utc = _utc_now_naive()
     db.session.commit()
+    record_audit_event(
+        'user.password_reset',
+        'user',
+        target_id=user.id,
+        summary=f'Reset password for user "{user.username}".',
+        details={'username': user.username, 'admin': bool(user.admin)},
+    )
     flash(f'Password updated for user {user.username}. Share it securely and ask the user to change it in Profile.', 'success')
     return redirect(url_for('users.users_list'))

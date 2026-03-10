@@ -7,6 +7,7 @@ from flask import Blueprint, flash, redirect, render_template
 from flask_login import current_user, login_required
 from sqlalchemy import case, func
 
+from hashcrush.audit import record_audit_event
 from hashcrush.models import (
     Domains,
     Hashes,
@@ -146,7 +147,19 @@ def stop_job_task(job_task_id):
             if job_task.status not in ('Running', 'Importing'):
                 flash('Task is not actively running.', 'danger')
                 return redirect("/")
+            previous_status = job_task.status
             update_job_task_status(job_task.id, 'Canceled')
+            record_audit_event(
+                'job_task.stop',
+                'job_task',
+                target_id=job_task.id,
+                summary=f'Stopped task {job_task.id} for job "{job.name}".',
+                details={
+                    'job_id': job.id,
+                    'task_id': job_task.task_id,
+                    'previous_status': previous_status,
+                },
+            )
         else:
             flash('You are unauthorized to stop this task', 'danger')
 

@@ -316,6 +316,7 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
         return {"csrf_token": generate_csrf}
 
     from hashcrush.analytics.routes import analytics
+    from hashcrush.audit_logs.routes import audit_logs
     from hashcrush.domains.routes import domains
     from hashcrush.hashfiles.routes import hashfiles
     from hashcrush.jobs.routes import jobs
@@ -329,6 +330,7 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     from hashcrush.users.routes import users
     from hashcrush.wordlists.routes import wordlists
 
+    app.register_blueprint(audit_logs)
     app.register_blueprint(domains)
     app.register_blueprint(hashfiles)
     app.register_blueprint(jobs)

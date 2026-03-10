@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from sqlalchemy import inspect
 
 import hashcrush
-from hashcrush.models import SchemaVersion, db, utc_now_naive
+from hashcrush.models import AuditLog, SchemaVersion, db, utc_now_naive
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -39,12 +39,23 @@ def _migration_001_adopt_current_schema() -> None:
     db.create_all()
 
 
+def _migration_002_create_audit_log_table() -> None:
+    """Add immutable audit-log storage for sensitive application actions."""
+    AuditLog.__table__.create(bind=db.engine, checkfirst=True)
+
+
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(
         version=1,
         name="baseline_current_schema",
         summary="Adopt the current schema and start tracking in-place upgrades.",
         upgrade=_migration_001_adopt_current_schema,
+    ),
+    MigrationStep(
+        version=2,
+        name="create_audit_log_table",
+        summary="Add immutable audit logging for sensitive actions.",
+        upgrade=_migration_002_create_audit_log_table,
     ),
 )
 
@@ -156,4 +167,3 @@ def get_schema_status() -> dict[str, object]:
         "tracked": current_version is not None,
         "has_user_tables": has_non_version_tables,
     }
-

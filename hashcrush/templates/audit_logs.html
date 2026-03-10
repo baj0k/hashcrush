@@ -1,0 +1,60 @@
+{% extends "layout.html"%}
+{% block header %}
+<br>
+<h1>Audit Log</h1>
+<br>
+<p class="text-muted">Recent sensitive actions recorded by the application. Entries are append-only snapshots.</p>
+<br>
+{% endblock header %}
+{% block content %}
+    <div class="content-section">
+        {% if entries %}
+            <div class="table-responsive">
+                <table class="table table-sm table-striped">
+                    <thead>
+                        <tr>
+                            <th scope="col">Time (UTC)</th>
+                            <th scope="col">Actor</th>
+                            <th scope="col">Event</th>
+                            <th scope="col">Target</th>
+                            <th scope="col">Summary</th>
+                            <th scope="col">Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for entry in entries %}
+                            <tr>
+                                <td>{{ entry.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                                <td>
+                                    {{ entry.actor_username }}
+                                    {% if entry.actor_admin %}
+                                        <span class="badge badge-primary ml-1">Admin</span>
+                                    {% endif %}
+                                    {% if entry.actor_ip %}
+                                        <br><small class="text-muted">{{ entry.actor_ip }}</small>
+                                    {% endif %}
+                                </td>
+                                <td><code>{{ entry.event_type }}</code></td>
+                                <td>
+                                    <code>{{ entry.target_type }}</code>
+                                    {% if entry.target_id %}
+                                        <br><small class="text-muted">ID {{ entry.target_id }}</small>
+                                    {% endif %}
+                                </td>
+                                <td>{{ entry.summary }}</td>
+                                <td>
+                                    <details>
+                                        <summary>View</summary>
+                                        <pre class="mb-0 mt-2"><code>{{ entry_details[entry.id] }}</code></pre>
+                                    </details>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <p class="mb-0">No audit events recorded yet.</p>
+        {% endif %}
+    </div>
+{% endblock content %}

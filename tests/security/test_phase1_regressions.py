@@ -12,6 +12,7 @@ from hashcrush import create_app
 from hashcrush.config import sanitize_config_input
 from hashcrush.forms_utils import normalize_text_input
 from hashcrush.models import (
+    AuditLog,
     Domains,
     Hashes,
     HashfileHashes,
@@ -125,6 +126,10 @@ def _login_client_as_user(client, user: Users):
         session["_fresh"] = True
 
 
+def _latest_audit_entry() -> AuditLog | None:
+    return AuditLog.query.order_by(AuditLog.id.desc()).first()
+
+
 @pytest.mark.security
 def test_ensure_settings_cli_adds_settings_only_when_missing():
     cli_module = _load_cli_module()
@@ -202,7 +207,11 @@ def test_hashcrush_cli_setup_subcommand_delegates_to_bootstrap(monkeypatch):
 @pytest.mark.security
 def test_hashcrush_cli_upgrade_subcommand_runs_schema_upgrade(monkeypatch):
     cli_module = _load_cli_module()
-    from hashcrush.db_upgrade import MigrationStep, UpgradeResult
+    from hashcrush.db_upgrade import (
+        CURRENT_SCHEMA_VERSION,
+        MigrationStep,
+        UpgradeResult,
+    )
 
     captured = {}
     app = _build_app()
@@ -211,7 +220,7 @@ def test_hashcrush_cli_upgrade_subcommand_runs_schema_upgrade(monkeypatch):
         captured["dry_run"] = dry_run
         return UpgradeResult(
             starting_version=0,
-            target_version=1,
+            target_version=CURRENT_SCHEMA_VERSION,
             applied_steps=(
                 MigrationStep(
                     version=1,
@@ -314,6 +323,151 @@ def test_upgrade_database_adopts_unversioned_schema_without_data_loss():
         assert state.version == CURRENT_SCHEMA_VERSION
         assert Users.query.filter_by(id=user.id).count() == 1
         assert Domains.query.filter_by(name="legacy-domain").count() == 1
+
+
+@pytest.mark.security
+def test_upgrade_database_migrates_v1_schema_to_v2_audit_log_table():
+    app = _build_app()
+    with app.app_context():
+        from hashcrush.db_upgrade import CURRENT_SCHEMA_VERSION, upgrade_database
+
+        db.create_all()
+        state = SchemaVersion(id=1, version=1, app_version="1.0")
+        db.session.add(state)
+        db.session.commit()
+        AuditLog.__table__.drop(bind=db.engine)
+
+        result = upgrade_database()
+
+        assert inspect(db.engine).has_table(AuditLog.__tablename__)
+        assert [step.version for step in result.applied_steps] == [2]
+        assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
+
+
+@pytest.mark.security
+def test_audit_log_page_renders_entries_for_admin():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+        db.session.add(
+            AuditLog(
+                actor_user_id=admin.id,
+                actor_username=admin.username,
+                actor_admin=True,
+                actor_ip="127.0.0.1",
+                event_type="job.start",
+                target_type="job",
+                target_id="7",
+                summary="Started job sample-job.",
+                details_json='{"job_name":"sample-job"}',
+            )
+        )
+        db.session.commit()
+
+        admin_client = app.test_client()
+        _login_client_as_user(admin_client, admin)
+        response = admin_client.get("/audit")
+        assert response.status_code == 200
+        assert b"Audit Log" in response.data
+        assert b"job.start" in response.data
+        assert b"sample-job" in response.data
+
+
+@pytest.mark.security
+def test_audit_log_page_rejects_non_admin():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        _seed_admin_user()
+        user = _seed_user("audited-user")
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, user)
+
+        response = client.get("/audit")
+
+        assert response.status_code == 403
+
+
+@pytest.mark.security
+def test_domains_add_records_audit_event():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post("/domains/add", data={"name": "Audit Domain"})
+
+        assert response.status_code == 302
+        entry = _latest_audit_entry()
+        assert entry is not None
+        assert entry.event_type == "domain.create"
+        assert entry.summary == 'Created shared domain "Audit Domain".'
+        assert '"domain_name": "Audit Domain"' in entry.details_json
+
+
+@pytest.mark.security
+def test_jobs_start_records_audit_event():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        owner = _seed_admin_user()
+        _seed_settings()
+        domain = Domains(name="Audit Job Domain")
+        hashfile = Hashfiles(name="audit-job.txt", domain_id=1)
+        task = Tasks(name="?a [1]", hc_attackmode="maskmode", hc_mask="?a")
+        db.session.add(domain)
+        db.session.commit()
+        hashfile.domain_id = domain.id
+        db.session.add_all(
+            [
+                hashfile,
+                task,
+            ]
+        )
+        db.session.commit()
+        job = Jobs(
+            name="Audit Job",
+            priority=3,
+            status="Ready",
+            domain_id=domain.id,
+            owner_id=owner.id,
+            hashfile_id=hashfile.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+        db.session.add(JobTasks(job_id=job.id, task_id=task.id, status="Ready"))
+        hash_row = Hashes(
+            sub_ciphertext="deadbeefdeadbeefdeadbeefdeadbeef",
+            ciphertext="11223344556677889900aabbccddeeff",
+            hash_type=1000,
+            cracked=False,
+            plaintext=None,
+        )
+        db.session.add(hash_row)
+        db.session.commit()
+        db.session.add(
+            HashfileHashes(hash_id=hash_row.id, username="user", hashfile_id=hashfile.id)
+        )
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, owner)
+
+        response = client.post(f"/jobs/start/{job.id}")
+
+        assert response.status_code == 302
+        entry = _latest_audit_entry()
+        assert entry is not None
+        assert entry.event_type == "job.start"
+        assert entry.target_id == str(job.id)
+        assert '"job_name": "Audit Job"' in entry.details_json
 
 
 @pytest.mark.security
@@ -2332,7 +2486,7 @@ def test_jobs_assign_task_group_normalizes_string_ids_and_skips_duplicates():
 
 
 @pytest.mark.security
-def test_jobs_add_rejects_blank_new_domain_name():
+def test_jobs_add_rejects_new_domain_creation_from_job_flow():
     app = _build_app()
     with app.app_context():
         db.create_all()
@@ -2342,23 +2496,30 @@ def test_jobs_add_rejects_blank_new_domain_name():
         client = app.test_client()
         _login_client_as_user(client, user)
 
+        form_response = client.get("/jobs/add")
+        assert form_response.status_code == 200
+        assert b"New Domain" not in form_response.data
+
         response = client.post(
             "/jobs/add",
             data={
-                "name": "blank-domain-job",
+                "name": "blocked-domain-job",
                 "priority": "3",
                 "domain_id": "add_new",
-                "domain_name": "   ",
+                "domain_name": "TransientDomain",
             },
         )
         assert response.status_code == 200
-        assert b"Domain name is required when creating a new domain." in response.data
+        assert (
+            b"Create shared domains from the Domains page. Jobs can only use existing domains."
+            in response.data
+        )
         assert Domains.query.count() == 0
         assert Jobs.query.count() == 0
 
 
 @pytest.mark.security
-def test_jobs_add_reuses_existing_domain_name_instead_of_creating_duplicate():
+def test_jobs_add_uses_existing_selected_domain():
     app = _build_app()
     with app.app_context():
         db.create_all()
@@ -2375,15 +2536,15 @@ def test_jobs_add_reuses_existing_domain_name_instead_of_creating_duplicate():
         response = client.post(
             "/jobs/add",
             data={
-                "name": "reuse-domain-job",
+                "name": "selected-domain-job",
                 "priority": "3",
-                "domain_id": "add_new",
-                "domain_name": "ExistingDomain",
+                "domain_id": str(existing_domain.id),
+                "domain_name": "",
             },
         )
         assert response.status_code == 302
 
-        job = Jobs.query.filter_by(name="reuse-domain-job").first()
+        job = Jobs.query.filter_by(name="selected-domain-job").first()
         assert job is not None
         assert job.domain_id == existing_domain.id
         assert Domains.query.count() == 1
@@ -2425,27 +2586,30 @@ def test_jobs_add_rolls_back_new_domain_when_job_commit_conflicts(monkeypatch):
         user = _seed_admin_user()
         _seed_settings()
 
-        client = app.test_client()
-        _login_client_as_user(client, user)
+        domain = Domains(name="ConflictDomain")
+        db.session.add(domain)
+        db.session.commit()
 
         monkeypatch.setattr(
             "hashcrush.jobs.routes.db.session.commit",
             lambda: (_ for _ in ()).throw(_integrity_error()),
         )
 
+        client = app.test_client()
+        _login_client_as_user(client, user)
         response = client.post(
             "/jobs/add",
             data={
                 "name": "conflicting-job",
                 "priority": "3",
-                "domain_id": "add_new",
-                "domain_name": "TransientDomain",
+                "domain_id": str(domain.id),
+                "domain_name": "",
             },
         )
         assert response.status_code == 200
         assert b"Job could not be created" in response.data
         assert Jobs.query.count() == 0
-        assert Domains.query.count() == 0
+        assert Domains.query.count() == 1
 
 
 @pytest.mark.security
@@ -2830,6 +2994,10 @@ def test_dynamic_wordlist_update_uses_all_cracked_data_for_shared_wordlists(tmp_
         contents = dynamic_wordlist_path.read_text(encoding="utf-8")
         assert "owner-secret" in contents
         assert "other-secret" in contents
+        entry = _latest_audit_entry()
+        assert entry is not None
+        assert entry.event_type == "wordlist.update_dynamic"
+        assert entry.target_id == str(dynamic_wordlist.id)
 
 
 @pytest.mark.security
@@ -4221,6 +4389,73 @@ def test_tasks_add_allows_admin_to_use_shared_wordlists_and_rules():
         assert task is not None
         assert task.wl_id == wordlist.id
         assert task.rule_id == rule.id
+        entry = _latest_audit_entry()
+        assert entry is not None
+        assert entry.event_type == "task.create"
+        assert entry.target_id == str(task.id)
+
+
+@pytest.mark.security
+def test_rules_add_records_audit_event(tmp_path):
+    app = _build_app({"RULES_PATH": str(tmp_path)})
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        rule_path = tmp_path / "best.rule"
+        rule_path.write_text(":\n", encoding="utf-8")
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/rules/add",
+            data={
+                "name": "audit-rule",
+                "existing_file": "best.rule",
+            },
+        )
+
+        assert response.status_code == 302
+        rule = Rules.query.filter_by(name="audit-rule").first()
+        assert rule is not None
+        entry = _latest_audit_entry()
+        assert entry is not None
+        assert entry.event_type == "rule.create"
+        assert entry.target_id == str(rule.id)
+
+
+@pytest.mark.security
+def test_task_group_add_task_records_audit_event():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        task_a = Tasks(name="audit-group-task-a", hc_attackmode="maskmode", wl_id=None, rule_id=None, hc_mask="?a")
+        task_b = Tasks(name="audit-group-task-b", hc_attackmode="maskmode", wl_id=None, rule_id=None, hc_mask="?d")
+        db.session.add_all([task_a, task_b])
+        db.session.commit()
+        task_group = TaskGroups(name="audit-group", tasks=json.dumps([task_a.id]))
+        db.session.add(task_group)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            f"/task_groups/assigned_tasks/{task_group.id}/add_task/{task_b.id}"
+        )
+
+        assert response.status_code == 302
+        db.session.refresh(task_group)
+        assert json.loads(task_group.tasks) == [task_a.id, task_b.id]
+        entry = _latest_audit_entry()
+        assert entry is not None
+        assert entry.event_type == "task_group.add_task"
+        assert entry.target_id == str(task_group.id)
 
 
 @pytest.mark.security

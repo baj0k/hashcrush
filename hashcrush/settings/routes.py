@@ -17,6 +17,7 @@ from flask import (
 from flask_login import current_user, login_required
 
 import hashcrush
+from hashcrush.audit import record_audit_event
 from hashcrush.config import sanitize_config_input
 from hashcrush.db_upgrade import get_schema_status
 from hashcrush.models import Settings, db
@@ -318,6 +319,12 @@ def update_hashcrush_config():
 
     config_path = _hashcrush_config_path()
     config_parser = _load_hashcrush_config(config_path)
+    original_values = {
+        (field["section"], field["key"]): sanitize_config_input(
+            config_parser.get(field["section"], field["key"], fallback="")
+        ).strip()
+        for field in HASHCRUSH_CONFIG_FIELDS
+    }
 
     for field in HASHCRUSH_CONFIG_FIELDS:
         section = field["section"]
@@ -352,6 +359,22 @@ def update_hashcrush_config():
         flash(f'Failed to save config file at "{config_path}": {error}', "danger")
         return redirect(url_for("settings.settings_list") + "#nav-hashcrush")
 
+    changed_fields = []
+    for field in HASHCRUSH_CONFIG_FIELDS:
+        key = (field["section"], field["key"])
+        updated_value = sanitize_config_input(
+            config_parser.get(field["section"], field["key"], fallback="")
+        ).strip()
+        if updated_value != original_values.get(key, ""):
+            changed_fields.append(f"{field['section']}.{field['key']}")
+
+    record_audit_event(
+        'settings.config_update',
+        'settings',
+        target_id='hashcrush_config',
+        summary='Updated HashCrush configuration file values.',
+        details={'config_path': config_path, 'changed_fields': changed_fields},
+    )
     flash(
         f'Updated configuration values in "{config_path}". Restart HashCrush to apply all changes.',
         "success",
@@ -396,4 +419,16 @@ def clear_temp_folder():
     else:
         flash("Temp folder is already empty.", "info")
 
+    record_audit_event(
+        'settings.temp_clear',
+        'runtime_temp',
+        target_id=temp_folder_path,
+        summary='Cleared runtime temp folder contents.',
+        details={
+            'temp_folder_path': temp_folder_path,
+            'removed_files': removed_files,
+            'removed_bytes': removed_bytes,
+            'failed_files': failed_files,
+        },
+    )
     return redirect(url_for("settings.settings_list") + "#nav-data")

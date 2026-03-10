@@ -5,6 +5,7 @@ from flask import Blueprint, current_app, flash, redirect, render_template, url_
 from flask_login import login_required
 from sqlalchemy.exc import IntegrityError
 
+from hashcrush.audit import record_audit_event
 from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Tasks, Wordlists, db
 from hashcrush.utils.utils import get_filehash, get_linecount, update_dynamic_wordlist
@@ -204,6 +205,18 @@ def wordlists_add():
                 selectable_truncated,
                 selectable_tree,
             )
+        record_audit_event(
+            'wordlist.create',
+            'wordlist',
+            target_id=wordlist.id,
+            summary=f'Registered shared wordlist "{wordlist.name}".',
+            details={
+                'wordlist_name': wordlist.name,
+                'path': wordlist.path,
+                'type': wordlist.type,
+                'size': wordlist.size,
+            },
+        )
         flash('Wordlist created!', 'success')
         return redirect(url_for('wordlists.wordlists_list'))
 
@@ -235,6 +248,8 @@ def wordlists_delete(wordlist_id):
         flash('Failed. Wordlist is associated to one or more tasks', 'danger')
         return redirect(url_for('wordlists.wordlists_list'))
 
+    deleted_wordlist_name = wordlist.name
+    deleted_wordlist_path = wordlist.path
     db.session.delete(wordlist)
     try:
         db.session.commit()
@@ -242,6 +257,16 @@ def wordlists_delete(wordlist_id):
         db.session.rollback()
         flash('Failed. Wordlist is associated to one or more tasks or changed concurrently.', 'danger')
         return redirect(url_for('wordlists.wordlists_list'))
+    record_audit_event(
+        'wordlist.delete',
+        'wordlist',
+        target_id=wordlist_id,
+        summary=f'Deleted shared wordlist "{deleted_wordlist_name}".',
+        details={
+            'wordlist_name': deleted_wordlist_name,
+            'path': deleted_wordlist_path,
+        },
+    )
     flash('Wordlist has been deleted!', 'success')
     return redirect(url_for('wordlists.wordlists_list'))
 
@@ -258,5 +283,17 @@ def dynamicwordlist_update(wordlist_id):
         return redirect(url_for('wordlists.wordlists_list'))
 
     update_dynamic_wordlist(wordlist_id)
+    db.session.refresh(wordlist)
+    record_audit_event(
+        'wordlist.update_dynamic',
+        'wordlist',
+        target_id=wordlist.id,
+        summary=f'Updated dynamic shared wordlist "{wordlist.name}".',
+        details={
+            'wordlist_name': wordlist.name,
+            'path': wordlist.path,
+            'size': wordlist.size,
+        },
+    )
     flash('Updated Dynamic Wordlist', 'success')
     return redirect(url_for('wordlists.wordlists_list'))

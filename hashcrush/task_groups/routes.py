@@ -16,6 +16,7 @@ from flask import (
 from flask_login import current_user, login_required
 from sqlalchemy.exc import IntegrityError
 
+from hashcrush.audit import record_audit_event
 from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Rules, TaskGroups, Tasks, Wordlists, db
 from hashcrush.task_groups.forms import TaskGroupsForm
@@ -39,6 +40,11 @@ def _parse_task_group_tasks(payload: str | None) -> list[int]:
         if parsed not in task_ids:
             task_ids.append(parsed)
     return task_ids
+
+
+def _task_name(task_id: int) -> str | None:
+    task = Tasks.query.filter(Tasks.id == task_id).first()
+    return task.name if task else None
 
 
 @task_groups.route("/task_groups", methods=["GET", "POST"])
@@ -113,6 +119,15 @@ def task_groups_export():
         "tasks": export_tasks,
         "task_groups": export_task_groups,
     }
+    record_audit_event(
+        'task_groups.export',
+        'task_groups_export',
+        summary='Exported shared task-group definition JSON.',
+        details={
+            'task_count': len(export_tasks),
+            'task_group_count': len(export_task_groups),
+        },
+    )
 
     buffer = io.BytesIO(json.dumps(payload, indent=2).encode("utf-8"))
     buffer.seek(0)
@@ -283,6 +298,20 @@ def task_groups_import():
         ),
         "success",
     )
+    record_audit_event(
+        'task_groups.import',
+        'task_groups_import',
+        summary='Imported shared tasks and task groups from JSON.',
+        details={
+            'tasks_created': created_tasks,
+            'tasks_updated': updated_tasks,
+            'tasks_skipped': skipped_tasks,
+            'groups_created': created_groups,
+            'groups_updated': updated_groups,
+            'groups_skipped': skipped_groups,
+            'source_filename': upload.filename,
+        },
+    )
     return redirect(url_for("task_groups.task_groups_list"))
 
 
@@ -313,6 +342,13 @@ def task_groups_add():
                 tasks=task_rows,
                 taskGroupsForm=task_group_form,
             )
+        record_audit_event(
+            'task_group.create',
+            'task_group',
+            target_id=task_group.id,
+            summary=f'Created shared task group "{task_group.name}".',
+            details={'task_group_name': task_group.name, 'task_ids': []},
+        )
         flash(f"Task group {task_group_form.name.data} created!", "success")
         # Keep a direct redirect here to preserve current route behavior.
         return redirect("assigned_tasks/" + str(task_group.id))
@@ -354,10 +390,24 @@ def task_groups_assigned_tasks_add_task(task_group_id, task_id):
     task_group = TaskGroups.query.get_or_404(task_group_id)
     task = Tasks.query.filter(Tasks.id == task_id).first_or_404()
     task_group_tasks = _parse_task_group_tasks(task_group.tasks)
-    if task.id not in task_group_tasks:
+    was_added = task.id not in task_group_tasks
+    if was_added:
         task_group_tasks.append(task.id)
     task_group.tasks = json.dumps(task_group_tasks)
     db.session.commit()
+    if was_added:
+        record_audit_event(
+            'task_group.add_task',
+            'task_group',
+            target_id=task_group.id,
+            summary=f'Added task "{task.name}" to task group "{task_group.name}".',
+            details={
+                'task_group_name': task_group.name,
+                'task_id': task.id,
+                'task_name': task.name,
+                'task_ids': task_group_tasks,
+            },
+        )
     return redirect("/task_groups/assigned_tasks/" + str(task_group.id))
 
 
@@ -375,9 +425,22 @@ def task_groups_assigned_tasks_remove_task(task_group_id, task_id):
         flash("Task is not assigned to this group.", "warning")
         return redirect("/task_groups/assigned_tasks/" + str(task_group.id))
 
+    removed_task_name = _task_name(task_id)
     task_group_tasks.remove(task_id)
     task_group.tasks = json.dumps(task_group_tasks)
     db.session.commit()
+    record_audit_event(
+        'task_group.remove_task',
+        'task_group',
+        target_id=task_group.id,
+        summary=f'Removed task from task group "{task_group.name}".',
+        details={
+            'task_group_name': task_group.name,
+            'task_id': task_id,
+            'task_name': removed_task_name,
+            'task_ids': task_group_tasks,
+        },
+    )
     return redirect("/task_groups/assigned_tasks/" + str(task_group.id))
 
 
@@ -415,6 +478,18 @@ def task_groups_assigned_tasks_promote_task(task_group_id, task_id):
         index += 1
     task_group.tasks = json.dumps(new_task_group_tasks)
     db.session.commit()
+    record_audit_event(
+        'task_group.promote_task',
+        'task_group',
+        target_id=task_group.id,
+        summary=f'Promoted task within task group "{task_group.name}".',
+        details={
+            'task_group_name': task_group.name,
+            'task_id': task_id,
+            'task_name': _task_name(task_id),
+            'task_ids': new_task_group_tasks,
+        },
+    )
     return redirect("/task_groups/assigned_tasks/" + str(task_group.id))
 
 
@@ -452,6 +527,18 @@ def task_groups_assigned_tasks_demote_task(task_group_id, task_id):
         index += 1
     task_group.tasks = json.dumps(new_task_group_tasks)
     db.session.commit()
+    record_audit_event(
+        'task_group.demote_task',
+        'task_group',
+        target_id=task_group.id,
+        summary=f'Demoted task within task group "{task_group.name}".',
+        details={
+            'task_group_name': task_group.name,
+            'task_id': task_id,
+            'task_name': _task_name(task_id),
+            'task_ids': new_task_group_tasks,
+        },
+    )
     return redirect("/task_groups/assigned_tasks/" + str(task_group.id))
 
 
@@ -461,7 +548,19 @@ def task_groups_assigned_tasks_demote_task(task_group_id, task_id):
 def task_groups_delete(task_group_id):
     """Function to delete task group."""
     task_group = TaskGroups.query.get_or_404(task_group_id)
+    deleted_group_name = task_group.name
+    deleted_task_ids = _parse_task_group_tasks(task_group.tasks)
     db.session.delete(task_group)
     db.session.commit()
+    record_audit_event(
+        'task_group.delete',
+        'task_group',
+        target_id=task_group_id,
+        summary=f'Deleted shared task group "{deleted_group_name}".',
+        details={
+            'task_group_name': deleted_group_name,
+            'task_ids': deleted_task_ids,
+        },
+    )
     flash("Task Group has been deleted!", "success")
     return redirect(url_for("task_groups.task_groups_list"))

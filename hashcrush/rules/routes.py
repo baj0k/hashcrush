@@ -5,6 +5,7 @@ from flask import Blueprint, current_app, flash, redirect, render_template, url_
 from flask_login import login_required
 from sqlalchemy.exc import IntegrityError
 
+from hashcrush.audit import record_audit_event
 from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Rules, Tasks, db
 from hashcrush.rules.forms import RulesForm
@@ -200,6 +201,17 @@ def rules_add():
                 selectable_truncated,
                 selectable_tree,
             )
+        record_audit_event(
+            'rule.create',
+            'rule',
+            target_id=rule.id,
+            summary=f'Registered shared rule "{rule.name}".',
+            details={
+                'rule_name': rule.name,
+                'path': rule.path,
+                'size': rule.size,
+            },
+        )
         flash('Rules File created!', 'success')
         return redirect(url_for('rules.rules_list'))
 
@@ -224,6 +236,8 @@ def rules_delete(rule_id):
     if task:
         flash('Rule file is currently used in a task and cannot be deleted.', 'danger')
     else:
+        deleted_rule_name = rule.name
+        deleted_rule_path = rule.path
         db.session.delete(rule)
         try:
             db.session.commit()
@@ -231,5 +245,15 @@ def rules_delete(rule_id):
             db.session.rollback()
             flash('Rule file is currently used in a task or changed concurrently and cannot be deleted.', 'danger')
             return redirect(url_for('rules.rules_list'))
+        record_audit_event(
+            'rule.delete',
+            'rule',
+            target_id=rule_id,
+            summary=f'Deleted shared rule "{deleted_rule_name}".',
+            details={
+                'rule_name': deleted_rule_name,
+                'path': deleted_rule_path,
+            },
+        )
         flash('Rule file has been deleted!', 'success')
     return redirect(url_for('rules.rules_list'))

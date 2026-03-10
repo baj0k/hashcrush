@@ -13,6 +13,7 @@ from sqlalchemy import case, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql import exists
 
+from hashcrush.audit import record_audit_event
 from hashcrush.authz import visible_jobs_query
 from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles, Jobs, db
 
@@ -130,6 +131,7 @@ def hashfiles_delete(hashfile_id):
     """Function to delete hashfile by id"""
     hashfile = Hashfiles.query.get_or_404(hashfile_id)
     impact = _hashfile_delete_impact(hashfile_id)
+    hashfile_name = hashfile.name
 
     if not current_user.admin:
         flash('Permission Denied', 'danger')
@@ -153,9 +155,20 @@ def hashfiles_delete(hashfile_id):
             current_app.logger.info(
                 'Deleted hashfile id=%s name=%s impact hash_links=%s orphan_uncracked=%s',
                 hashfile.id,
-                hashfile.name,
+                hashfile_name,
                 impact['hash_links'],
                 impact['orphan_uncracked_hashes'],
+            )
+            record_audit_event(
+                'hashfile.delete',
+                'hashfile',
+                target_id=hashfile_id,
+                summary=f'Deleted shared hashfile "{hashfile_name}".',
+                details={
+                    'hashfile_name': hashfile_name,
+                    'hash_links_removed': impact['hash_links'],
+                    'orphan_uncracked_hashes_removed': impact['orphan_uncracked_hashes'],
+                },
             )
         except IntegrityError:
             db.session.rollback()

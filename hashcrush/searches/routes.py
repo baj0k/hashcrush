@@ -15,6 +15,7 @@ from flask_login import current_user, login_required
 from sqlalchemy import func, or_
 
 from hashcrush import jinja_hex_decode
+from hashcrush.audit import record_audit_event
 from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles, db
 from hashcrush.searches.forms import SearchForm
 from hashcrush.utils.utils import encode_plaintext_for_storage, get_md5_hash
@@ -128,6 +129,17 @@ def searches_list():
         if not current_user.admin:
             flash('Permission Denied', 'danger')
         else:
+            record_audit_event(
+                'search.export',
+                'search_export',
+                target_id=search_form.search_type.data,
+                summary='Exported search results.',
+                details={
+                    'search_type': search_form.search_type.data,
+                    'export_type': search_form.export_type.data,
+                    'result_count': len(results),
+                },
+            )
             return export_results(domains, results, hashfiles, search_form.export_type.data)
 
     return render_template('search.html', title='Search', searchForm=search_form, domains=domains, results=results, hashfiles=hashfiles )
