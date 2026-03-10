@@ -113,32 +113,9 @@ python3 ./hashcrush.py
 ./scripts/test-all.sh
 ```
 
-`hashcrush.py setup --test` writes the `.env.test` file consumed by the E2E suite.
-
-Run non-E2E tests only (no live server required):
-```bash
-PYTHONPATH=. pytest -q -m "not e2e" -rs
-```
-
-Run the full suite (including E2E):
-
-Terminal 1 (start app with HTTPS):
-```bash
-python3 ./hashcrush.py
-```
-
-Terminal 2 (set E2E variables and run):
-```bash
-./scripts/test-all.sh
-```
-
+`hashcrush.py setup --test` writes the `.env.test`.  
 `scripts/test-all.sh` auto-loads `.env.test`, runs non-E2E tests first, then runs E2E tests.
 
-Common skip/failure causes:
-- `External server not reachable`: app is not running or `HASHCRUSH_E2E_BASE_URL` is wrong.
-- Login-related skips: invalid E2E credentials or account throttled by login protection.
-- HTTP/CSRF issues: use HTTPS endpoint for E2E (`https://127.0.0.1:8443`).
-- Missing E2E variables: regenerate the disposable environment with `python3 ./hashcrush.py setup --test`.
 ## Docker
 
 Currently completely unreliable.
