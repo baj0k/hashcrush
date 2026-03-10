@@ -4,7 +4,11 @@
 <h1>Rules</h1>
 <br>
 Rules are instructions combined with wordlists. Register rule files from the configured external rules path.
+{% if current_user.admin %}
 <a class="btn btn-success btn-sm mt-1 mb-1" href="{{ url_for('rules.rules_add') }}">Add/Register</a>
+{% else %}
+<p class="text-muted mb-0">Shared rules are managed by admins. All users can view and use them in tasks.</p>
+{% endif %}
 Configured root: <code>{{ rules_root }}</code>
 <br>
 <br>
@@ -32,7 +36,9 @@ Configured root: <code>{{ rules_root }}</code>
                             </td>
                             <td>
                                 <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{rule.id}}" title=Info></button>
+                                {% if current_user.admin %}
                                 <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{rule.id}}" title=Delete></button>
+                                {% endif %}
                             </td>
                         </tr>
                     {% endfor %}
@@ -76,30 +82,32 @@ Configured root: <code>{{ rules_root }}</code>
             </div>
         </div>
     {% endfor %}
-    {% for rule in rules %}
-        <!-- DeleteModal -->
-        <div class="modal fade" id="deleteModal{{rule.id}}" tabindex="-1" aria-labelledby="deleteModal{{rule.id}}Label" aria-hidden="true">
-            <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header">
-                <h5 class="modal-title" id="deleteModal{{rule.id}}Label">Delete: {{rule.name}} ?</h5>
-                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                    <span aria-hidden="true">&times;</span>
-                </button>
+    {% if current_user.admin %}
+        {% for rule in rules %}
+            <!-- DeleteModal -->
+            <div class="modal fade" id="deleteModal{{rule.id}}" tabindex="-1" aria-labelledby="deleteModal{{rule.id}}Label" aria-hidden="true">
+                <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                    <h5 class="modal-title" id="deleteModal{{rule.id}}Label">Delete: {{rule.name}} ?</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                    </div>
+                    <div class="modal-body">
+                    This will permanently delete the rules file. Are you sure you want to continue?
+                    </div>
+                    <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
+                    <form action="{{ url_for('rules.rules_delete', rule_id=rule.id) }}" method="POST">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input class="btn btn-danger" type="submit" value="Delete">
+                      </form>
+                    </div>
                 </div>
-                <div class="modal-body">
-                This will permanently delete the rules file. Are you sure you want to continue?
-                </div>
-                <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
-                <form action="{{ url_for('rules.rules_delete', rule_id=rule.id) }}" method="POST">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <input class="btn btn-danger" type="submit" value="Delete">
-                  </form>
                 </div>
             </div>
-            </div>
-        </div>
-    {% endfor %}
+        {% endfor %}
+    {% endif %}
 {% endblock content %}
 

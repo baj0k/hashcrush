@@ -259,7 +259,7 @@ def _build_root_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=("serve", "setup"),
+        choices=("serve", "setup", "upgrade"),
         help="command to run (default: serve)",
     )
     parser.add_argument(
@@ -285,6 +285,16 @@ def _build_serve_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_upgrade_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(allow_abbrev=False)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show pending schema migrations without applying them",
+    )
+    return parser
+
+
 def _normalize_cli_args(args: list[str]) -> list[str]:
     if not args:
         return []
@@ -302,6 +312,10 @@ def _parse_serve_args(args: list[str]) -> argparse.Namespace:
     if parsed_args.admin_username and (not parsed_args.reset_admin_password):
         parser.error("--admin-username requires --reset-admin-password")
     return parsed_args
+
+
+def _parse_upgrade_args(args: list[str]) -> argparse.Namespace:
+    return _build_upgrade_parser().parse_args(args)
 
 
 def _run_serve(parsed_args: argparse.Namespace) -> int:
@@ -353,6 +367,39 @@ def _run_setup(args: list[str]) -> int:
     return bootstrap_cli.main(args)
 
 
+def _run_upgrade(parsed_args: argparse.Namespace) -> int:
+    create_app = _load_create_app()
+    app = create_app(
+        config_overrides={
+            "ENABLE_LOCAL_EXECUTOR": False,
+            "ENABLE_SCHEDULER": False,
+            "AUTO_SETUP_DEFAULTS": False,
+            "AUTO_NORMALIZE_PLAINTEXT_STORAGE": False,
+            "SKIP_RUNTIME_BOOTSTRAP": True,
+            "AUTO_CREATE_SCHEMA": False,
+        }
+    )
+    with app.app_context():
+        from hashcrush.db_upgrade import upgrade_database
+
+        result = upgrade_database(dry_run=parsed_args.dry_run)
+
+    print(
+        f"Schema version: {result.starting_version} -> {result.target_version}"
+        + (" (dry-run)" if result.dry_run else "")
+    )
+    if result.adopted_unversioned_schema:
+        print("Adopting existing unversioned schema without dropping data.")
+    if result.initialized_empty_schema:
+        print("Initializing empty schema with version tracking.")
+    if result.applied_steps:
+        for step in result.applied_steps:
+            print(f"- v{step.version}: {step.summary}")
+    else:
+        print("No schema changes were required.")
+    return 0
+
+
 def cli(args) -> int:
     """Process command line args and return an exit code."""
     try:
@@ -367,6 +414,8 @@ def cli(args) -> int:
             return 0
         if first == "setup":
             return _run_setup(argv[1:])
+        if first == "upgrade":
+            return _run_upgrade(_parse_upgrade_args(argv[1:]))
         if first == "serve":
             return _run_serve(_parse_serve_args(argv[1:]))
         if first.startswith("-"):

@@ -239,11 +239,11 @@ def _build_seed_app():
 
 
 def _build_database_schema() -> None:
-    from hashcrush.models import db
+    from hashcrush.db_upgrade import upgrade_database
 
     schema_app = _build_seed_app()
     with schema_app.app_context():
-        db.create_all()
+        upgrade_database()
 
 
 def _run_root_guard() -> None:

@@ -4,7 +4,11 @@
 <h1>Wordlists</h1>
 <br>
 These are plaintext, newline-delimited files assigned to tasks. Register files from the configured external wordlists path. The dynamic wordlist is generated from cracked plaintexts.
+{% if current_user.admin %}
 <a class="btn btn-success btn-sm mt-1 mb-1" href="{{ url_for('wordlists.wordlists_add') }}">Add/Register</a>
+{% else %}
+<p class="text-muted mb-0">Shared wordlists are managed by admins. All users can view and use them in tasks.</p>
+{% endif %}
 Configured root: <code>{{ wordlists_root }}</code>
 <br>
 <br>
@@ -33,7 +37,9 @@ Configured root: <code>{{ wordlists_root }}</code>
                             </td>
                             <td>
                                 <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{wordlist.id}}" title=Info></button>
+                                {% if current_user.admin %}
                                 <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{wordlist.id}}" title=Delete></button>
+                                {% endif %}
                             </td>
                         </tr>
                     {% endfor %}
@@ -59,10 +65,12 @@ Configured root: <code>{{ wordlists_root }}</code>
                             </td>
                             <td>
                                 <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{wordlist.id}}" title=Info></button>
+                                {% if current_user.admin %}
                                 <form action="{{ url_for('wordlists.dynamicwordlist_update', wordlist_id=wordlist.id) }}" method="POST" class="d-inline">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button type="submit" class="fa fa-undo btn btn-warning" title="Update"></button>
                                 </form>
+                                {% endif %}
                             </td>
                         </tr>
                     {% endfor %}
@@ -98,30 +106,32 @@ Configured root: <code>{{ wordlists_root }}</code>
         </div>
     </div>
     {% endfor %}
-    {% for wordlist in wordlists %}
-    <!-- DeleteModal -->
-    <div class="modal fade" id="deleteModal{{wordlist.id}}" tabindex="-1" aria-labelledby="deleteModal{{wordlist.id}}Label" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-header">
-            <h5 class="modal-title" id="deleteModal{{wordlist.id}}Label">Delete: {{wordlist.name}} ?</h5>
-            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                <span aria-hidden="true">&times;</span>
-            </button>
+    {% if current_user.admin %}
+        {% for wordlist in wordlists %}
+        <!-- DeleteModal -->
+        <div class="modal fade" id="deleteModal{{wordlist.id}}" tabindex="-1" aria-labelledby="deleteModal{{wordlist.id}}Label" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                <h5 class="modal-title" id="deleteModal{{wordlist.id}}Label">Delete: {{wordlist.name}} ?</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+                </div>
+                <div class="modal-body">
+                This will permanently delete the wordlist. Are you sure you want to continue?
+                </div>
+                <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
+                <form action="{{ url_for('wordlists.wordlists_delete', wordlist_id=wordlist.id) }}" method="POST">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input class="btn btn-danger" type="submit" value="Delete">
+                    </form>
+                </div>
             </div>
-            <div class="modal-body">
-            This will permanently delete the wordlist. Are you sure you want to continue?
-            </div>
-            <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
-            <form action="{{ url_for('wordlists.wordlists_delete', wordlist_id=wordlist.id) }}" method="POST">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input class="btn btn-danger" type="submit" value="Delete">
-                </form>
             </div>
         </div>
-        </div>
-    </div>
-    {% endfor %}
+        {% endfor %}
+    {% endif %}
 {% endblock content %}
 

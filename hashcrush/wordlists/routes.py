@@ -5,6 +5,7 @@ from flask import Blueprint, current_app, flash, redirect, render_template, url_
 from flask_login import login_required
 from sqlalchemy.exc import IntegrityError
 
+from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Tasks, Wordlists, db
 from hashcrush.utils.utils import get_filehash, get_linecount, update_dynamic_wordlist
 from hashcrush.wordlists.forms import WordlistsForm
@@ -138,6 +139,7 @@ def wordlists_list():
 
 @wordlists.route("/wordlists/add", methods=['GET', 'POST'])
 @login_required
+@admin_required_redirect('wordlists.wordlists_list')
 def wordlists_add():
     """Function to add or register a new static wordlist"""
 
@@ -217,6 +219,7 @@ def wordlists_add():
 
 @wordlists.route("/wordlists/delete/<int:wordlist_id>", methods=['POST'])
 @login_required
+@admin_required_redirect('wordlists.wordlists_list')
 def wordlists_delete(wordlist_id):
     """Function to delete wordlist record"""
 
@@ -245,6 +248,7 @@ def wordlists_delete(wordlist_id):
 
 @wordlists.route("/wordlists/update/<int:wordlist_id>", methods=['POST'])
 @login_required
+@admin_required_redirect('wordlists.wordlists_list')
 def dynamicwordlist_update(wordlist_id):
     """Function to update dynamic wordlist"""
 

@@ -19,6 +19,7 @@ from hashcrush.models import (
     Jobs,
     JobTasks,
     Rules,
+    SchemaVersion,
     Settings,
     TaskGroups,
     Tasks,
@@ -199,6 +200,41 @@ def test_hashcrush_cli_setup_subcommand_delegates_to_bootstrap(monkeypatch):
 
 
 @pytest.mark.security
+def test_hashcrush_cli_upgrade_subcommand_runs_schema_upgrade(monkeypatch):
+    cli_module = _load_cli_module()
+    from hashcrush.db_upgrade import MigrationStep, UpgradeResult
+
+    captured = {}
+    app = _build_app()
+
+    def fake_upgrade_database(*, dry_run=False):
+        captured["dry_run"] = dry_run
+        return UpgradeResult(
+            starting_version=0,
+            target_version=1,
+            applied_steps=(
+                MigrationStep(
+                    version=1,
+                    name="baseline_current_schema",
+                    summary="Adopt the current schema and start tracking in-place upgrades.",
+                    upgrade=lambda: None,
+                ),
+            ),
+            adopted_unversioned_schema=False,
+            initialized_empty_schema=True,
+            dry_run=dry_run,
+        )
+
+    monkeypatch.setattr(cli_module, "_load_create_app", lambda: (lambda config_overrides=None: app))
+    monkeypatch.setattr("hashcrush.db_upgrade.upgrade_database", fake_upgrade_database)
+
+    result = cli_module.cli(["hashcrush.py", "upgrade", "--dry-run"])
+
+    assert result == 0
+    assert captured["dry_run"] is True
+
+
+@pytest.mark.security
 def test_hashcrush_cli_rejects_unknown_root_command():
     cli_module = _load_cli_module()
 
@@ -238,6 +274,46 @@ def test_setup_seed_test_environment_creates_dummy_fixture_set(tmp_path, monkeyp
     assert bootstrap_module.E2E_ADMIN_PASSWORD in env_text
     assert values["HASHCRUSH_E2E_DOMAIN_NAME"] == bootstrap_module.E2E_DOMAIN_NAME
     assert values["HASHCRUSH_E2E_TASK_NAME"] == bootstrap_module.E2E_MASK_TASK_NAME
+
+
+@pytest.mark.security
+def test_upgrade_database_initializes_empty_schema_and_tracks_version():
+    app = _build_app()
+    with app.app_context():
+        from hashcrush.db_upgrade import CURRENT_SCHEMA_VERSION, upgrade_database
+
+        result = upgrade_database()
+
+        state = db.session.get(SchemaVersion, 1)
+        assert result.starting_version == 0
+        assert result.initialized_empty_schema is True
+        assert state is not None
+        assert state.version == CURRENT_SCHEMA_VERSION
+
+
+@pytest.mark.security
+def test_upgrade_database_adopts_unversioned_schema_without_data_loss():
+    app = _build_app()
+    with app.app_context():
+        from hashcrush.db_upgrade import CURRENT_SCHEMA_VERSION, upgrade_database
+
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+        domain = Domains(name="legacy-domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        SchemaVersion.__table__.drop(bind=db.engine)
+
+        result = upgrade_database()
+
+        state = db.session.get(SchemaVersion, 1)
+        assert result.adopted_unversioned_schema is True
+        assert state is not None
+        assert state.version == CURRENT_SCHEMA_VERSION
+        assert Users.query.filter_by(id=user.id).count() == 1
+        assert Domains.query.filter_by(name="legacy-domain").count() == 1
 
 
 @pytest.mark.security
@@ -2566,7 +2642,7 @@ def test_dynamic_wordlist_update_uses_all_cracked_data_for_shared_wordlists(tmp_
     app = _build_app()
     with app.app_context():
         db.create_all()
-        owner = _seed_user("owner-user", password="owner-user-password", admin=False)
+        _seed_user("owner-user", password="owner-user-password", admin=False)
         _seed_user("other-user", password="other-user-password", admin=False)
         _seed_settings()
 
@@ -2617,8 +2693,9 @@ def test_dynamic_wordlist_update_uses_all_cracked_data_for_shared_wordlists(tmp_
         db.session.add(dynamic_wordlist)
         db.session.commit()
 
+        admin = _seed_admin_user()
         client = app.test_client()
-        _login_client_as_user(client, owner)
+        _login_client_as_user(client, admin)
 
         response = client.post(f"/wordlists/update/{dynamic_wordlist.id}")
         assert response.status_code == 302
@@ -2629,61 +2706,257 @@ def test_dynamic_wordlist_update_uses_all_cracked_data_for_shared_wordlists(tmp_
 
 
 @pytest.mark.security
-def test_task_group_assigned_tasks_allows_shared_access():
+def test_shared_resource_mutation_requires_admin(tmp_path, monkeypatch):
     app = _build_app()
     with app.app_context():
         db.create_all()
-        _seed_user("tg-owner", password="owner-user-password", admin=False)
         attacker = _seed_user(
-            "tg-attacker", password="attacker-user-password", admin=False
+            "shared-resource-user", password="shared-resource-password", admin=False
         )
         _seed_settings()
 
-        task_group = TaskGroups(name="owner-group", tasks=json.dumps([]))
-        db.session.add(task_group)
-        db.session.commit()
-
-        client = app.test_client()
-        _login_client_as_user(client, attacker)
-
-        response = client.get(f"/task_groups/assigned_tasks/{task_group.id}")
-        assert response.status_code == 200
-        assert b"owner-group" in response.data
-
-
-@pytest.mark.security
-def test_task_group_mutation_allows_shared_access():
-    app = _build_app()
-    with app.app_context():
-        db.create_all()
-        _seed_user("tg-owner", password="owner-user-password", admin=False)
-        attacker = _seed_user(
-            "tg-attacker", password="attacker-user-password", admin=False
+        static_wordlist = Wordlists(
+            name="static-wordlist",
+            type="static",
+            path=str(tmp_path / "static-wordlist.txt"),
+            size=1,
+            checksum="1" * 64,
         )
-        _seed_settings()
-
+        dynamic_wordlist = Wordlists(
+            name="dynamic-wordlist",
+            type="dynamic",
+            path=str(tmp_path / "dynamic-wordlist.txt"),
+            size=0,
+            checksum="2" * 64,
+        )
+        rule = Rules(
+            name="shared-rule",
+            path=str(tmp_path / "shared.rule"),
+            size=1,
+            checksum="3" * 64,
+        )
         task = Tasks(
-            name="owner-task",
+            name="shared-task",
             hc_attackmode="maskmode",
             wl_id=None,
             rule_id=None,
             hc_mask="?a?a",
         )
-        task_group = TaskGroups(name="owner-group", tasks=json.dumps([]))
-        db.session.add(task)
+        extra_task = Tasks(
+            name="shared-task-extra",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a?a?a",
+        )
+        movable_task = Tasks(
+            name="shared-task-movable",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a?a?a?a",
+        )
+        task_group = TaskGroups(
+            name="shared-group",
+            tasks=json.dumps([task.id, extra_task.id]) if task.id and extra_task.id else json.dumps([]),
+        )
+        db.session.add_all(
+            [
+                static_wordlist,
+                dynamic_wordlist,
+                rule,
+                task,
+                extra_task,
+                movable_task,
+            ]
+        )
+        db.session.commit()
+        task_group.tasks = json.dumps([task.id, extra_task.id])
         db.session.add(task_group)
         db.session.commit()
+
+        update_dynamic_called = {"value": False}
+
+        def _blocked_dynamic_update(_wordlist_id):
+            update_dynamic_called["value"] = True
+
+        monkeypatch.setattr(
+            "hashcrush.wordlists.routes.update_dynamic_wordlist",
+            _blocked_dynamic_update,
+        )
 
         client = app.test_client()
         _login_client_as_user(client, attacker)
 
+        response = client.get("/tasks/add", follow_redirects=True)
+        assert response.status_code == 200
+        assert b"Permission Denied" in response.data
+
         response = client.post(
-            f"/task_groups/assigned_tasks/{task_group.id}/add_task/{task.id}"
+            "/tasks/add",
+            data={
+                "name": "blocked-task",
+                "hc_attackmode": "maskmode",
+                "wl_id": "",
+                "rule_id": "None",
+                "mask": "?a",
+            },
         )
+        assert response.status_code == 302
+        assert Tasks.query.filter_by(name="blocked-task").first() is None
+
+        response = client.get(f"/tasks/edit/{task.id}")
+        assert response.status_code == 302
+        response = client.post(
+            f"/tasks/edit/{task.id}",
+            data={
+                "name": "mutated-task",
+                "hc_attackmode": "maskmode",
+                "wl_id": "",
+                "rule_id": "None",
+                "mask": "?d",
+            },
+        )
+        assert response.status_code == 302
+        db.session.refresh(task)
+        assert task.name == "shared-task"
+        assert task.hc_mask == "?a?a"
+
+        response = client.post(f"/tasks/delete/{task.id}")
+        assert response.status_code == 302
+        assert Tasks.query.get(task.id) is not None
+
+        response = client.get("/task_groups/add")
+        assert response.status_code == 302
+        response = client.post("/task_groups/add", data={"name": "blocked-group"})
+        assert response.status_code == 302
+        assert TaskGroups.query.filter_by(name="blocked-group").first() is None
+
+        response = client.post("/task_groups/import", data={})
+        assert response.status_code == 302
+
+        response = client.get(f"/task_groups/assigned_tasks/{task_group.id}")
+        assert response.status_code == 302
+
+        response = client.post(
+            f"/task_groups/assigned_tasks/{task_group.id}/add_task/{movable_task.id}"
+        )
+        assert response.status_code == 302
+        response = client.post(
+            f"/task_groups/assigned_tasks/{task_group.id}/remove_task/{task.id}"
+        )
+        assert response.status_code == 302
+        response = client.post(
+            f"/task_groups/assigned_tasks/{task_group.id}/promote_task/{extra_task.id}"
+        )
+        assert response.status_code == 302
+        response = client.post(
+            f"/task_groups/assigned_tasks/{task_group.id}/demote_task/{task.id}"
+        )
+        assert response.status_code == 302
+        response = client.post(f"/task_groups/delete/{task_group.id}")
         assert response.status_code == 302
 
         db.session.refresh(task_group)
-        assert json.loads(task_group.tasks) == [task.id]
+        assert json.loads(task_group.tasks) == [task.id, extra_task.id]
+        assert TaskGroups.query.get(task_group.id) is not None
+
+        response = client.get("/wordlists/add")
+        assert response.status_code == 302
+        response = client.post(
+            "/wordlists/add",
+            data={"name": "blocked-wordlist", "existing_file": "SecLists/passwords/test.txt"},
+        )
+        assert response.status_code == 302
+        assert Wordlists.query.filter_by(name="blocked-wordlist").first() is None
+
+        response = client.post(f"/wordlists/update/{dynamic_wordlist.id}")
+        assert response.status_code == 302
+        assert update_dynamic_called["value"] is False
+
+        response = client.post(f"/wordlists/delete/{static_wordlist.id}")
+        assert response.status_code == 302
+        assert Wordlists.query.get(static_wordlist.id) is not None
+
+        response = client.get("/rules/add")
+        assert response.status_code == 302
+        response = client.post(
+            "/rules/add",
+            data={"name": "blocked-rule", "existing_file": "hashcat/rules/test.rule"},
+        )
+        assert response.status_code == 302
+        assert Rules.query.filter_by(name="blocked-rule").first() is None
+
+        response = client.post(f"/rules/delete/{rule.id}")
+        assert response.status_code == 302
+        assert Rules.query.get(rule.id) is not None
+
+
+@pytest.mark.security
+def test_shared_resource_lists_hide_admin_controls_for_non_admin():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        viewer = _seed_user("shared-viewer", password="shared-viewer-password", admin=False)
+        _seed_settings()
+
+        static_wordlist = Wordlists(
+            name="list-static-wordlist",
+            type="static",
+            path="/tmp/list-static-wordlist.txt",
+            size=1,
+            checksum="4" * 64,
+        )
+        dynamic_wordlist = Wordlists(
+            name="list-dynamic-wordlist",
+            type="dynamic",
+            path="/tmp/list-dynamic-wordlist.txt",
+            size=1,
+            checksum="5" * 64,
+        )
+        rule = Rules(
+            name="list-rule",
+            path="/tmp/list.rule",
+            size=1,
+            checksum="6" * 64,
+        )
+        task = Tasks(
+            name="list-task",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a",
+        )
+        task_group = TaskGroups(name="list-group", tasks=json.dumps([task.id]) if task.id else json.dumps([]))
+        db.session.add_all([static_wordlist, dynamic_wordlist, rule, task])
+        db.session.commit()
+        task_group.tasks = json.dumps([task.id])
+        db.session.add(task_group)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, viewer)
+
+        tasks_html = client.get("/tasks").get_data(as_text=True)
+        assert "/tasks/add" not in tasks_html
+        assert f"/tasks/edit/{task.id}" not in tasks_html
+        assert f"/tasks/delete/{task.id}" not in tasks_html
+
+        task_groups_html = client.get("/task_groups").get_data(as_text=True)
+        assert "/task_groups/add" not in task_groups_html
+        assert "/task_groups/import" not in task_groups_html
+        assert f"/task_groups/assigned_tasks/{task_group.id}" not in task_groups_html
+        assert f"/task_groups/delete/{task_group.id}" not in task_groups_html
+        assert "/task_groups/export" in task_groups_html
+
+        wordlists_html = client.get("/wordlists").get_data(as_text=True)
+        assert "/wordlists/add" not in wordlists_html
+        assert f"/wordlists/delete/{static_wordlist.id}" not in wordlists_html
+        assert f"/wordlists/update/{dynamic_wordlist.id}" not in wordlists_html
+
+        rules_html = client.get("/rules").get_data(as_text=True)
+        assert "/rules/add" not in rules_html
+        assert f"/rules/delete/{rule.id}" not in rules_html
 
 
 @pytest.mark.security
@@ -3106,9 +3379,7 @@ def test_task_group_import_creates_tasks_and_groups():
     app = _build_app()
     with app.app_context():
         db.create_all()
-        owner = _seed_user(
-            "tg-import-owner", password="owner-user-password", admin=False
-        )
+        admin = _seed_admin_user()
         _seed_settings()
 
         wordlist = Wordlists(
@@ -3151,7 +3422,7 @@ def test_task_group_import_creates_tasks_and_groups():
         }
 
         client = app.test_client()
-        _login_client_as_user(client, owner)
+        _login_client_as_user(client, admin)
         response = client.post(
             "/task_groups/import",
             data={
@@ -3462,12 +3733,11 @@ def test_task_edit_allows_same_name_and_clears_mask_when_switching_to_dictionary
 
 
 @pytest.mark.security
-def test_tasks_add_allows_shared_wordlists_and_rules_from_other_users():
+def test_tasks_add_allows_admin_to_use_shared_wordlists_and_rules():
     app = _build_app()
     with app.app_context():
         db.create_all()
-        owner = _seed_user("task-owner", password="task-owner-password", admin=False)
-        _seed_user("resource-owner", password="resource-owner-password", admin=False)
+        admin = _seed_admin_user()
         _seed_settings()
 
         wordlist = Wordlists(
@@ -3487,7 +3757,7 @@ def test_tasks_add_allows_shared_wordlists_and_rules_from_other_users():
         db.session.commit()
 
         client = app.test_client()
-        _login_client_as_user(client, owner)
+        _login_client_as_user(client, admin)
 
         response = client.post(
             "/tasks/add",

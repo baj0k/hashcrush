@@ -4,7 +4,11 @@
 <h1>Tasks</h1>
 <br>
 Tasks are predefined hashcat commands. Any number of tasks can be assigned to a Job.
+{% if current_user.admin %}
 <a class="btn btn-success btn-sm mt-1 mb-1" href="{{ url_for('tasks.tasks_add') }}">Add</a>
+{% else %}
+<p class="text-muted mb-0">Shared tasks are managed by admins. All users can view and assign them to jobs.</p>
+{% endif %}
 <br>
 <br>
 <br>
@@ -27,8 +31,10 @@ Tasks are predefined hashcat commands. Any number of tasks can be assigned to a 
                             <td>{{ task.hc_attackmode}}</td>
                             <td>
                                 <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{task.id}}" title=Info></button>
+                                {% if current_user.admin %}
                                 <a class="fa fa-edit btn btn-warning" href="/tasks/edit/{{task.id}}" role="button" title=Edit></a>
                                 <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{task.id}}" title=Delete></button>
+                                {% endif %}
                             </td>
                         </tr>
                     {% endfor %}
@@ -110,29 +116,31 @@ Tasks are predefined hashcat commands. Any number of tasks can be assigned to a 
             </div>
         </div>
     {% endfor %}
-    {% for task in tasks %}
-        <!-- DeleteModal -->
-        <div class="modal fade" id="deleteModal{{task.id}}" tabindex="-1" aria-labelledby="deleteModal{{task.id}}Label" aria-hidden="true">
-            <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header">
-                <h5 class="modal-title" id="deleteModal{{task.id}}Label">Delete: {{task.name}} ?</h5>
-                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                    <span aria-hidden="true">&times;</span>
-                </button>
+    {% if current_user.admin %}
+        {% for task in tasks %}
+            <!-- DeleteModal -->
+            <div class="modal fade" id="deleteModal{{task.id}}" tabindex="-1" aria-labelledby="deleteModal{{task.id}}Label" aria-hidden="true">
+                <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                    <h5 class="modal-title" id="deleteModal{{task.id}}Label">Delete: {{task.name}} ?</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                    </div>
+                    <div class="modal-body">
+                    This will permanently delete the task. Are you sure you want to continue?
+                    </div>
+                    <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
+                    <form action="{{ url_for('tasks.tasks_delete', task_id=task.id) }}" method="POST">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input class="btn btn-danger" type="submit" value="Delete">
+                    </form>
+                    </div>
                 </div>
-                <div class="modal-body">
-                This will permanently delete the task. Are you sure you want to continue?
-                </div>
-                <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
-                <form action="{{ url_for('tasks.tasks_delete', task_id=task.id) }}" method="POST">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <input class="btn btn-danger" type="submit" value="Delete">
-                </form>
                 </div>
             </div>
-            </div>
-        </div>
-    {% endfor %}
+        {% endfor %}
+    {% endif %}
 {% endblock content %}

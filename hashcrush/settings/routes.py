@@ -18,6 +18,7 @@ from flask_login import current_user, login_required
 
 import hashcrush
 from hashcrush.config import sanitize_config_input
+from hashcrush.db_upgrade import get_schema_status
 from hashcrush.models import Settings, db
 from hashcrush.utils.utils import get_runtime_subdir
 
@@ -287,6 +288,7 @@ def settings_list():
         config_path = _hashcrush_config_path()
         config_parser = _load_hashcrush_config(config_path)
         config_rows = _hashcrush_config_rows(config_parser)
+        schema_status = get_schema_status()
 
         return render_template(
             "settings.html",
@@ -296,7 +298,8 @@ def settings_list():
             tmp_folder_size_human=tmp_folder_size_human,
             temp_folder_path=temp_folder_path,
             application_version=hashcrush.__version__,
-            database_schema_mode="Fresh rebuild only",
+            database_schema_mode=schema_status["mode"],
+            database_schema_detail=schema_status["detail"],
             python_version=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
             config_path=config_path,
             config_file_exists=os.path.isfile(config_path),

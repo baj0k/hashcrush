@@ -75,8 +75,27 @@ Optional flags:
 - --debug
 - --reset-admin-password
 - --reset-admin-password --admin-username <admin_username>
+- upgrade
+- upgrade --dry-run
 - setup
 - setup --test
+
+## Production Upgrades
+
+Do not use `hashcrush.py setup` on an existing deployment. It is destructive.
+
+Use the upgrade path instead:
+
+```bash
+# 1. Back up the database and config first.
+# 2. Deploy the new code.
+python3 ./hashcrush.py upgrade --dry-run
+python3 ./hashcrush.py upgrade
+python3 ./hashcrush.py
+```
+
+`hashcrush.py upgrade` is non-destructive. It applies tracked schema/data migrations in place and preserves existing data.
+If the database schema is older than the code expects, app startup now stops with an explicit error until `hashcrush.py upgrade` is run.
 
 ## External Wordlists and Rules
 `hashcrush.py setup` prompts for paths and writes them to `hashcrush/config.conf`.

@@ -5,6 +5,7 @@ from flask import Blueprint, current_app, flash, redirect, render_template, url_
 from flask_login import login_required
 from sqlalchemy.exc import IntegrityError
 
+from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Jobs, JobTasks, Rules, Tasks, db
 from hashcrush.rules.forms import RulesForm
 from hashcrush.utils.utils import get_filehash, get_linecount
@@ -137,6 +138,7 @@ def rules_list():
 
 @rules.route("/rules/add", methods=['GET', 'POST'])
 @login_required
+@admin_required_redirect('rules.rules_list')
 def rules_add():
     """Function to add or register a rules file"""
     form = RulesForm()
@@ -214,6 +216,7 @@ def rules_add():
 
 @rules.route("/rules/delete/<int:rule_id>", methods=['POST'])
 @login_required
+@admin_required_redirect('rules.rules_list')
 def rules_delete(rule_id):
     """Function to delete rule file record"""
     rule = Rules.query.get_or_404(rule_id)

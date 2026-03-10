@@ -4,13 +4,17 @@
 <h1>Task Groups</h1>
 <br>
 Task Groups are a set of tasks that can be assigned to a job.
+{% if current_user.admin %}
 <a class="btn btn-success btn-sm mt-1 mb-1" href="{{ url_for('task_groups.task_groups_add') }}">Add</a>
-<a class="btn btn-outline-primary btn-sm mt-1 mb-1" href="{{ url_for('task_groups.task_groups_export') }}">Export JSON</a>
 <form class="d-inline" action="{{ url_for('task_groups.task_groups_import') }}" method="POST" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input class="form-control form-control-sm d-inline-block" style="width: 220px;" type="file" name="import_file" accept=".json,application/json" required>
     <button type="submit" class="btn btn-outline-secondary btn-sm">Import JSON</button>
 </form>
+{% else %}
+<p class="text-muted mb-0">Shared task groups are managed by admins. All users can view and assign them to jobs.</p>
+{% endif %}
+<a class="btn btn-outline-primary btn-sm mt-1 mb-1" href="{{ url_for('task_groups.task_groups_export') }}">Export JSON</a>
 <br>
 <br>
 <br>
@@ -31,8 +35,10 @@ Task Groups are a set of tasks that can be assigned to a job.
                             <td>{{ task_group.name }}</td>
                             <td>
                                 <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{task_group.id}}" title=Info></button>
+                                {% if current_user.admin %}
                                 <a class="fa fa-edit btn btn-warning" href="/task_groups/assigned_tasks/{{task_group.id}}" role="button" title=Edit></a>
                                 <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{task_group.id}}" title=Delete></button>
+                                {% endif %}
                             </td>
                         </tr>
                     {% endfor %}
@@ -76,54 +82,53 @@ Task Groups are a set of tasks that can be assigned to a job.
         </div>
     </div>
     {% endfor %}
-    {% for task_group in task_groups %}
-    <!-- Edit Modal -->
-        <div class="modal fade" id="resetModal{{task_group.id}}" tabindex="-1" aria-labelledby="editModal{{task_group.id}}Label" aria-hidden="true">
-            <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header">
-                <h5 class="modal-title" id="resetModal{{task_group.id}}Label">Edit task group: {{task_group.name}}</h5>
-                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                    <span aria-hidden="true">&times;</span>
-                </button>
+    {% if current_user.admin %}
+        {% for task_group in task_groups %}
+        <!-- Edit Modal -->
+            <div class="modal fade" id="resetModal{{task_group.id}}" tabindex="-1" aria-labelledby="editModal{{task_group.id}}Label" aria-hidden="true">
+                <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                    <h5 class="modal-title" id="resetModal{{task_group.id}}Label">Edit task group: {{task_group.name}}</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                    </div>
+                    <div class="modal-body">
+                    ...
+                    </div>
+                    <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary">Understood</button>
+                    </div>
                 </div>
-                <div class="modal-body">
-                ...
-                </div>
-                <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
-                <button type="button" class="btn btn-primary">Understood</button>
-                </div>
-            </div>
-            </div>
-        </div>
-    {% endfor %}
-    {% for task_group in task_groups %}
-        <!-- DeleteModal -->
-        <div class="modal fade" id="deleteModal{{task_group.id}}" tabindex="-1" aria-labelledby="deleteModal{{task_group.id}}Label" aria-hidden="true">
-            <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header">
-                <h5 class="modal-title" id="deleteModal{{task_group.id}}Label">Delete: {{task_group.name}} ?</h5>
-                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                    <span aria-hidden="true">&times;</span>
-                </button>
-                </div>
-                <div class="modal-body">
-                This will permanently delete the task group. Note, the associated tasks will not be removed, only the group. Are you sure you want to continue?
-                </div>
-                <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
-                <!-- Replace with url_for()
-                <form action="#" method="POST">
-                -->
-                <form action="{{ url_for('task_groups.task_groups_delete', task_group_id=task_group.id) }}" method="POST">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <input class="btn btn-danger" type="submit" value="Delete">
-                </form>
                 </div>
             </div>
+        {% endfor %}
+        {% for task_group in task_groups %}
+            <!-- DeleteModal -->
+            <div class="modal fade" id="deleteModal{{task_group.id}}" tabindex="-1" aria-labelledby="deleteModal{{task_group.id}}Label" aria-hidden="true">
+                <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                    <h5 class="modal-title" id="deleteModal{{task_group.id}}Label">Delete: {{task_group.name}} ?</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                    </div>
+                    <div class="modal-body">
+                    This will permanently delete the task group. Note, the associated tasks will not be removed, only the group. Are you sure you want to continue?
+                    </div>
+                    <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
+                    <form action="{{ url_for('task_groups.task_groups_delete', task_group_id=task_group.id) }}" method="POST">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input class="btn btn-danger" type="submit" value="Delete">
+                    </form>
+                    </div>
+                </div>
+                </div>
             </div>
-        </div>
-    {% endfor %}
+        {% endfor %}
+    {% endif %}
 {% endblock content %}

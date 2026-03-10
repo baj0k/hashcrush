@@ -16,6 +16,7 @@ from flask import (
 from flask_login import current_user, login_required
 from sqlalchemy.exc import IntegrityError
 
+from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Rules, TaskGroups, Tasks, Wordlists, db
 from hashcrush.task_groups.forms import TaskGroupsForm
 
@@ -125,6 +126,7 @@ def task_groups_export():
 
 @task_groups.route("/task_groups/import", methods=["POST"])
 @login_required
+@admin_required_redirect("task_groups.task_groups_list")
 def task_groups_import():
     """Import tasks/task-groups from JSON into shared resource data."""
     upload = request.files.get("import_file")
@@ -285,6 +287,7 @@ def task_groups_import():
 
 @task_groups.route("/task_groups/add", methods=["GET", "POST"])
 @login_required
+@admin_required_redirect("task_groups.task_groups_list")
 def task_groups_add():
     """Function to add task group."""
     task_group_form = TaskGroupsForm()
@@ -324,6 +327,7 @@ def task_groups_add():
     "/task_groups/assigned_tasks/<int:task_group_id>", methods=["GET", "POST"]
 )
 @login_required
+@admin_required_redirect("task_groups.task_groups_list")
 def task_groups_assigned_tasks(task_group_id):
     """Function to list assigned tasks for task group."""
     task_group = TaskGroups.query.get_or_404(task_group_id)
@@ -343,6 +347,7 @@ def task_groups_assigned_tasks(task_group_id):
     methods=["POST"],
 )
 @login_required
+@admin_required_redirect("task_groups.task_groups_list")
 def task_groups_assigned_tasks_add_task(task_group_id, task_id):
     """Function to assign task to task group."""
     task_group = TaskGroups.query.get_or_404(task_group_id)
@@ -360,6 +365,7 @@ def task_groups_assigned_tasks_add_task(task_group_id, task_id):
     methods=["POST"],
 )
 @login_required
+@admin_required_redirect("task_groups.task_groups_list")
 def task_groups_assigned_tasks_remove_task(task_group_id, task_id):
     """Function to remove task from task group."""
     task_group = TaskGroups.query.get_or_404(task_group_id)
@@ -379,6 +385,7 @@ def task_groups_assigned_tasks_remove_task(task_group_id, task_id):
     methods=["POST"],
 )
 @login_required
+@admin_required_redirect("task_groups.task_groups_list")
 def task_groups_assigned_tasks_promote_task(task_group_id, task_id):
     """Function to move assigned task up higher in queue on task group."""
     task_group = TaskGroups.query.get_or_404(task_group_id)
@@ -415,6 +422,7 @@ def task_groups_assigned_tasks_promote_task(task_group_id, task_id):
     methods=["POST"],
 )
 @login_required
+@admin_required_redirect("task_groups.task_groups_list")
 def task_groups_assigned_tasks_demote_task(task_group_id, task_id):
     """Function to move assigned task lower in queue on task group."""
     task_group = TaskGroups.query.get_or_404(task_group_id)
@@ -448,6 +456,7 @@ def task_groups_assigned_tasks_demote_task(task_group_id, task_id):
 
 @task_groups.route("/task_groups/delete/<int:task_group_id>", methods=["POST"])
 @login_required
+@admin_required_redirect("task_groups.task_groups_list")
 def task_groups_delete(task_group_id):
     """Function to delete task group."""
     task_group = TaskGroups.query.get_or_404(task_group_id)

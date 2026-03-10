@@ -244,3 +244,14 @@ class AuthThrottle(db.Model):
     count = db.Column(db.Integer, nullable=False, default=0)
     window_start = db.Column(db.Integer, nullable=False, default=0)
     locked_until = db.Column(db.Integer, nullable=False, default=0, index=True)
+
+
+class SchemaVersion(db.Model):
+    """Singleton row tracking the applied in-place schema upgrade version."""
+
+    __tablename__ = "schema_version"
+
+    id = db.Column(db.Integer, primary_key=True, default=1)
+    version = db.Column(db.Integer, nullable=False)
+    app_version = db.Column(db.String(32), nullable=False)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utc_now_naive)

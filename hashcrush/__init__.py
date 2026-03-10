@@ -42,12 +42,27 @@ def _ensure_runtime_directories(
 
 
 def _ensure_database_schema(app: Flask) -> None:
-    """Create the current schema when the configured database is empty."""
-    from hashcrush.models import db
+    """Guard startup against outdated schemas and bootstrap empty databases."""
+    from hashcrush.db_upgrade import get_schema_status, upgrade_database
 
     app.logger.info("Ensuring database schema exists.")
     with app.app_context():
-        db.create_all()
+        schema_status = get_schema_status()
+        if not schema_status["has_user_tables"]:
+            upgrade_database()
+            return
+        if not schema_status["tracked"]:
+            raise RuntimeError(
+                "Database schema is not version-tracked. Run `hashcrush.py upgrade` "
+                "before starting this version."
+            )
+        current_version = int(schema_status["current_version"])
+        target_version = int(schema_status["target_version"])
+        if current_version < target_version:
+            raise RuntimeError(
+                f"Database schema version {current_version} is behind required "
+                f"version {target_version}. Run `hashcrush.py upgrade`."
+            )
 
 
 def get_application_version() -> str:

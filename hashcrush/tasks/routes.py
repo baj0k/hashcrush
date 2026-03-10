@@ -5,6 +5,7 @@ from flask import Blueprint, flash, redirect, render_template, url_for
 from flask_login import login_required
 from sqlalchemy.exc import IntegrityError
 
+from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Jobs, JobTasks, Rules, TaskGroups, Tasks, Wordlists, db
 from hashcrush.tasks.forms import TasksForm
 
@@ -87,6 +88,7 @@ def tasks_list():
 
 @tasks.route("/tasks/add", methods=['GET', 'POST'])
 @login_required
+@admin_required_redirect('tasks.tasks_list')
 def tasks_add():
     """Function to add a new task"""
 
@@ -166,6 +168,7 @@ def tasks_add():
 
 @tasks.route("/tasks/edit/<int:task_id>", methods=['GET', 'POST'])
 @login_required
+@admin_required_redirect('tasks.tasks_list')
 def task_edit(task_id):
     """Function to edit task"""
 
@@ -289,6 +292,7 @@ def task_edit(task_id):
 
 @tasks.route("/tasks/delete/<int:task_id>", methods=['POST'])
 @login_required
+@admin_required_redirect('tasks.tasks_list')
 def tasks_delete(task_id):
     """Function to delete task"""
 
