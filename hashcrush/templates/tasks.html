@@ -90,7 +90,7 @@ Tasks are predefined hashcat commands. Any number of tasks can be assigned to a 
                                 <td>
                                     {% set associated_task_groups = namespace(value=0) %}
                                     {% for task_group in task_groups %}
-                                        {% if task.id|string() in task_group.tasks %}
+                                        {% if task.id in task_group_task_ids.get(task_group.id, []) %}
                                             {% set associated_task_groups.value = 1 %}
                                             {{ task_group.name }} <br>
                                         {% endif %}

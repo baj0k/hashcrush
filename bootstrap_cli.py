@@ -845,7 +845,7 @@ def main(argv: list[str] | None = None) -> int:
             ENV_TEST_PATH,
         )
         _print_test_environment_summary(seeded_values)
-        print("You can now run the live test flow with: ./scripts/test-all.sh")
+        print("You can now run the live test flow with: ./tests/test-all.sh")
     else:
         print(
             "You can now start your instance of hashcrush by running the following command: ./hashcrush.py"

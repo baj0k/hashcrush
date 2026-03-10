@@ -36,7 +36,11 @@ login_manager.login_message_category = 'info'
 
 @login_manager.user_loader
 def load_user(user_id):
-    return Users.query.get(int(user_id))
+    try:
+        parsed_user_id = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    return Users.query.get(parsed_user_id)
 
 
 users = Blueprint('users', __name__)

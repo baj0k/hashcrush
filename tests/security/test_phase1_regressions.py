@@ -258,6 +258,14 @@ def test_normalize_text_input_trims_and_rejects_whitespace_only_values():
 
 
 @pytest.mark.security
+def test_load_user_rejects_non_integer_session_values():
+    from hashcrush.users.routes import load_user
+
+    assert load_user("not-an-integer") is None
+    assert load_user(None) is None
+
+
+@pytest.mark.security
 def test_analytics_download_rejects_invalid_domain_id_and_uses_hashfile_id_in_filename():
     app = _build_app()
     with app.app_context():
@@ -3497,6 +3505,52 @@ def test_tasks_add_allows_shared_wordlists_and_rules_from_other_users():
         assert task is not None
         assert task.wl_id == wordlist.id
         assert task.rule_id == rule.id
+
+
+@pytest.mark.security
+def test_tasks_list_modal_does_not_match_task_group_membership_by_substring():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        seeded_tasks = []
+        for index in range(1, 12):
+            task = Tasks(
+                name=f"modal-task-{index}",
+                hc_attackmode="maskmode",
+                wl_id=None,
+                rule_id=None,
+                hc_mask="?a",
+            )
+            db.session.add(task)
+            seeded_tasks.append(task)
+        db.session.commit()
+
+        task_one = seeded_tasks[0]
+        task_two = seeded_tasks[1]
+        task_eleven = seeded_tasks[10]
+
+        task_group = TaskGroups(
+            name="substring-group",
+            tasks=json.dumps([task_eleven.id]),
+        )
+        db.session.add(task_group)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get("/tasks")
+        assert response.status_code == 200
+
+        html = response.get_data(as_text=True)
+        task_one_modal_start = html.index(f'id="infoModal{task_one.id}"')
+        task_two_modal_start = html.index(f'id="infoModal{task_two.id}"')
+        task_one_modal = html[task_one_modal_start:task_two_modal_start]
+
+        assert "substring-group" not in task_one_modal
 
 
 @pytest.mark.security

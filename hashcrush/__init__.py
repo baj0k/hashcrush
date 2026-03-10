@@ -11,7 +11,7 @@ from flask_wtf.csrf import CSRFProtect, generate_csrf
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 
-__version__ = "0.9.97"
+__version__ = "1.0"
 
 
 @event.listens_for(Engine, "connect")

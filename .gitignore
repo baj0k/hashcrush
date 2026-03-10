@@ -27,8 +27,6 @@
 !hashcrush/config.conf.example
 
 # Tests and test fixtures/scripts
-!scripts/**/*.py
-!scripts/**/*.sh
 !tests/**/*.py
 !tests/**/*.txt
 !tests/**/*.sh

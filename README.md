@@ -1,4 +1,4 @@
-# HashCrush v0.9.97
+# HashCrush v1.0
 
 **HashCrush** is a tool for organization and automation of password cracking tasks. It also produces some analytics.
 
@@ -110,11 +110,11 @@ Fastest disposable live-test path:
 ```bash
 python3 ./hashcrush.py setup --test
 python3 ./hashcrush.py
-./scripts/test-all.sh
+./tests/test-all.sh
 ```
 
 `hashcrush.py setup --test` writes the `.env.test`.  
-`scripts/test-all.sh` auto-loads `.env.test`, runs non-E2E tests first, then runs E2E tests.
+`tests/test-all.sh` auto-loads `.env.test`, runs non-E2E tests first, then runs E2E tests.
 
 ## Docker
 

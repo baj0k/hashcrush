@@ -58,24 +58,12 @@ Task Groups are a set of tasks that can be assigned to a job.
                           <tr>                              
                             <th scope="row">Associated Tasks</th>
                             <td>
-                                {% for task_group_task_entry in task_group.tasks.split(',') %}
-                                    <!-- Parse the stored task list, including bracketed first/last entries. -->
-                                    {% for task in tasks %}
-                                        {% if '[' in task_group_task_entry %}
-                                            {% if task.id|string() == task_group_task_entry.split('[')[1] %}
-                                                {{ task.name }} <br>
-                                            {% endif %}
-                                        {% endif %}
-                                        {% if ']' in task_group_task_entry %}
-                                            {% if task.id|int() == task_group_task_entry.split(']')[0]|int() %}
-                                                {{ task.name }} <br>
-                                            {% endif %}
-                                        {% endif %}
-                                        {% if task.id|int() == task_group_task_entry|int() %}
-                                            {{ task.name }} <br>
-                                        {% endif %}
-                                    {% endfor %}
+                                {% for task_name in task_group_task_names.get(task_group.id, []) %}
+                                    {{ task_name }} <br>
                                 {% endfor %}
+                                {% if not task_group_task_names.get(task_group.id) %}
+                                    <i>none</i><br>
+                                {% endif %}
                             </td>
                           </tr>
                       </tbody>

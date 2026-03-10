@@ -19,6 +19,22 @@ def _parse_positive_int(raw_value) -> int | None:
     return parsed if parsed > 0 else None
 
 
+def _parse_task_group_task_ids(payload: str | None) -> set[int]:
+    try:
+        entries = json.loads(payload or "[]")
+    except (TypeError, ValueError):
+        return set()
+    if not isinstance(entries, list):
+        return set()
+
+    parsed_ids: set[int] = set()
+    for entry in entries:
+        parsed = _parse_positive_int(entry)
+        if parsed is not None:
+            parsed_ids.add(parsed)
+    return parsed_ids
+
+
 def _render_task_form(template_name, title, tasks_form, task=None, wordlists=None, rules=None):
     return render_template(
         template_name,
@@ -54,7 +70,20 @@ def tasks_list():
     )
     wordlists = Wordlists.query.all()
     task_groups = TaskGroups.query.all()
-    return render_template('tasks.html', title='tasks', tasks=tasks, jobs=jobs, job_tasks=job_tasks, wordlists=wordlists, task_groups=task_groups)
+    task_group_task_ids = {
+        task_group.id: _parse_task_group_task_ids(task_group.tasks)
+        for task_group in task_groups
+    }
+    return render_template(
+        'tasks.html',
+        title='tasks',
+        tasks=tasks,
+        jobs=jobs,
+        job_tasks=job_tasks,
+        wordlists=wordlists,
+        task_groups=task_groups,
+        task_group_task_ids=task_group_task_ids,
+    )
 
 @tasks.route("/tasks/add", methods=['GET', 'POST'])
 @login_required
@@ -273,11 +302,7 @@ def tasks_delete(task_id):
         return redirect(url_for('tasks.tasks_list'))
 
     for task_group in task_groups:
-        try:
-            task_ids = json.loads(task_group.tasks)
-        except (TypeError, ValueError):
-            task_ids = []
-        if task_id in task_ids:
+        if task_id in _parse_task_group_task_ids(task_group.tasks):
             flash('Cannot delete. Task is associated with one or more task groups.', 'danger')
             return redirect(url_for('tasks.tasks_list'))
 

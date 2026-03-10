@@ -46,12 +46,22 @@ def task_groups_list():
     """Function to list task groups."""
     task_group_rows = TaskGroups.query.all()
     task_rows = Tasks.query.all()
+    task_name_by_id = {task.id: task.name for task in task_rows}
+    task_group_task_names = {
+        task_group.id: [
+            task_name_by_id[task_id]
+            for task_id in _parse_task_group_tasks(task_group.tasks)
+            if task_id in task_name_by_id
+        ]
+        for task_group in task_group_rows
+    }
 
     return render_template(
         "task_groups.html",
         title="Task Groups",
         task_groups=task_group_rows,
         tasks=task_rows,
+        task_group_task_names=task_group_task_names,
     )
 
 
