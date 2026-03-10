@@ -1,8 +1,13 @@
 import os
 import re
+import uuid
 
 import pytest
 from playwright.sync_api import expect
+
+
+def _unique_job_name(prefix: str) -> str:
+    return f"{prefix} {uuid.uuid4().hex[:8]}"
 
 
 @pytest.mark.e2e
@@ -21,7 +26,7 @@ def test_job_creation_flow(page, live_server, login):
     page.get_by_role("link", name="Create a New Job").click()
     expect(page.get_by_role("heading", name="Create a new Job")).to_be_visible()
 
-    page.get_by_label("Job Name").fill("E2E Job")
+    page.get_by_label("Job Name").fill(_unique_job_name("E2E Job"))
     if page.locator("#priority").count() > 0:
         page.locator("#priority").select_option("3")
     domain_option = page.locator(f"#domain_id option[value='{domain_id}']")
@@ -52,8 +57,7 @@ def test_job_creation_flow(page, live_server, login):
     expect(page.get_by_role("heading", name="Tasks")).to_be_visible()
     match = re.search(r"/jobs/(\d+)/tasks", page.url)
     assert match, f"Unexpected tasks URL: {page.url}"
-    job_id = match.group(1)
-    page.get_by_role("button", name="Add Task").click()
+    page.get_by_role("button", name="Add Task", exact=True).click()
     task_entry = page.locator(".dropdown-menu .dropdown-item", has_text=task_name).first
     if task_entry.count() == 0:
         pytest.skip("HASHCRUSH_E2E_TASK_NAME not present in add-task dropdown.")

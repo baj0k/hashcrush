@@ -1,17 +1,15 @@
-"""Forms Page to manage Setup"""
+"""Forms to manage setup flows."""
 from flask_wtf import FlaskForm
-from wtforms import StringField
-from wtforms import SubmitField
-from wtforms import PasswordField
-from wtforms.validators import Length
-from wtforms.validators import EqualTo
-from wtforms.validators import DataRequired
+from wtforms import PasswordField, StringField, SubmitField
+from wtforms.validators import DataRequired, EqualTo, Length
+
+from hashcrush.forms_utils import normalize_text_input
 
 
 class SetupAdminPassForm(FlaskForm):
     """Class representing an Admin Pass Forms"""
 
-    username = StringField('Username', validators=[DataRequired(), Length(min=1, max=50)])
+    username = StringField('Username', validators=[DataRequired(), Length(min=1, max=50)], filters=[normalize_text_input])
     password         = PasswordField('Password',         validators=[DataRequired(), Length(min=14)])
     confirm_password = PasswordField('Confirm Password', validators=[DataRequired(), EqualTo('password')])
     submit           = SubmitField('Update')

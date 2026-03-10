@@ -1,25 +1,27 @@
 """Flask routes to handle Setup"""
 from datetime import UTC, datetime
 
-from flask import flash
-from flask import url_for
-from flask import redirect
-from flask import Blueprint
-from flask import current_app
-from flask import render_template
-from flask import request
-from flask import abort
+from flask import (
+    Blueprint,
+    abort,
+    current_app,
+    flash,
+    redirect,
+    render_template,
+    request,
+    url_for,
+)
+from sqlalchemy.exc import IntegrityError
 
-from hashcrush.setup import admin_pass_needs_changed
-from hashcrush.setup import settings_needs_added
-from hashcrush.models import db
-from hashcrush.models import Users
-from hashcrush.models import Settings
+from hashcrush.models import Settings, db
+from hashcrush.setup import (
+    admin_pass_needs_changed,
+    get_primary_admin_user,
+    settings_needs_added,
+)
 from hashcrush.users.routes import bcrypt
 
-from .forms import SetupSettingsForm
-from .forms import SetupAdminPassForm
-
+from .forms import SetupAdminPassForm, SetupSettingsForm
 
 blueprint = Blueprint('setup', __name__)
 
@@ -38,7 +40,7 @@ def admin_pass_get():
     if not admin_pass_needs_changed(db, bcrypt):
         return redirect(url_for('main.home'))
 
-    admin_user = db.session.query(Users).filter_by(id=1).first()
+    admin_user = get_primary_admin_user(db)
     if not admin_user:
         abort(404)
 
@@ -68,14 +70,19 @@ def admin_pass_post():
         logger.info('%s: Form was not valid.', admin_pass_post.__name__)
         return render_template('setup_admin_pass.html.j2', form=form)
 
-    admin_user = db.session.query(Users).filter_by(id=1).first()
+    admin_user = get_primary_admin_user(db)
     if not admin_user:
         abort(404)
 
     admin_user.username = form.username.data
     admin_user.password      = bcrypt.generate_password_hash(form.password.data).decode('utf-8')
     admin_user.last_login_utc = datetime.now(UTC).replace(tzinfo=None)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        flash('Admin account could not be updated because that username already exists. Choose a different username.', 'danger')
+        return render_template('setup_admin_pass.html.j2', form=form)
     flash('Admin password changed!', 'success')
     return redirect(url_for('setup.settings_get'))
 

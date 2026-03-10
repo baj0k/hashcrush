@@ -69,45 +69,50 @@ Jobs contain a series of tasks (hashcat commands). Jobs also have an associated 
                                 {% endfor %}
                             </td>
                             <td>
-                                {% if job.status == 'Ready' %}
-                                    <form action="{{ url_for('jobs.jobs_start', job_id=job.id) }}" method="POST" class="d-inline">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                        <button type="submit" class="fa fa-play btn btn-success" title="start"></button>
-                                    </form>
-                                {% elif job.status == 'Queued' or job.status == 'Running' %}
-                                    <form action="{{ url_for('jobs.jobs_pause', job_id=job.id) }}" method="POST" class="d-inline">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                        <button type="submit" class="fa fa-pause btn btn-warning" title="pause"></button>
-                                    </form>
-                                    <form action="{{ url_for('jobs.jobs_stop', job_id=job.id) }}" method="POST" class="d-inline">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                        <button type="submit" class="fa fa-stop btn btn-secondary" title="stop"></button>
-                                    </form>
-                                {% elif job.status == 'Paused' %}
-                                    <form action="{{ url_for('jobs.jobs_resume', job_id=job.id) }}" method="POST" class="d-inline">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                        <button type="submit" class="fa fa-play btn btn-success" title="resume"></button>
-                                    </form>
-                                    <form action="{{ url_for('jobs.jobs_stop', job_id=job.id) }}" method="POST" class="d-inline">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                        <button type="submit" class="fa fa-stop btn btn-secondary" title="stop"></button>
-                                    </form>
-                                {% elif job.status == 'Completed' %}
-                                    <a class="fa fa-check btn btn-primary" href="#" role="button" title=Completed></a>
-                                {% elif job.status == 'Canceled' %}
-                                    <form action="{{ url_for('jobs.jobs_start', job_id=job.id) }}" method="POST" class="d-inline">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                        <button type="submit" class="fa fa-close btn btn-secondary" title="Canceled"></button>
-                                    </form>
+                                {% set can_manage_job = current_user.admin or job.owner_id == current_user.id %}
+                                {% if can_manage_job %}
+                                    {% if job.status == 'Ready' %}
+                                        <form action="{{ url_for('jobs.jobs_start', job_id=job.id) }}" method="POST" class="d-inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" class="fa fa-play btn btn-success" title="start"></button>
+                                        </form>
+                                    {% elif job.status == 'Queued' or job.status == 'Running' %}
+                                        <form action="{{ url_for('jobs.jobs_pause', job_id=job.id) }}" method="POST" class="d-inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" class="fa fa-pause btn btn-warning" title="pause"></button>
+                                        </form>
+                                        <form action="{{ url_for('jobs.jobs_stop', job_id=job.id) }}" method="POST" class="d-inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" class="fa fa-stop btn btn-secondary" title="stop"></button>
+                                        </form>
+                                    {% elif job.status == 'Paused' %}
+                                        <form action="{{ url_for('jobs.jobs_resume', job_id=job.id) }}" method="POST" class="d-inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" class="fa fa-play btn btn-success" title="resume"></button>
+                                        </form>
+                                        <form action="{{ url_for('jobs.jobs_stop', job_id=job.id) }}" method="POST" class="d-inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" class="fa fa-stop btn btn-secondary" title="stop"></button>
+                                        </form>
+                                    {% elif job.status == 'Completed' %}
+                                        <a class="fa fa-check btn btn-primary" href="#" role="button" title=Completed></a>
+                                    {% elif job.status == 'Canceled' %}
+                                        <form action="{{ url_for('jobs.jobs_start', job_id=job.id) }}" method="POST" class="d-inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" class="fa fa-close btn btn-secondary" title="Canceled"></button>
+                                        </form>
+                                    {% endif %}
                                 {% endif %}
                                 {% if job.status != 'Incomplete' %}
                                     <a class="fa fa-pie-chart btn btn-warning" href="/analytics?domain_id={{job.domain_id}}&hashfile_id={{job.hashfile_id}}" role="button" title=Analytics></a>
                                     <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{job.id}}" title=Info></button>
                                 {% endif %}
-                                {% if job.status != 'Running' and job.status != 'Queued' and job.status != 'Paused' %}
+                                {% if can_manage_job and job.status != 'Running' and job.status != 'Queued' and job.status != 'Paused' %}
                                     <a class="fa fa-edit btn btn-warning" href="/jobs/{{job.id}}/assigned_hashfile/" role="button" title=Edit></a>
                                 {% endif %}
-                                <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{job.id}}" title=Delete></button>
+                                {% if can_manage_job %}
+                                    <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{job.id}}" title=Delete></button>
+                                {% endif %}
                             </td>
                         </tr>
                     {% endfor %}

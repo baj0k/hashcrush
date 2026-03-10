@@ -16,7 +16,6 @@ Tasks are predefined hashcat commands. Any number of tasks can be assigned to a 
                 <thead>
                   <tr>
                     <th scope="col">Task Name</th>
-                    <th scope="col">Owner</th>
                     <th scope="col">Type</th>
                     <th scope="col">Control</th>
                   </tr>
@@ -25,13 +24,6 @@ Tasks are predefined hashcat commands. Any number of tasks can be assigned to a 
                     {% for task in tasks %}
                         <tr>
                             <td>{{ task.name }}</td>
-                            <td>
-                                {% for user in users %}
-                                    {% if user.id == task.owner_id %}
-                                        {{ user.username }}
-                                    {% endif %}
-                                {% endfor %}
-                            </td>
                             <td>{{ task.hc_attackmode}}</td>
                             <td>
                                 <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{task.id}}" title=Info></button>

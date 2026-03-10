@@ -4,11 +4,10 @@ import operator
 import re
 
 from flask import Blueprint, redirect, render_template, request, send_file
-from flask_login import current_user, login_required
+from flask_login import login_required
 from sqlalchemy import func
 
-from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles
-from hashcrush.models import db
+from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles, db
 from hashcrush.utils.utils import decode_plaintext_from_storage
 
 analytics = Blueprint('analytics', __name__)
@@ -29,15 +28,8 @@ def _parse_positive_int(value):
     return parsed if parsed > 0 else None
 
 
-def _visible_hashfiles_query():
-    query = Hashfiles.query
-    if not current_user.admin:
-        query = query.filter(Hashfiles.owner_id == current_user.id)
-    return query
-
-
 def _resolve_scope(domain_id: int | None, hashfile_id: int | None):
-    visible_hashfiles = _visible_hashfiles_query().order_by(Hashfiles.name.asc()).all()
+    visible_hashfiles = Hashfiles.query.order_by(Hashfiles.name.asc()).all()
     visible_hashfiles_by_id = {hashfile.id: hashfile for hashfile in visible_hashfiles}
     visible_domain_ids = sorted({hashfile.domain_id for hashfile in visible_hashfiles})
 
@@ -444,7 +436,7 @@ def get_analytics():
 @login_required
 def analytics_download_hashes():
     """Function to download hashes."""
-    export_type = request.args.get('type')
+    export_type = (request.args.get('type') or '').strip().lower()
     if export_type == 'found':
         filename = 'found'
     elif export_type == 'left':
@@ -526,4 +518,4 @@ def analytics_download_hashes():
 
 def format_display(number):
     """Function to add commas to numbers."""
-    return "{:,}".format(number)
+    return f"{number:,}"

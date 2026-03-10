@@ -1,14 +1,16 @@
-from configparser import ConfigParser
 import importlib.util
 import io
 import json
+from configparser import ConfigParser
 from pathlib import Path
 
 import pytest
 from sqlalchemy import inspect
+from sqlalchemy.exc import IntegrityError
 
 from hashcrush import create_app
 from hashcrush.config import sanitize_config_input
+from hashcrush.forms_utils import normalize_text_input
 from hashcrush.models import (
     Domains,
     Hashes,
@@ -33,6 +35,12 @@ from hashcrush.utils.utils import (
     validate_netntlm_hashfile,
     validate_user_hash_hashfile,
 )
+
+
+def _integrity_error():
+    return IntegrityError(
+        "mock statement", {"key": "value"}, Exception("mock integrity error")
+    )
 
 
 def _build_app(extra_overrides: dict | None = None):
@@ -63,7 +71,9 @@ def _load_cli_module():
 
 
 def _seed_admin_user() -> Users:
-    valid_password_hash = bcrypt.generate_password_hash("test-admin-password").decode("utf-8")
+    valid_password_hash = bcrypt.generate_password_hash("test-admin-password").decode(
+        "utf-8"
+    )
     user = Users(
         username="admin",
         password=valid_password_hash,
@@ -74,7 +84,9 @@ def _seed_admin_user() -> Users:
     return user
 
 
-def _seed_user(username: str, password: str = "test-user-password", admin: bool = False) -> Users:
+def _seed_user(
+    username: str, password: str = "test-user-password", admin: bool = False
+) -> Users:
     valid_password_hash = bcrypt.generate_password_hash(password).decode("utf-8")
     user = Users(
         username=username,
@@ -162,6 +174,13 @@ def test_sanitize_config_input_handles_delete_backspace_artifacts():
 
 
 @pytest.mark.security
+def test_normalize_text_input_trims_and_rejects_whitespace_only_values():
+    assert normalize_text_input("  hashcrush  ") == "hashcrush"
+    assert normalize_text_input("   ") == ""
+    assert normalize_text_input(None) is None
+
+
+@pytest.mark.security
 def test_analytics_download_rejects_invalid_domain_id_and_uses_hashfile_id_in_filename():
     app = _build_app()
     with app.app_context():
@@ -171,14 +190,16 @@ def test_analytics_download_rejects_invalid_domain_id_and_uses_hashfile_id_in_fi
         domain = Domains(name="ACME")
         db.session.add(domain)
         db.session.commit()
-        hashfile = Hashfiles(name="sample.txt", domain_id=domain.id, owner_id=user.id)
+        hashfile = Hashfiles(name="sample.txt", domain_id=domain.id)
         db.session.add(hashfile)
         db.session.commit()
 
         client = app.test_client()
         _login_client_as_user(client, user)
 
-        invalid = client.get("/analytics/download?type=found&domain_id=../../etc/passwd")
+        invalid = client.get(
+            "/analytics/download?type=found&domain_id=../../etc/passwd"
+        )
         assert invalid.status_code == 302
         assert invalid.headers["Location"].endswith("/analytics")
 
@@ -188,6 +209,29 @@ def test_analytics_download_rejects_invalid_domain_id_and_uses_hashfile_id_in_fi
         assert valid.status_code == 200
         content_disposition = valid.headers.get("Content-Disposition", "")
         assert f"found_{domain.id}_{hashfile.id}.txt" in content_disposition
+
+
+@pytest.mark.security
+def test_analytics_download_normalizes_export_type_query_param():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+        domain = Domains(name="ACME-Normalized")
+        db.session.add(domain)
+        db.session.commit()
+        hashfile = Hashfiles(name="normalized.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, user)
+
+        response = client.get(f"/analytics/download?type= Found &domain_id={domain.id}")
+        assert response.status_code == 200
+        content_disposition = response.headers.get("Content-Disposition", "")
+        assert f"found_{domain.id}_all.txt" in content_disposition
 
 
 @pytest.mark.security
@@ -202,7 +246,7 @@ def test_hashfiles_delete_removes_orphan_hashes():
         db.session.add(domain)
         db.session.commit()
 
-        hashfile = Hashfiles(name="to-delete.txt", domain_id=domain.id, owner_id=user.id)
+        hashfile = Hashfiles(name="to-delete.txt", domain_id=domain.id)
         db.session.add(hashfile)
         db.session.commit()
 
@@ -240,44 +284,373 @@ def test_add_default_tasks_seeds_maskmode_mask_set_and_group():
     app = _build_app()
     with app.app_context():
         db.create_all()
-        admin = _seed_admin_user()
+        _seed_admin_user()
 
         add_default_tasks(db)
 
         seeded_tasks = Tasks.query.order_by(Tasks.id.asc()).all()
         assert len(seeded_tasks) == 10
-        expected_masks = ['?a' * length for length in range(1, 11)]
-        expected_names = [f'{mask} [{length}]' for length, mask in enumerate(expected_masks, start=1)]
+        expected_masks = ["?a" * length for length in range(1, 11)]
+        expected_names = [
+            f"{mask} [{length}]" for length, mask in enumerate(expected_masks, start=1)
+        ]
         assert [task.hc_mask for task in seeded_tasks] == expected_masks
         assert [task.name for task in seeded_tasks] == expected_names
-        assert all(task.hc_attackmode == 'maskmode' for task in seeded_tasks)
-        assert all(task.owner_id == admin.id for task in seeded_tasks)
+        assert all(task.hc_attackmode == "maskmode" for task in seeded_tasks)
 
-        task_group = TaskGroups.query.filter_by(name='maskmode 1-10').first()
+        task_group = TaskGroups.query.filter_by(name="maskmode 1-10").first()
         assert task_group is not None
-        assert task_group.owner_id == admin.id
         assert json.loads(task_group.tasks) == [task.id for task in seeded_tasks]
 
 
 @pytest.mark.security
-def test_add_default_tasks_uses_existing_admin_id_when_admin_is_not_id_one():
+def test_add_default_tasks_no_longer_depend_on_admin_id():
     from hashcrush.setup import add_default_tasks
 
     app = _build_app()
     with app.app_context():
         db.create_all()
-        _seed_user("placeholder-user", password="placeholder-user-password", admin=False)
-        admin = _seed_user("actual-admin", password="actual-admin-password", admin=True)
+        _seed_user(
+            "placeholder-user", password="placeholder-user-password", admin=False
+        )
+        _seed_user("actual-admin", password="actual-admin-password", admin=True)
         _seed_settings()
 
         add_default_tasks(db)
 
         seeded_tasks = Tasks.query.order_by(Tasks.id.asc()).all()
         assert seeded_tasks
-        assert all(task.owner_id == admin.id for task in seeded_tasks)
         task_group = TaskGroups.query.filter_by(name="maskmode 1-10").first()
         assert task_group is not None
-        assert task_group.owner_id == admin.id
+        assert json.loads(task_group.tasks) == [task.id for task in seeded_tasks]
+
+
+@pytest.mark.security
+def test_setup_admin_password_flow_uses_existing_admin_when_admin_is_not_id_one():
+    from hashcrush.setup import add_admin_user
+
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        placeholder = _seed_user(
+            "placeholder-user", password="placeholder-user-password", admin=False
+        )
+        add_admin_user(db, bcrypt)
+        admin = Users.query.filter_by(admin=True).first()
+        assert admin is not None
+        assert admin.id != placeholder.id
+
+        client = app.test_client()
+        get_response = client.get(
+            "/setup/admin-pass",
+            environ_overrides={"REMOTE_ADDR": "127.0.0.1"},
+        )
+        assert get_response.status_code == 200
+        assert b"admin" in get_response.data
+
+        response = client.post(
+            "/setup/admin-pass",
+            data={
+                "username": "renamed-admin",
+                "password": "longer-admin-pass",
+                "confirm_password": "longer-admin-pass",
+            },
+            environ_overrides={"REMOTE_ADDR": "127.0.0.1"},
+        )
+        assert response.status_code == 302
+
+        db.session.refresh(admin)
+        db.session.refresh(placeholder)
+        assert admin.username == "renamed-admin"
+        assert bcrypt.check_password_hash(admin.password, "longer-admin-pass")
+        assert placeholder.username == "placeholder-user"
+
+
+@pytest.mark.security
+def test_setup_admin_password_flow_trims_username_input():
+    from hashcrush.setup import add_admin_user
+
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        add_admin_user(db, bcrypt)
+        admin = Users.query.filter_by(admin=True).first()
+        assert admin is not None
+
+        client = app.test_client()
+        response = client.post(
+            "/setup/admin-pass",
+            data={
+                "username": "  trimmed-admin  ",
+                "password": "longer-admin-pass",
+                "confirm_password": "longer-admin-pass",
+            },
+            environ_overrides={"REMOTE_ADDR": "127.0.0.1"},
+        )
+        assert response.status_code == 302
+
+        db.session.refresh(admin)
+        assert admin.username == "trimmed-admin"
+
+
+@pytest.mark.security
+def test_setup_admin_password_flow_handles_duplicate_username_cleanly():
+    from hashcrush.setup import add_admin_user
+
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        existing_user = _seed_user(
+            "existing-user", password="existing-user-password", admin=False
+        )
+        add_admin_user(db, bcrypt)
+        admin = Users.query.filter_by(admin=True).first()
+        assert admin is not None
+        assert admin.id != existing_user.id
+
+        client = app.test_client()
+        response = client.post(
+            "/setup/admin-pass",
+            data={
+                "username": "existing-user",
+                "password": "longer-admin-pass",
+                "confirm_password": "longer-admin-pass",
+            },
+            environ_overrides={"REMOTE_ADDR": "127.0.0.1"},
+        )
+        assert response.status_code == 200
+        assert (
+            b"Admin account could not be updated because that username already exists."
+            in response.data
+        )
+
+        db.session.refresh(admin)
+        assert admin.username == "admin"
+
+
+@pytest.mark.security
+def test_schema_declares_expected_constraints_and_indexes():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        inspector = inspect(db.engine)
+
+        jobs_indexes = {row["name"] for row in inspector.get_indexes("jobs")}
+        assert {
+            "ix_jobs_status_priority_queued_at",
+            "ix_jobs_owner_id_created_at",
+            "ix_jobs_domain_id_status",
+            "ix_jobs_hashfile_id",
+        }.issubset(jobs_indexes)
+
+        job_tasks_indexes = {row["name"] for row in inspector.get_indexes("job_tasks")}
+        assert {
+            "ix_job_tasks_status_priority_id",
+            "ix_job_tasks_job_id_status",
+            "ix_job_tasks_task_id",
+        }.issubset(job_tasks_indexes)
+
+        hashfiles_indexes = {row["name"] for row in inspector.get_indexes("hashfiles")}
+        assert {
+            "ix_hashfiles_uploaded_at",
+            "ix_hashfiles_domain_id_uploaded_at",
+        }.issubset(hashfiles_indexes)
+
+        tasks_indexes = {row["name"] for row in inspector.get_indexes("tasks")}
+        assert {
+            "ix_tasks_wl_id",
+            "ix_tasks_rule_id",
+        }.issubset(tasks_indexes)
+
+        wordlists_indexes = {row["name"] for row in inspector.get_indexes("wordlists")}
+        assert "ix_wordlists_type_last_updated" in wordlists_indexes
+
+        tasks_foreign_keys = {
+            tuple(row["constrained_columns"]): (
+                row["referred_table"],
+                row.get("options", {}).get("ondelete"),
+            )
+            for row in inspector.get_foreign_keys("tasks")
+        }
+        assert tasks_foreign_keys[("wl_id",)] == ("wordlists", "RESTRICT")
+        assert tasks_foreign_keys[("rule_id",)] == ("rules", "RESTRICT")
+
+        jobs_foreign_keys = {
+            tuple(row["constrained_columns"]): (
+                row["referred_table"],
+                row.get("options", {}).get("ondelete"),
+            )
+            for row in inspector.get_foreign_keys("jobs")
+        }
+        assert jobs_foreign_keys[("hashfile_id",)] == ("hashfiles", "RESTRICT")
+        assert jobs_foreign_keys[("domain_id",)] == ("domains", "RESTRICT")
+        assert jobs_foreign_keys[("owner_id",)] == ("users", "RESTRICT")
+
+        job_tasks_foreign_keys = {
+            tuple(row["constrained_columns"]): (
+                row["referred_table"],
+                row.get("options", {}).get("ondelete"),
+            )
+            for row in inspector.get_foreign_keys("job_tasks")
+        }
+        assert job_tasks_foreign_keys[("job_id",)] == ("jobs", "RESTRICT")
+        assert job_tasks_foreign_keys[("task_id",)] == ("tasks", "RESTRICT")
+
+        hashfiles_foreign_keys = {
+            tuple(row["constrained_columns"]): (
+                row["referred_table"],
+                row.get("options", {}).get("ondelete"),
+            )
+            for row in inspector.get_foreign_keys("hashfiles")
+        }
+        assert hashfiles_foreign_keys[("domain_id",)] == ("domains", "RESTRICT")
+
+        hashfile_hashes_foreign_keys = {
+            tuple(row["constrained_columns"]): (
+                row["referred_table"],
+                row.get("options", {}).get("ondelete"),
+            )
+            for row in inspector.get_foreign_keys("hashfile_hashes")
+        }
+        assert hashfile_hashes_foreign_keys[("hashfile_id",)] == (
+            "hashfiles",
+            "RESTRICT",
+        )
+
+        task_groups_columns = {
+            row["name"]: str(row["type"]).upper()
+            for row in inspector.get_columns("task_groups")
+        }
+        assert "TEXT" in task_groups_columns["tasks"]
+
+
+@pytest.mark.security
+def test_create_app_bootstraps_schema_for_empty_database(tmp_path):
+    db_path = tmp_path / "bootstrap.db"
+    app = create_app(
+        testing=False,
+        config_overrides={
+            "SECRET_KEY": "phase1-test-secret",
+            "SQLALCHEMY_DATABASE_URI": f"sqlite:///{db_path}",
+            "SQLALCHEMY_TRACK_MODIFICATIONS": False,
+            "AUTO_SETUP_DEFAULTS": False,
+            "ENABLE_SCHEDULER": False,
+            "ENABLE_LOCAL_EXECUTOR": False,
+            "SKIP_RUNTIME_BOOTSTRAP": True,
+            "AUTO_NORMALIZE_PLAINTEXT_STORAGE": False,
+        },
+    )
+
+    with app.app_context():
+        inspector = inspect(db.engine)
+        table_names = set(inspector.get_table_names())
+        assert {
+            "users",
+            "settings",
+            "jobs",
+            "job_tasks",
+            "domains",
+            "hashfiles",
+            "hashfile_hashes",
+            "rules",
+            "wordlists",
+            "tasks",
+            "task_groups",
+            "hashes",
+            "auth_throttle",
+        }.issubset(table_names)
+
+
+@pytest.mark.security
+def test_schema_unique_constraints_reject_duplicate_names_and_paths():
+    from sqlalchemy.exc import IntegrityError
+
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="unique-domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="input.txt", domain_id=domain.id)
+        wordlist = Wordlists(
+            name="rockyou",
+            type="static",
+            path="/tmp/rockyou.txt",
+            size=1,
+            checksum="0" * 64,
+        )
+        rule = Rules(
+            name="best64",
+            path="/tmp/best64.rule",
+            size=1,
+            checksum="1" * 64,
+        )
+        task = Tasks(
+            name="mask-1",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a",
+        )
+        task_group = TaskGroups(name="mask-group", tasks="[]")
+        job = Jobs(
+            name="unique-job",
+            status="Ready",
+            domain_id=domain.id,
+            owner_id=user.id,
+            hashfile_id=None,
+        )
+        db.session.add_all([hashfile, wordlist, rule, task, task_group, job])
+        db.session.commit()
+
+        duplicate_cases = [
+            Domains(name="unique-domain"),
+            Wordlists(
+                name="rockyou",
+                type="static",
+                path="/tmp/other-rockyou.txt",
+                size=1,
+                checksum="2" * 64,
+            ),
+            Wordlists(
+                name="other-wordlist",
+                type="static",
+                path="/tmp/rockyou.txt",
+                size=1,
+                checksum="3" * 64,
+            ),
+            Rules(
+                name="best64", path="/tmp/other-best64.rule", size=1, checksum="4" * 64
+            ),
+            Rules(
+                name="other-rule", path="/tmp/best64.rule", size=1, checksum="5" * 64
+            ),
+            Tasks(
+                name="mask-1",
+                hc_attackmode="maskmode",
+                wl_id=None,
+                rule_id=None,
+                hc_mask="?a?a",
+            ),
+            TaskGroups(name="mask-group", tasks="[]"),
+            Jobs(
+                name="unique-job",
+                status="Ready",
+                domain_id=domain.id,
+                owner_id=user.id,
+                hashfile_id=hashfile.id,
+            ),
+        ]
+
+        for duplicate in duplicate_cases:
+            db.session.add(duplicate)
+            with pytest.raises(IntegrityError):
+                db.session.commit()
+            db.session.rollback()
 
 
 @pytest.mark.security
@@ -336,23 +709,39 @@ def test_rules_selectable_files_support_nested_folders(tmp_path):
 
     selectable_files, truncated = _list_selectable_files(str(rules_root))
     assert truncated is False
-    assert ("example_folder1/best64.rule", "example_folder1/best64.rule") in selectable_files
-    assert ("example_folder1/not_a_rule.txt", "example_folder1/not_a_rule.txt") not in selectable_files
+    assert (
+        "example_folder1/best64.rule",
+        "example_folder1/best64.rule",
+    ) in selectable_files
+    assert (
+        "example_folder1/not_a_rule.txt",
+        "example_folder1/not_a_rule.txt",
+    ) not in selectable_files
     assert (".hidden/secret.rule", ".hidden/secret.rule") not in selectable_files
 
-    resolved_nested = _resolve_selected_file("example_folder1/best64.rule", str(rules_root))
+    resolved_nested = _resolve_selected_file(
+        "example_folder1/best64.rule", str(rules_root)
+    )
     assert resolved_nested == str(nested_file.resolve())
-    assert _resolve_selected_file("example_folder1/not_a_rule.txt", str(rules_root)) is None
+    assert (
+        _resolve_selected_file("example_folder1/not_a_rule.txt", str(rules_root))
+        is None
+    )
     assert _resolve_selected_file(".hidden/secret.rule", str(rules_root)) is None
     assert _resolve_selected_file("../etc/passwd", str(rules_root)) is None
-    missing_files, missing_truncated = _list_selectable_files(str(rules_root / "does-not-exist"))
+    missing_files, missing_truncated = _list_selectable_files(
+        str(rules_root / "does-not-exist")
+    )
     assert missing_files == []
     assert missing_truncated is False
 
 
 @pytest.mark.security
 def test_wordlists_selectable_files_support_nested_folders(tmp_path):
-    from hashcrush.wordlists.routes import _list_selectable_files, _resolve_selected_file
+    from hashcrush.wordlists.routes import (
+        _list_selectable_files,
+        _resolve_selected_file,
+    )
 
     wordlists_root = tmp_path / "wordlists"
     nested_dir = wordlists_root / "example_folder1"
@@ -369,19 +758,37 @@ def test_wordlists_selectable_files_support_nested_folders(tmp_path):
 
     selectable_files, truncated = _list_selectable_files(str(wordlists_root))
     assert truncated is False
-    assert ("example_folder1/rockyou.txt", "example_folder1/rockyou.txt") in selectable_files
-    assert ("example_folder1/rockyou.txt.tar.gz", "example_folder1/rockyou.txt.tar.gz") not in selectable_files
-    assert ("example_folder1/ignore.csv", "example_folder1/ignore.csv") not in selectable_files
+    assert (
+        "example_folder1/rockyou.txt",
+        "example_folder1/rockyou.txt",
+    ) in selectable_files
+    assert (
+        "example_folder1/rockyou.txt.tar.gz",
+        "example_folder1/rockyou.txt.tar.gz",
+    ) not in selectable_files
+    assert (
+        "example_folder1/ignore.csv",
+        "example_folder1/ignore.csv",
+    ) not in selectable_files
     assert (".hidden/secret.txt", ".hidden/secret.txt") not in selectable_files
 
-    resolved_nested = _resolve_selected_file("example_folder1/rockyou.txt", str(wordlists_root))
+    resolved_nested = _resolve_selected_file(
+        "example_folder1/rockyou.txt", str(wordlists_root)
+    )
     assert resolved_nested == str(nested_file.resolve())
-    resolved_nested_tar = _resolve_selected_file("example_folder1/rockyou.txt.tar.gz", str(wordlists_root))
+    resolved_nested_tar = _resolve_selected_file(
+        "example_folder1/rockyou.txt.tar.gz", str(wordlists_root)
+    )
     assert resolved_nested_tar is None
-    assert _resolve_selected_file("example_folder1/ignore.csv", str(wordlists_root)) is None
+    assert (
+        _resolve_selected_file("example_folder1/ignore.csv", str(wordlists_root))
+        is None
+    )
     assert _resolve_selected_file(".hidden/secret.txt", str(wordlists_root)) is None
     assert _resolve_selected_file("../etc/passwd", str(wordlists_root)) is None
-    missing_files, missing_truncated = _list_selectable_files(str(wordlists_root / "does-not-exist"))
+    missing_files, missing_truncated = _list_selectable_files(
+        str(wordlists_root / "does-not-exist")
+    )
     assert missing_files == []
     assert missing_truncated is False
 
@@ -443,7 +850,7 @@ def test_executor_import_stores_plaintext_in_hex_format(tmp_path):
         db.session.add(domain)
         db.session.commit()
 
-        hashfile = Hashfiles(name="input.txt", domain_id=domain.id, owner_id=user.id)
+        hashfile = Hashfiles(name="input.txt", domain_id=domain.id)
         db.session.add(hashfile)
         db.session.commit()
 
@@ -463,7 +870,6 @@ def test_executor_import_stores_plaintext_in_hex_format(tmp_path):
         task = Tasks(
             name="mask",
             hc_attackmode="maskmode",
-            owner_id=user.id,
             wl_id=None,
             rule_id=None,
             hc_mask="?a",
@@ -524,7 +930,7 @@ def test_executor_canceled_flow_imports_recovered_hashes(tmp_path, monkeypatch):
         db.session.add(domain)
         db.session.commit()
 
-        hashfile = Hashfiles(name="input.txt", domain_id=domain.id, owner_id=user.id)
+        hashfile = Hashfiles(name="input.txt", domain_id=domain.id)
         db.session.add(hashfile)
         db.session.commit()
 
@@ -544,7 +950,6 @@ def test_executor_canceled_flow_imports_recovered_hashes(tmp_path, monkeypatch):
         task = Tasks(
             name="mask",
             hc_attackmode="maskmode",
-            owner_id=user.id,
             wl_id=None,
             rule_id=None,
             hc_mask="?a",
@@ -590,7 +995,9 @@ def test_executor_canceled_flow_imports_recovered_hashes(tmp_path, monkeypatch):
 
         imported_hash = Hashes.query.get(hash_row.id)
         assert imported_hash.cracked is True
-        assert imported_hash.plaintext == encode_plaintext_for_storage("RecoveredDuringCancel")
+        assert imported_hash.plaintext == encode_plaintext_for_storage(
+            "RecoveredDuringCancel"
+        )
 
 
 @pytest.mark.security
@@ -608,7 +1015,7 @@ def test_recover_orphaned_tasks_imports_crackfile_before_requeue(tmp_path):
         db.session.add(domain)
         db.session.commit()
 
-        hashfile = Hashfiles(name="recover.txt", domain_id=domain.id, owner_id=user.id)
+        hashfile = Hashfiles(name="recover.txt", domain_id=domain.id)
         db.session.add(hashfile)
         db.session.commit()
 
@@ -627,7 +1034,6 @@ def test_recover_orphaned_tasks_imports_crackfile_before_requeue(tmp_path):
         task = Tasks(
             name="recover-task",
             hc_attackmode="maskmode",
-            owner_id=user.id,
             wl_id=None,
             rule_id=None,
             hc_mask="?a",
@@ -663,7 +1069,9 @@ def test_recover_orphaned_tasks_imports_crackfile_before_requeue(tmp_path):
         assert orphan.status == "Queued"
         assert job.status == "Queued"
         assert imported_hash.cracked is True
-        assert imported_hash.plaintext == encode_plaintext_for_storage("RecoveredAfterCrash")
+        assert imported_hash.plaintext == encode_plaintext_for_storage(
+            "RecoveredAfterCrash"
+        )
 
 
 @pytest.mark.security
@@ -693,7 +1101,7 @@ def test_executor_running_checkpoint_imports_cracks(tmp_path):
         db.session.add(domain)
         db.session.commit()
 
-        hashfile = Hashfiles(name="checkpoint.txt", domain_id=domain.id, owner_id=user.id)
+        hashfile = Hashfiles(name="checkpoint.txt", domain_id=domain.id)
         db.session.add(hashfile)
         db.session.commit()
 
@@ -712,7 +1120,6 @@ def test_executor_running_checkpoint_imports_cracks(tmp_path):
         task = Tasks(
             name="checkpoint-task",
             hc_attackmode="maskmode",
-            owner_id=user.id,
             wl_id=None,
             rule_id=None,
             hc_mask="?a",
@@ -737,7 +1144,9 @@ def test_executor_running_checkpoint_imports_cracks(tmp_path):
         outfiles_dir = tmp_path / "outfiles"
         outfiles_dir.mkdir(parents=True, exist_ok=True)
         crack_path = outfiles_dir / f"hc_cracked_{job.id}_{task.id}.txt"
-        crack_path.write_text("checkpoint-hash:RecoveredDuringRun\n", encoding="latin-1")
+        crack_path.write_text(
+            "checkpoint-hash:RecoveredDuringRun\n", encoding="latin-1"
+        )
         output_path = outfiles_dir / f"hcoutput_{job.id}_{running_task.id}.txt"
         output_path.write_text(
             "Status...........: Running\nProgress.........: 1/10 (10.00%)\n",
@@ -764,12 +1173,17 @@ def test_executor_running_checkpoint_imports_cracks(tmp_path):
 
         imported_hash = Hashes.query.get(hash_row.id)
         assert imported_hash.cracked is True
-        assert imported_hash.plaintext == encode_plaintext_for_storage("RecoveredDuringRun")
+        assert imported_hash.plaintext == encode_plaintext_for_storage(
+            "RecoveredDuringRun"
+        )
 
 
 @pytest.mark.security
 def test_hashcat_exit_code_one_is_success_when_status_indicates_exhausted(tmp_path):
-    from hashcrush.executor.service import _is_successful_hashcat_exit, _parse_hashcat_status
+    from hashcrush.executor.service import (
+        _is_successful_hashcat_exit,
+        _parse_hashcat_status,
+    )
 
     output_path = tmp_path / "hashcat_status.txt"
     output_path.write_text(
@@ -804,14 +1218,13 @@ def test_jobs_list_displays_eta_and_percent_done_for_active_job():
         db.session.add(domain)
         db.session.commit()
 
-        hashfile = Hashfiles(name="telemetry.txt", domain_id=domain.id, owner_id=admin.id)
+        hashfile = Hashfiles(name="telemetry.txt", domain_id=domain.id)
         db.session.add(hashfile)
         db.session.commit()
 
         task = Tasks(
             name="telemetry-task",
             hc_attackmode="maskmode",
-            owner_id=admin.id,
             wl_id=None,
             rule_id=None,
             hc_mask="?a?a",
@@ -871,7 +1284,6 @@ def test_dashboard_displays_eta_and_percent_done_columns_for_tasks():
         task = Tasks(
             name="dashboard-task",
             hc_attackmode="maskmode",
-            owner_id=admin.id,
             wl_id=None,
             rule_id=None,
             hc_mask="?a?a",
@@ -930,13 +1342,63 @@ def test_dashboard_displays_eta_and_percent_done_columns_for_tasks():
 
 
 @pytest.mark.security
-def test_jobs_assigned_hashfile_validates_domain_and_visibility():
+def test_dashboard_shows_stop_button_for_importing_tasks():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="ImportingDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        task = Tasks(
+            name="importing-dashboard-task",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a",
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        job = Jobs(
+            name="importing-dashboard-job",
+            status="Running",
+            domain_id=domain.id,
+            owner_id=admin.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        job_task = JobTasks(
+            job_id=job.id,
+            task_id=task.id,
+            status="Importing",
+            progress=json.dumps(
+                {"Time_Estimated": "soon", "Progress": "1/1 (100.00%)"}
+            ),
+        )
+        db.session.add(job_task)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get("/")
+        assert response.status_code == 200
+        assert f"/job_task/stop/{job_task.id}".encode() in response.data
+
+
+@pytest.mark.security
+def test_jobs_assigned_hashfile_validates_domain_but_allows_shared_hashfiles():
     app = _build_app()
     with app.app_context():
         db.create_all()
         _seed_settings()
         owner = _seed_user("owner")
-        other = _seed_user("other")
+        _seed_user("other")
 
         domain_a = Domains(name="Domain A")
         domain_b = Domains(name="Domain B")
@@ -952,28 +1414,32 @@ def test_jobs_assigned_hashfile_validates_domain_and_visibility():
         db.session.add(job)
         db.session.commit()
 
-        valid_hashfile = Hashfiles(name="valid.txt", domain_id=domain_a.id, owner_id=owner.id)
-        wrong_owner_hashfile = Hashfiles(name="other-owner.txt", domain_id=domain_a.id, owner_id=other.id)
-        wrong_domain_hashfile = Hashfiles(name="other-domain.txt", domain_id=domain_b.id, owner_id=owner.id)
-        db.session.add_all([valid_hashfile, wrong_owner_hashfile, wrong_domain_hashfile])
+        valid_hashfile = Hashfiles(name="valid.txt", domain_id=domain_a.id)
+        wrong_owner_hashfile = Hashfiles(name="other-owner.txt", domain_id=domain_a.id)
+        wrong_domain_hashfile = Hashfiles(
+            name="other-domain.txt", domain_id=domain_b.id
+        )
+        db.session.add_all(
+            [valid_hashfile, wrong_owner_hashfile, wrong_domain_hashfile]
+        )
         db.session.commit()
 
         client = app.test_client()
         _login_client_as_user(client, owner)
 
-        response_wrong_owner = client.post(
+        response_shared_hashfile = client.post(
             f"/jobs/{job.id}/assigned_hashfile/",
             data={"hashfile_id": str(wrong_owner_hashfile.id)},
         )
-        assert response_wrong_owner.status_code == 302
-        assert Jobs.query.get(job.id).hashfile_id is None
+        assert response_shared_hashfile.status_code == 302
+        assert Jobs.query.get(job.id).hashfile_id == wrong_owner_hashfile.id
 
         response_wrong_domain = client.post(
             f"/jobs/{job.id}/assigned_hashfile/",
             data={"hashfile_id": str(wrong_domain_hashfile.id)},
         )
         assert response_wrong_domain.status_code == 302
-        assert Jobs.query.get(job.id).hashfile_id is None
+        assert Jobs.query.get(job.id).hashfile_id == wrong_owner_hashfile.id
 
         response_valid = client.post(
             f"/jobs/{job.id}/assigned_hashfile/",
@@ -981,6 +1447,38 @@ def test_jobs_assigned_hashfile_validates_domain_and_visibility():
         )
         assert response_valid.status_code == 302
         assert Jobs.query.get(job.id).hashfile_id == valid_hashfile.id
+
+
+@pytest.mark.security
+def test_jobs_assigned_hashfile_existing_hashfile_form_includes_csrf_token():
+    app = _build_app({"WTF_CSRF_ENABLED": True})
+    with app.app_context():
+        db.create_all()
+        _seed_settings()
+        owner = _seed_user("owner")
+
+        domain = Domains(name="CSRF Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        job = Jobs(
+            name="csrf-job",
+            status="Incomplete",
+            domain_id=domain.id,
+            owner_id=owner.id,
+        )
+        hashfile = Hashfiles(name="existing.txt", domain_id=domain.id)
+        db.session.add_all([job, hashfile])
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, owner)
+
+        response = client.get(f"/jobs/{job.id}/assigned_hashfile/")
+        assert response.status_code == 200
+        html = response.data.decode("utf-8")
+        existing_form_html = html.split('id="nav-existing-hashfile"', 1)[1]
+        assert 'name="csrf_token"' in existing_form_html
 
 
 @pytest.mark.security
@@ -1027,7 +1525,7 @@ def test_domains_delete_removes_inactive_jobs_and_orphans():
         db.session.add(domain)
         db.session.commit()
 
-        hashfile = Hashfiles(name="cleanup.txt", domain_id=domain.id, owner_id=admin.id)
+        hashfile = Hashfiles(name="cleanup.txt", domain_id=domain.id)
         db.session.add(hashfile)
         db.session.commit()
 
@@ -1057,7 +1555,6 @@ def test_domains_delete_removes_inactive_jobs_and_orphans():
         cleanup_task = Tasks(
             name="cleanup-task",
             hc_attackmode="maskmode",
-            owner_id=admin.id,
             wl_id=None,
             rule_id=None,
             hc_mask="?a",
@@ -1065,7 +1562,11 @@ def test_domains_delete_removes_inactive_jobs_and_orphans():
         db.session.add(cleanup_task)
         db.session.commit()
 
-        db.session.add(JobTasks(job_id=inactive_job.id, task_id=cleanup_task.id, status="Completed"))
+        db.session.add(
+            JobTasks(
+                job_id=inactive_job.id, task_id=cleanup_task.id, status="Completed"
+            )
+        )
         db.session.commit()
 
         domain_id = domain.id
@@ -1169,13 +1670,19 @@ def test_login_throttle_blocks_repeated_failures():
 
         client = app.test_client()
 
-        first = client.post("/login", data={"username": "admin", "password": "wrong-password"})
+        first = client.post(
+            "/login", data={"username": "admin", "password": "wrong-password"}
+        )
         assert first.status_code == 200
 
-        second = client.post("/login", data={"username": "admin", "password": "wrong-password"})
+        second = client.post(
+            "/login", data={"username": "admin", "password": "wrong-password"}
+        )
         assert second.status_code == 200
 
-        blocked = client.post("/login", data={"username": "admin", "password": "wrong-password"})
+        blocked = client.post(
+            "/login", data={"username": "admin", "password": "wrong-password"}
+        )
         assert blocked.status_code == 429
         assert blocked.headers.get("Retry-After") is not None
 
@@ -1203,8 +1710,12 @@ def test_login_throttle_can_be_disabled():
 
         client = app.test_client()
 
-        first = client.post("/login", data={"username": "admin", "password": "wrong-password"})
-        second = client.post("/login", data={"username": "admin", "password": "wrong-password"})
+        first = client.post(
+            "/login", data={"username": "admin", "password": "wrong-password"}
+        )
+        second = client.post(
+            "/login", data={"username": "admin", "password": "wrong-password"}
+        )
         assert first.status_code == 200
         assert second.status_code == 200
 
@@ -1297,7 +1808,6 @@ def test_job_task_move_routes_do_not_mutate_active_jobs():
         task_a = Tasks(
             name="task-a",
             hc_attackmode="maskmode",
-            owner_id=admin.id,
             wl_id=None,
             rule_id=None,
             hc_mask="?a",
@@ -1305,7 +1815,6 @@ def test_job_task_move_routes_do_not_mutate_active_jobs():
         task_b = Tasks(
             name="task-b",
             hc_attackmode="maskmode",
-            owner_id=admin.id,
             wl_id=None,
             rule_id=None,
             hc_mask="?a?a",
@@ -1333,7 +1842,9 @@ def test_job_task_move_routes_do_not_mutate_active_jobs():
         response = client.post(f"/jobs/{job.id}/move_task_down/{task_a.id}")
         assert response.status_code == 302
 
-        persisted = JobTasks.query.filter_by(job_id=job.id).order_by(JobTasks.id.asc()).all()
+        persisted = (
+            JobTasks.query.filter_by(job_id=job.id).order_by(JobTasks.id.asc()).all()
+        )
         assert [row.task_id for row in persisted] == [task_a.id, task_b.id]
         assert [row.status for row in persisted] == ["Running", "Queued"]
 
@@ -1361,7 +1872,7 @@ def test_tasks_add_rejects_bruteforce_attackmode():
         )
         assert response.status_code == 200
 
-        task = Tasks.query.filter_by(name="bruteforce-task", owner_id=admin.id).first()
+        task = Tasks.query.filter_by(name="bruteforce-task").first()
         assert task is None
 
 
@@ -1429,14 +1940,14 @@ def test_import_user_hash_dcc2_preserves_username_association(tmp_path):
     app = _build_app()
     with app.app_context():
         db.create_all()
-        admin = _seed_admin_user()
+        _seed_admin_user()
         _seed_settings()
 
         domain = Domains(name="ImportDomain")
         db.session.add(domain)
         db.session.commit()
 
-        hashfile = Hashfiles(name="dcc2.txt", domain_id=domain.id, owner_id=admin.id)
+        hashfile = Hashfiles(name="dcc2.txt", domain_id=domain.id)
         db.session.add(hashfile)
         db.session.commit()
 
@@ -1472,7 +1983,7 @@ def test_jobs_assign_task_group_normalizes_string_ids_and_skips_duplicates():
         db.session.add(domain)
         db.session.commit()
 
-        hashfile = Hashfiles(name="job_hashes.txt", domain_id=domain.id, owner_id=admin.id)
+        hashfile = Hashfiles(name="job_hashes.txt", domain_id=domain.id)
         db.session.add(hashfile)
         db.session.commit()
 
@@ -1486,21 +1997,36 @@ def test_jobs_assign_task_group_normalizes_string_ids_and_skips_duplicates():
         db.session.add(job)
         db.session.commit()
 
-        task_a = Tasks(name="task-a", hc_attackmode="maskmode", owner_id=admin.id, wl_id=None, rule_id=None, hc_mask="?a")
-        task_b = Tasks(name="task-b", hc_attackmode="maskmode", owner_id=admin.id, wl_id=None, rule_id=None, hc_mask="?a?a")
+        task_a = Tasks(
+            name="task-a",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a",
+        )
+        task_b = Tasks(
+            name="task-b",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a?a",
+        )
         db.session.add(task_a)
         db.session.add(task_b)
         db.session.commit()
 
         task_group = TaskGroups(
             name="tg-string-ids",
-            owner_id=admin.id,
-            tasks=json.dumps([str(task_a.id), str(task_a.id), str(task_b.id), "invalid"]),
+            tasks=json.dumps(
+                [str(task_a.id), str(task_a.id), str(task_b.id), "invalid"]
+            ),
         )
         db.session.add(task_group)
         db.session.commit()
 
-        preexisting_assignment = JobTasks(job_id=job.id, task_id=task_a.id, status="Not Started")
+        preexisting_assignment = JobTasks(
+            job_id=job.id, task_id=task_a.id, status="Not Started"
+        )
         db.session.add(preexisting_assignment)
         db.session.commit()
 
@@ -1511,10 +2037,426 @@ def test_jobs_assign_task_group_normalizes_string_ids_and_skips_duplicates():
 
         assigned_task_ids = [
             row.task_id
-            for row in JobTasks.query.filter_by(job_id=job.id).order_by(JobTasks.id.asc()).all()
+            for row in JobTasks.query.filter_by(job_id=job.id)
+            .order_by(JobTasks.id.asc())
+            .all()
         ]
         assert assigned_task_ids.count(task_a.id) == 1
         assert assigned_task_ids.count(task_b.id) == 1
+
+
+@pytest.mark.security
+def test_jobs_add_rejects_blank_new_domain_name():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, user)
+
+        response = client.post(
+            "/jobs/add",
+            data={
+                "name": "blank-domain-job",
+                "priority": "3",
+                "domain_id": "add_new",
+                "domain_name": "   ",
+            },
+        )
+        assert response.status_code == 200
+        assert b"Domain name is required when creating a new domain." in response.data
+        assert Domains.query.count() == 0
+        assert Jobs.query.count() == 0
+
+
+@pytest.mark.security
+def test_jobs_add_reuses_existing_domain_name_instead_of_creating_duplicate():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+
+        existing_domain = Domains(name="ExistingDomain")
+        db.session.add(existing_domain)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, user)
+
+        response = client.post(
+            "/jobs/add",
+            data={
+                "name": "reuse-domain-job",
+                "priority": "3",
+                "domain_id": "add_new",
+                "domain_name": "ExistingDomain",
+            },
+        )
+        assert response.status_code == 302
+
+        job = Jobs.query.filter_by(name="reuse-domain-job").first()
+        assert job is not None
+        assert job.domain_id == existing_domain.id
+        assert Domains.query.count() == 1
+
+
+@pytest.mark.security
+def test_jobs_add_rejects_whitespace_only_name():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="WhitespaceDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, user)
+
+        response = client.post(
+            "/jobs/add",
+            data={
+                "name": "   ",
+                "priority": "3",
+                "domain_id": str(domain.id),
+                "domain_name": "",
+            },
+        )
+        assert response.status_code == 200
+        assert Jobs.query.count() == 0
+
+
+@pytest.mark.security
+def test_jobs_add_rolls_back_new_domain_when_job_commit_conflicts(monkeypatch):
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, user)
+
+        monkeypatch.setattr(
+            "hashcrush.jobs.routes.db.session.commit",
+            lambda: (_ for _ in ()).throw(_integrity_error()),
+        )
+
+        response = client.post(
+            "/jobs/add",
+            data={
+                "name": "conflicting-job",
+                "priority": "3",
+                "domain_id": "add_new",
+                "domain_name": "TransientDomain",
+            },
+        )
+        assert response.status_code == 200
+        assert b"Job could not be created" in response.data
+        assert Jobs.query.count() == 0
+        assert Domains.query.count() == 0
+
+
+@pytest.mark.security
+def test_jobs_assigned_hashfile_failed_import_rolls_back_hashfile_row(monkeypatch):
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="rollback-domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        job = Jobs(
+            name="rollback-job",
+            status="Incomplete",
+            domain_id=domain.id,
+            owner_id=user.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        monkeypatch.setattr(
+            "hashcrush.jobs.routes.import_hashfilehashes", lambda **_: False
+        )
+
+        client = app.test_client()
+        _login_client_as_user(client, user)
+
+        response = client.post(
+            f"/jobs/{job.id}/assigned_hashfile/",
+            data={
+                "name": "rollback.txt",
+                "file_type": "hash_only",
+                "hash_type": "0",
+                "shadow_hash_type": "",
+                "pwdump_hash_type": "",
+                "netntlm_hash_type": "",
+                "kerberos_hash_type": "",
+                "hashfilehashes": "0123456789abcdef0123456789abcdef",
+                "submit": "Next",
+            },
+        )
+        assert response.status_code == 302
+
+        db.session.refresh(job)
+        assert job.hashfile_id is None
+        assert Hashfiles.query.count() == 0
+        assert HashfileHashes.query.count() == 0
+
+
+@pytest.mark.security
+def test_tasks_add_handles_integrity_error_cleanly(monkeypatch):
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        wordlist = Wordlists(
+            name="shared-wordlist",
+            type="static",
+            path="/tmp/shared-wordlist.txt",
+            size=1,
+            checksum="2" * 64,
+        )
+        db.session.add(wordlist)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        monkeypatch.setattr(
+            "hashcrush.tasks.routes.db.session.commit",
+            lambda: (_ for _ in ()).throw(_integrity_error()),
+        )
+
+        response = client.post(
+            "/tasks/add",
+            data={
+                "name": "conflict-task",
+                "hc_attackmode": "dictionary",
+                "wl_id": str(wordlist.id),
+                "rule_id": "None",
+                "mask": "",
+            },
+        )
+        assert response.status_code == 200
+        assert b"Task could not be saved" in response.data
+        assert Tasks.query.count() == 0
+
+
+@pytest.mark.security
+def test_task_groups_add_handles_integrity_error_cleanly(monkeypatch):
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        monkeypatch.setattr(
+            "hashcrush.task_groups.routes.db.session.commit",
+            lambda: (_ for _ in ()).throw(_integrity_error()),
+        )
+
+        response = client.post(
+            "/task_groups/add",
+            data={
+                "name": "conflict-group",
+            },
+        )
+        assert response.status_code == 200
+        assert b"Task group could not be created" in response.data
+        assert TaskGroups.query.count() == 0
+
+
+@pytest.mark.security
+def test_users_add_handles_integrity_error_cleanly(monkeypatch):
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        monkeypatch.setattr(
+            "hashcrush.users.routes.db.session.commit",
+            lambda: (_ for _ in ()).throw(_integrity_error()),
+        )
+
+        response = client.post(
+            "/users/add",
+            data={
+                "username": "conflict-user",
+                "is_admin": "y",
+                "password": "strong-password-123",
+                "confirm_password": "strong-password-123",
+            },
+        )
+        assert response.status_code == 200
+        assert b"Account could not be created" in response.data
+        assert Users.query.count() == 1
+
+
+@pytest.mark.security
+def test_users_add_rejects_whitespace_only_username():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/users/add",
+            data={
+                "username": "   ",
+                "password": "strong-password-123",
+                "confirm_password": "strong-password-123",
+            },
+        )
+        assert response.status_code == 200
+        assert Users.query.count() == 1
+
+
+@pytest.mark.security
+def test_users_delete_handles_integrity_error_cleanly(monkeypatch):
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_user("other-admin", password="other-admin-password", admin=True)
+        target_user = _seed_user(
+            "delete-target", password="delete-target-password", admin=False
+        )
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        monkeypatch.setattr(
+            "hashcrush.users.routes.db.session.commit",
+            lambda: (_ for _ in ()).throw(_integrity_error()),
+        )
+
+        response = client.post(f"/users/delete/{target_user.id}", follow_redirects=True)
+        assert response.status_code == 200
+        assert (
+            b"Cannot delete user while they own records or while related jobs are being created"
+            in response.data
+        )
+        assert Users.query.filter_by(id=target_user.id).count() == 1
+
+
+@pytest.mark.security
+def test_hashfiles_delete_handles_integrity_error_cleanly(monkeypatch):
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="HashfileDeleteDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="delete-me.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        monkeypatch.setattr(
+            "hashcrush.hashfiles.routes.db.session.commit",
+            lambda: (_ for _ in ()).throw(_integrity_error()),
+        )
+
+        response = client.post(
+            f"/hashfiles/delete/{hashfile.id}", follow_redirects=True
+        )
+        assert response.status_code == 200
+        assert (
+            b"Error: Hashfile is associated with a job or changed concurrently."
+            in response.data
+        )
+        assert Hashfiles.query.filter_by(id=hashfile.id).count() == 1
+
+
+@pytest.mark.security
+def test_wordlists_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
+    app = _build_app({"WORDLISTS_PATH": str(tmp_path)})
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        wordlist_path = tmp_path / "wordlist.txt"
+        wordlist_path.write_text("password\n", encoding="utf-8")
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        monkeypatch.setattr(
+            "hashcrush.wordlists.routes.db.session.commit",
+            lambda: (_ for _ in ()).throw(_integrity_error()),
+        )
+
+        response = client.post(
+            "/wordlists/add",
+            data={
+                "name": "conflict-wordlist",
+                "existing_file": "wordlist.txt",
+            },
+        )
+        assert response.status_code == 200
+        assert b"Wordlist could not be registered" in response.data
+        assert Wordlists.query.count() == 0
+
+
+@pytest.mark.security
+def test_rules_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
+    app = _build_app({"RULES_PATH": str(tmp_path)})
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        rule_path = tmp_path / "best.rule"
+        rule_path.write_text(":\n", encoding="utf-8")
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        monkeypatch.setattr(
+            "hashcrush.rules.routes.db.session.commit",
+            lambda: (_ for _ in ()).throw(_integrity_error()),
+        )
+
+        response = client.post(
+            "/rules/add",
+            data={
+                "name": "conflict-rule",
+                "existing_file": "best.rule",
+            },
+        )
+        assert response.status_code == 200
+        assert b"Rule file could not be registered" in response.data
+        assert Rules.query.count() == 0
 
 
 @pytest.mark.security
@@ -1535,20 +2477,20 @@ def test_netntlm_validator_still_rejects_duplicate_user_host(tmp_path):
 
 
 @pytest.mark.security
-def test_dynamic_wordlist_update_is_scoped_to_requesting_user_data(tmp_path):
+def test_dynamic_wordlist_update_uses_all_cracked_data_for_shared_wordlists(tmp_path):
     app = _build_app()
     with app.app_context():
         db.create_all()
         owner = _seed_user("owner-user", password="owner-user-password", admin=False)
-        other = _seed_user("other-user", password="other-user-password", admin=False)
+        _seed_user("other-user", password="other-user-password", admin=False)
         _seed_settings()
 
         domain = Domains(name="ScopeDomain")
         db.session.add(domain)
         db.session.commit()
 
-        owner_hashfile = Hashfiles(name="owner.txt", domain_id=domain.id, owner_id=owner.id)
-        other_hashfile = Hashfiles(name="other.txt", domain_id=domain.id, owner_id=other.id)
+        owner_hashfile = Hashfiles(name="owner.txt", domain_id=domain.id)
+        other_hashfile = Hashfiles(name="other.txt", domain_id=domain.id)
         db.session.add(owner_hashfile)
         db.session.add(other_hashfile)
         db.session.commit()
@@ -1571,14 +2513,17 @@ def test_dynamic_wordlist_update_is_scoped_to_requesting_user_data(tmp_path):
         db.session.add(other_hash)
         db.session.commit()
 
-        db.session.add(HashfileHashes(hash_id=owner_hash.id, hashfile_id=owner_hashfile.id))
-        db.session.add(HashfileHashes(hash_id=other_hash.id, hashfile_id=other_hashfile.id))
+        db.session.add(
+            HashfileHashes(hash_id=owner_hash.id, hashfile_id=owner_hashfile.id)
+        )
+        db.session.add(
+            HashfileHashes(hash_id=other_hash.id, hashfile_id=other_hashfile.id)
+        )
         db.session.commit()
 
         dynamic_wordlist_path = tmp_path / "dynamic-wordlist.txt"
         dynamic_wordlist = Wordlists(
             name="dynamic-owner",
-            owner_id=owner.id,
             type="dynamic",
             path=str(dynamic_wordlist_path),
             size=0,
@@ -1595,19 +2540,21 @@ def test_dynamic_wordlist_update_is_scoped_to_requesting_user_data(tmp_path):
 
         contents = dynamic_wordlist_path.read_text(encoding="utf-8")
         assert "owner-secret" in contents
-        assert "other-secret" not in contents
+        assert "other-secret" in contents
 
 
 @pytest.mark.security
-def test_task_group_assigned_tasks_blocks_non_owner_access():
+def test_task_group_assigned_tasks_allows_shared_access():
     app = _build_app()
     with app.app_context():
         db.create_all()
-        owner = _seed_user("tg-owner", password="owner-user-password", admin=False)
-        attacker = _seed_user("tg-attacker", password="attacker-user-password", admin=False)
+        _seed_user("tg-owner", password="owner-user-password", admin=False)
+        attacker = _seed_user(
+            "tg-attacker", password="attacker-user-password", admin=False
+        )
         _seed_settings()
 
-        task_group = TaskGroups(name="owner-group", owner_id=owner.id, tasks=json.dumps([]))
+        task_group = TaskGroups(name="owner-group", tasks=json.dumps([]))
         db.session.add(task_group)
         db.session.commit()
 
@@ -1615,27 +2562,29 @@ def test_task_group_assigned_tasks_blocks_non_owner_access():
         _login_client_as_user(client, attacker)
 
         response = client.get(f"/task_groups/assigned_tasks/{task_group.id}")
-        assert response.status_code == 302
+        assert response.status_code == 200
+        assert b"owner-group" in response.data
 
 
 @pytest.mark.security
-def test_task_group_mutation_blocks_non_owner():
+def test_task_group_mutation_allows_shared_access():
     app = _build_app()
     with app.app_context():
         db.create_all()
-        owner = _seed_user("tg-owner", password="owner-user-password", admin=False)
-        attacker = _seed_user("tg-attacker", password="attacker-user-password", admin=False)
+        _seed_user("tg-owner", password="owner-user-password", admin=False)
+        attacker = _seed_user(
+            "tg-attacker", password="attacker-user-password", admin=False
+        )
         _seed_settings()
 
         task = Tasks(
             name="owner-task",
             hc_attackmode="maskmode",
-            owner_id=owner.id,
             wl_id=None,
             rule_id=None,
             hc_mask="?a?a",
         )
-        task_group = TaskGroups(name="owner-group", owner_id=owner.id, tasks=json.dumps([]))
+        task_group = TaskGroups(name="owner-group", tasks=json.dumps([]))
         db.session.add(task)
         db.session.add(task_group)
         db.session.commit()
@@ -1649,24 +2598,26 @@ def test_task_group_mutation_blocks_non_owner():
         assert response.status_code == 302
 
         db.session.refresh(task_group)
-        assert json.loads(task_group.tasks) == []
+        assert json.loads(task_group.tasks) == [task.id]
 
 
 @pytest.mark.security
-def test_analytics_download_scopes_non_admin_to_owned_hashfiles():
+def test_analytics_download_is_global_for_shared_hashfiles():
     app = _build_app()
     with app.app_context():
         db.create_all()
-        owner = _seed_user("analytics-owner", password="owner-user-password", admin=False)
-        other = _seed_user("analytics-other", password="other-user-password", admin=False)
+        owner = _seed_user(
+            "analytics-owner", password="owner-user-password", admin=False
+        )
+        _seed_user("analytics-other", password="other-user-password", admin=False)
         _seed_settings()
 
         domain = Domains(name="SharedDomain")
         db.session.add(domain)
         db.session.commit()
 
-        owner_hashfile = Hashfiles(name="owner.txt", domain_id=domain.id, owner_id=owner.id)
-        other_hashfile = Hashfiles(name="other.txt", domain_id=domain.id, owner_id=other.id)
+        owner_hashfile = Hashfiles(name="owner.txt", domain_id=domain.id)
+        other_hashfile = Hashfiles(name="other.txt", domain_id=domain.id)
         db.session.add_all([owner_hashfile, other_hashfile])
         db.session.commit()
 
@@ -1687,8 +2638,12 @@ def test_analytics_download_scopes_non_admin_to_owned_hashfiles():
         db.session.add_all([owner_hash, other_hash])
         db.session.commit()
 
-        db.session.add(HashfileHashes(hash_id=owner_hash.id, hashfile_id=owner_hashfile.id))
-        db.session.add(HashfileHashes(hash_id=other_hash.id, hashfile_id=other_hashfile.id))
+        db.session.add(
+            HashfileHashes(hash_id=owner_hash.id, hashfile_id=owner_hashfile.id)
+        )
+        db.session.add(
+            HashfileHashes(hash_id=other_hash.id, hashfile_id=other_hashfile.id)
+        )
         db.session.commit()
 
         client = app.test_client()
@@ -1698,7 +2653,7 @@ def test_analytics_download_scopes_non_admin_to_owned_hashfiles():
         assert response.status_code == 200
         content = response.data.decode("utf-8")
         assert "owner-ciphertext" in content
-        assert "other-ciphertext" not in content
+        assert "other-ciphertext" in content
 
 
 @pytest.mark.security
@@ -1713,7 +2668,7 @@ def test_search_hash_post_is_trimmed_and_case_insensitive():
         db.session.add(domain)
         db.session.commit()
 
-        hashfile = Hashfiles(name="search-hashes.txt", domain_id=domain.id, owner_id=admin.id)
+        hashfile = Hashfiles(name="search-hashes.txt", domain_id=domain.id)
         db.session.add(hashfile)
         db.session.commit()
 
@@ -1755,7 +2710,7 @@ def test_search_password_post_matches_canonical_and_legacy_plaintext_rows():
         db.session.add(domain)
         db.session.commit()
 
-        hashfile = Hashfiles(name="search-passwords.txt", domain_id=domain.id, owner_id=admin.id)
+        hashfile = Hashfiles(name="search-passwords.txt", domain_id=domain.id)
         db.session.add(hashfile)
         db.session.commit()
 
@@ -1775,7 +2730,9 @@ def test_search_password_post_matches_canonical_and_legacy_plaintext_rows():
         )
         db.session.add_all([canonical_hash, legacy_hash])
         db.session.commit()
-        db.session.add(HashfileHashes(hash_id=canonical_hash.id, hashfile_id=hashfile.id))
+        db.session.add(
+            HashfileHashes(hash_id=canonical_hash.id, hashfile_id=hashfile.id)
+        )
         db.session.add(HashfileHashes(hash_id=legacy_hash.id, hashfile_id=hashfile.id))
         db.session.commit()
 
@@ -1804,20 +2761,63 @@ def test_search_password_post_matches_canonical_and_legacy_plaintext_rows():
 
 
 @pytest.mark.security
-def test_search_hash_id_lookup_scopes_non_admin_to_owned_hashfiles():
+def test_search_post_rejects_whitespace_only_query():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="SearchWhitespaceDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="search-whitespace.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = Hashes(
+            sub_ciphertext="a" * 32,
+            ciphertext="SHOULD-NOT-MATCH",
+            hash_type=1000,
+            cracked=False,
+            plaintext=None,
+        )
+        db.session.add(hash_row)
+        db.session.commit()
+        db.session.add(HashfileHashes(hash_id=hash_row.id, hashfile_id=hashfile.id))
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/search",
+            data={
+                "search_type": "hash",
+                "query": "   ",
+            },
+        )
+        assert response.status_code == 200
+        assert b"No results found" in response.data
+        assert b"SHOULD-NOT-MATCH" not in response.data
+
+
+@pytest.mark.security
+def test_search_hash_id_lookup_is_global_for_shared_hashfiles():
     app = _build_app()
     with app.app_context():
         db.create_all()
         owner = _seed_user("search-owner", password="owner-user-password", admin=False)
-        other = _seed_user("search-other", password="other-user-password", admin=False)
+        _seed_user("search-other", password="other-user-password", admin=False)
         _seed_settings()
 
         domain = Domains(name="SharedDomain")
         db.session.add(domain)
         db.session.commit()
 
-        owner_hashfile = Hashfiles(name="owner.txt", domain_id=domain.id, owner_id=owner.id)
-        other_hashfile = Hashfiles(name="other.txt", domain_id=domain.id, owner_id=other.id)
+        owner_hashfile = Hashfiles(name="owner.txt", domain_id=domain.id)
+        other_hashfile = Hashfiles(name="other.txt", domain_id=domain.id)
         db.session.add_all([owner_hashfile, other_hashfile])
         db.session.commit()
 
@@ -1838,8 +2838,12 @@ def test_search_hash_id_lookup_scopes_non_admin_to_owned_hashfiles():
         db.session.add_all([owner_hash, other_hash])
         db.session.commit()
 
-        db.session.add(HashfileHashes(hash_id=owner_hash.id, hashfile_id=owner_hashfile.id))
-        db.session.add(HashfileHashes(hash_id=other_hash.id, hashfile_id=other_hashfile.id))
+        db.session.add(
+            HashfileHashes(hash_id=owner_hash.id, hashfile_id=owner_hashfile.id)
+        )
+        db.session.add(
+            HashfileHashes(hash_id=other_hash.id, hashfile_id=other_hashfile.id)
+        )
         db.session.commit()
 
         client = app.test_client()
@@ -1847,22 +2851,75 @@ def test_search_hash_id_lookup_scopes_non_admin_to_owned_hashfiles():
 
         response = client.get(f"/search?hash_id={other_hash.id}")
         assert response.status_code == 200
-        assert b"other-search-ciphertext" not in response.data
+        assert b"other-search-ciphertext" in response.data
 
 
 @pytest.mark.security
-def test_task_group_export_only_includes_current_user_owned_items():
+def test_search_hash_id_lookup_rejects_invalid_query_value():
     app = _build_app()
     with app.app_context():
         db.create_all()
-        owner = _seed_user("tg-export-owner", password="owner-user-password", admin=False)
-        other = _seed_user("tg-export-other", password="other-user-password", admin=False)
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get("/search?hash_id=../../etc/passwd")
+        assert response.status_code == 302
+        assert response.headers["Location"].endswith("/search")
+
+
+@pytest.mark.security
+def test_search_hash_id_lookup_accepts_trimmed_numeric_value():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="TrimmedHashIdDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="trimmed-hash-id.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = Hashes(
+            sub_ciphertext="e" * 32,
+            ciphertext="trimmed-hash-id-ciphertext",
+            hash_type=1000,
+            cracked=False,
+            plaintext=None,
+        )
+        db.session.add(hash_row)
+        db.session.commit()
+        db.session.add(HashfileHashes(hash_id=hash_row.id, hashfile_id=hashfile.id))
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get(f"/search?hash_id=%20{hash_row.id}%20")
+        assert response.status_code == 200
+        assert b"trimmed-hash-id-ciphertext" in response.data
+
+
+@pytest.mark.security
+def test_task_group_export_includes_shared_items():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        owner = _seed_user(
+            "tg-export-owner", password="owner-user-password", admin=False
+        )
+        _seed_user("tg-export-other", password="other-user-password", admin=False)
         _seed_settings()
 
         owner_task = Tasks(
             name="owner-mask",
             hc_attackmode="maskmode",
-            owner_id=owner.id,
             wl_id=None,
             rule_id=None,
             hc_mask="?a?a",
@@ -1870,7 +2927,6 @@ def test_task_group_export_only_includes_current_user_owned_items():
         other_task = Tasks(
             name="other-mask",
             hc_attackmode="maskmode",
-            owner_id=other.id,
             wl_id=None,
             rule_id=None,
             hc_mask="?a?a?a",
@@ -1878,8 +2934,8 @@ def test_task_group_export_only_includes_current_user_owned_items():
         db.session.add_all([owner_task, other_task])
         db.session.commit()
 
-        owner_group = TaskGroups(name="owner-group", owner_id=owner.id, tasks=json.dumps([owner_task.id]))
-        other_group = TaskGroups(name="other-group", owner_id=other.id, tasks=json.dumps([other_task.id]))
+        owner_group = TaskGroups(name="owner-group", tasks=json.dumps([owner_task.id]))
+        other_group = TaskGroups(name="other-group", tasks=json.dumps([other_task.id]))
         db.session.add_all([owner_group, other_group])
         db.session.commit()
 
@@ -1893,10 +2949,71 @@ def test_task_group_export_only_includes_current_user_owned_items():
         exported_task_names = [entry["name"] for entry in payload["tasks"]]
         exported_group_names = [entry["name"] for entry in payload["task_groups"]]
 
+        assert payload["exported_by"] == owner.username
+        assert "owner" not in payload
         assert "owner-mask" in exported_task_names
-        assert "other-mask" not in exported_task_names
+        assert "other-mask" in exported_task_names
         assert "owner-group" in exported_group_names
-        assert "other-group" not in exported_group_names
+        assert "other-group" in exported_group_names
+
+
+@pytest.mark.security
+def test_non_owner_can_view_scheduled_jobs_but_cannot_stop_them():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        owner = _seed_user("job-owner", password="job-owner-password", admin=False)
+        viewer = _seed_user("job-viewer", password="job-viewer-password", admin=False)
+        _seed_settings()
+
+        domain = Domains(name="VisibleDomain")
+        hashfile = Hashfiles(name="visible.txt", domain_id=1)
+        db.session.add(domain)
+        db.session.commit()
+        hashfile.domain_id = domain.id
+        db.session.add(hashfile)
+        db.session.commit()
+
+        task = Tasks(
+            name="visible-task",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a",
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        job = Jobs(
+            name="queued-visible-job",
+            status="Queued",
+            domain_id=domain.id,
+            owner_id=owner.id,
+            hashfile_id=hashfile.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        job_task = JobTasks(job_id=job.id, task_id=task.id, status="Queued")
+        db.session.add(job_task)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, viewer)
+
+        home_response = client.get("/")
+        assert home_response.status_code == 200
+        assert b"queued-visible-job" in home_response.data
+
+        jobs_response = client.get("/jobs")
+        assert jobs_response.status_code == 200
+        assert b"queued-visible-job" in jobs_response.data
+
+        stop_response = client.post(f"/jobs/stop/{job.id}")
+        assert stop_response.status_code == 302
+
+        db.session.refresh(job)
+        assert job.status == "Queued"
 
 
 @pytest.mark.security
@@ -1904,12 +3021,13 @@ def test_task_group_import_creates_tasks_and_groups():
     app = _build_app()
     with app.app_context():
         db.create_all()
-        owner = _seed_user("tg-import-owner", password="owner-user-password", admin=False)
+        owner = _seed_user(
+            "tg-import-owner", password="owner-user-password", admin=False
+        )
         _seed_settings()
 
         wordlist = Wordlists(
             name="rockyou",
-            owner_id=owner.id,
             type="static",
             path="/tmp/rockyou.txt",
             size=1,
@@ -1917,7 +3035,6 @@ def test_task_group_import_creates_tasks_and_groups():
         )
         rule = Rules(
             name="best64",
-            owner_id=owner.id,
             path="/tmp/best64.rule",
             size=1,
             checksum="1" * 64,
@@ -1962,9 +3079,9 @@ def test_task_group_import_creates_tasks_and_groups():
         )
         assert response.status_code == 302
 
-        imported_dict_task = Tasks.query.filter_by(name="import-dict", owner_id=owner.id).first()
-        imported_mask_task = Tasks.query.filter_by(name="import-mask", owner_id=owner.id).first()
-        imported_group = TaskGroups.query.filter_by(name="import-group", owner_id=owner.id).first()
+        imported_dict_task = Tasks.query.filter_by(name="import-dict").first()
+        imported_mask_task = Tasks.query.filter_by(name="import-mask").first()
+        imported_group = TaskGroups.query.filter_by(name="import-group").first()
 
         assert imported_dict_task is not None
         assert imported_dict_task.wl_id == wordlist.id
@@ -1973,7 +3090,10 @@ def test_task_group_import_creates_tasks_and_groups():
         assert imported_mask_task is not None
         assert imported_mask_task.hc_mask == "?a?a?a"
         assert imported_group is not None
-        assert set(json.loads(imported_group.tasks)) == {imported_dict_task.id, imported_mask_task.id}
+        assert set(json.loads(imported_group.tasks)) == {
+            imported_dict_task.id,
+            imported_mask_task.id,
+        }
 
 
 @pytest.mark.security
@@ -1988,7 +3108,7 @@ def test_production_session_cookie_defaults_are_hardened():
             "ENABLE_SCHEDULER": False,
             "ENABLE_LOCAL_EXECUTOR": False,
             "SKIP_RUNTIME_BOOTSTRAP": True,
-            "AUTO_MIGRATE_PLAINTEXT_STORAGE": False,
+            "AUTO_NORMALIZE_PLAINTEXT_STORAGE": False,
             "SESSION_COOKIE_SECURE": None,
         },
     )
@@ -2103,7 +3223,9 @@ def test_admin_reset_still_updates_other_user_password():
     with app.app_context():
         db.create_all()
         admin = _seed_admin_user()
-        target_user = _seed_user("target-user", password="old-user-password", admin=False)
+        target_user = _seed_user(
+            "target-user", password="old-user-password", admin=False
+        )
         _seed_settings()
 
         client = app.test_client()
@@ -2134,18 +3256,23 @@ def test_mutating_routes_reject_get_requests():
         db.session.add(domain)
         db.session.commit()
 
-        hashfile = Hashfiles(name="method-check.txt", domain_id=domain.id, owner_id=admin.id)
+        hashfile = Hashfiles(name="method-check.txt", domain_id=domain.id)
         db.session.add(hashfile)
         db.session.commit()
 
-        job = Jobs(name="method-check-job", status="Ready", domain_id=domain.id, owner_id=admin.id, hashfile_id=hashfile.id)
+        job = Jobs(
+            name="method-check-job",
+            status="Ready",
+            domain_id=domain.id,
+            owner_id=admin.id,
+            hashfile_id=hashfile.id,
+        )
         db.session.add(job)
         db.session.commit()
 
         task = Tasks(
             name="method-check-task",
             hc_attackmode="maskmode",
-            owner_id=admin.id,
             wl_id=None,
             rule_id=None,
             hc_mask="?a?a",
@@ -2153,7 +3280,7 @@ def test_mutating_routes_reject_get_requests():
         db.session.add(task)
         db.session.commit()
 
-        task_group = TaskGroups(name="method-check-group", owner_id=admin.id, tasks=json.dumps([task.id]))
+        task_group = TaskGroups(name="method-check-group", tasks=json.dumps([task.id]))
         db.session.add(task_group)
         db.session.commit()
 
@@ -2164,9 +3291,12 @@ def test_mutating_routes_reject_get_requests():
         assert client.get("/wordlists/update/999999").status_code == 405
         assert client.get(f"/jobs/start/{job.id}").status_code == 405
         assert client.get(f"/jobs/{job.id}/assign_task/{task.id}").status_code == 405
-        assert client.get(
-            f"/task_groups/assigned_tasks/{task_group.id}/add_task/{task.id}"
-        ).status_code == 405
+        assert (
+            client.get(
+                f"/task_groups/assigned_tasks/{task_group.id}/add_task/{task.id}"
+            ).status_code
+            == 405
+        )
         assert client.get("/rules/delete/999999").status_code == 405
         assert client.get("/logout").status_code == 405
 
@@ -2206,7 +3336,6 @@ def test_task_edit_allows_same_name_and_clears_mask_when_switching_to_dictionary
 
         wordlist = Wordlists(
             name="wl",
-            owner_id=admin.id,
             type="static",
             path="/tmp/wl.txt",
             size=1,
@@ -2218,7 +3347,6 @@ def test_task_edit_allows_same_name_and_clears_mask_when_switching_to_dictionary
         task = Tasks(
             name="same-name-task",
             hc_attackmode="maskmode",
-            owner_id=admin.id,
             wl_id=None,
             rule_id=None,
             hc_mask="?a?a",
@@ -2249,23 +3377,73 @@ def test_task_edit_allows_same_name_and_clears_mask_when_switching_to_dictionary
 
 
 @pytest.mark.security
+def test_tasks_add_allows_shared_wordlists_and_rules_from_other_users():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        owner = _seed_user("task-owner", password="task-owner-password", admin=False)
+        _seed_user("resource-owner", password="resource-owner-password", admin=False)
+        _seed_settings()
+
+        wordlist = Wordlists(
+            name="shared-wordlist",
+            type="static",
+            path="/tmp/shared-wordlist.txt",
+            size=1,
+            checksum="2" * 64,
+        )
+        rule = Rules(
+            name="shared-rule",
+            path="/tmp/shared.rule",
+            size=1,
+            checksum="3" * 64,
+        )
+        db.session.add_all([wordlist, rule])
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, owner)
+
+        response = client.post(
+            "/tasks/add",
+            data={
+                "name": "shared-dictionary-task",
+                "hc_attackmode": "dictionary",
+                "wl_id": str(wordlist.id),
+                "rule_id": str(rule.id),
+                "mask": "",
+            },
+        )
+        assert response.status_code == 302
+
+        task = Tasks.query.filter_by(name="shared-dictionary-task").first()
+        assert task is not None
+        assert task.wl_id == wordlist.id
+        assert task.rule_id == rule.id
+
+
+@pytest.mark.security
 def test_users_delete_blocks_when_target_user_owns_records():
     app = _build_app()
     with app.app_context():
         db.create_all()
         admin = _seed_admin_user()
-        target_user = _seed_user("owned-user", password="owned-user-password", admin=False)
+        target_user = _seed_user(
+            "owned-user", password="owned-user-password", admin=False
+        )
         _seed_settings()
 
-        owned_task = Tasks(
-            name="owned-task",
-            hc_attackmode="maskmode",
+        domain = Domains(name="owned-user-domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        owned_job = Jobs(
+            name="owned-job",
+            status="Ready",
+            domain_id=domain.id,
             owner_id=target_user.id,
-            wl_id=None,
-            rule_id=None,
-            hc_mask="?a",
         )
-        db.session.add(owned_task)
+        db.session.add(owned_job)
         db.session.commit()
 
         client = app.test_client()
@@ -2288,21 +3466,41 @@ def test_jobs_stop_preserves_completed_tasks_and_running_pid():
         db.session.add(domain)
         db.session.commit()
 
-        hashfile = Hashfiles(name="stop.txt", domain_id=domain.id, owner_id=admin.id)
+        hashfile = Hashfiles(name="stop.txt", domain_id=domain.id)
         db.session.add(hashfile)
         db.session.commit()
 
-        task_done = Tasks(name="done-task", hc_attackmode="maskmode", owner_id=admin.id, wl_id=None, rule_id=None, hc_mask="?a")
-        task_run = Tasks(name="run-task", hc_attackmode="maskmode", owner_id=admin.id, wl_id=None, rule_id=None, hc_mask="?a?a")
+        task_done = Tasks(
+            name="done-task",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a",
+        )
+        task_run = Tasks(
+            name="run-task",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a?a",
+        )
         db.session.add_all([task_done, task_run])
         db.session.commit()
 
-        job = Jobs(name="stop-job", status="Running", domain_id=domain.id, owner_id=admin.id, hashfile_id=hashfile.id)
+        job = Jobs(
+            name="stop-job",
+            status="Running",
+            domain_id=domain.id,
+            owner_id=admin.id,
+            hashfile_id=hashfile.id,
+        )
         db.session.add(job)
         db.session.commit()
 
         completed = JobTasks(job_id=job.id, task_id=task_done.id, status="Completed")
-        running = JobTasks(job_id=job.id, task_id=task_run.id, status="Running", worker_pid=424242)
+        running = JobTasks(
+            job_id=job.id, task_id=task_run.id, status="Running", worker_pid=424242
+        )
         db.session.add_all([completed, running])
         db.session.commit()
 
@@ -2320,6 +3518,53 @@ def test_jobs_stop_preserves_completed_tasks_and_running_pid():
 
 
 @pytest.mark.security
+def test_stop_job_task_ignores_stale_request_for_completed_task():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        owner = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="stale-stop-domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        job = Jobs(
+            name="stale-stop-job",
+            status="Completed",
+            domain_id=domain.id,
+            owner_id=owner.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        task = Tasks(
+            name="stale-stop-task",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a",
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        job_task = JobTasks(job_id=job.id, task_id=task.id, status="Completed")
+        db.session.add(job_task)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, owner)
+
+        response = client.post(f"/job_task/stop/{job_task.id}")
+        assert response.status_code == 302
+
+        db.session.refresh(job_task)
+        db.session.refresh(job)
+        assert job_task.status == "Completed"
+        assert job.status == "Completed"
+
+
+@pytest.mark.security
 def test_recover_orphaned_paused_task_cleans_stale_pid_and_keeps_status(tmp_path):
     from hashcrush.executor.service import LocalExecutorService
     from hashcrush.utils.utils import encode_plaintext_for_storage, get_md5_hash
@@ -2334,7 +3579,7 @@ def test_recover_orphaned_paused_task_cleans_stale_pid_and_keeps_status(tmp_path
         db.session.add(domain)
         db.session.commit()
 
-        hashfile = Hashfiles(name="paused-recover.txt", domain_id=domain.id, owner_id=user.id)
+        hashfile = Hashfiles(name="paused-recover.txt", domain_id=domain.id)
         db.session.add(hashfile)
         db.session.commit()
 
@@ -2353,7 +3598,6 @@ def test_recover_orphaned_paused_task_cleans_stale_pid_and_keeps_status(tmp_path
         task = Tasks(
             name="paused-recover-task",
             hc_attackmode="maskmode",
-            owner_id=user.id,
             wl_id=None,
             rule_id=None,
             hc_mask="?a",
@@ -2371,14 +3615,18 @@ def test_recover_orphaned_paused_task_cleans_stale_pid_and_keeps_status(tmp_path
         db.session.add(job)
         db.session.commit()
 
-        orphan = JobTasks(job_id=job.id, task_id=task.id, status="Paused", worker_pid=987654)
+        orphan = JobTasks(
+            job_id=job.id, task_id=task.id, status="Paused", worker_pid=987654
+        )
         db.session.add(orphan)
         db.session.commit()
 
         outfiles_dir = tmp_path / "outfiles"
         outfiles_dir.mkdir(parents=True, exist_ok=True)
         crack_path = outfiles_dir / f"hc_cracked_{job.id}_{task.id}.txt"
-        crack_path.write_text("paused-orphan-hash:RecoveredWhilePaused\n", encoding="latin-1")
+        crack_path.write_text(
+            "paused-orphan-hash:RecoveredWhilePaused\n", encoding="latin-1"
+        )
 
         service = LocalExecutorService(app)
         service._recover_orphaned_tasks()
@@ -2388,7 +3636,9 @@ def test_recover_orphaned_paused_task_cleans_stale_pid_and_keeps_status(tmp_path
         assert orphan.status == "Paused"
         assert orphan.worker_pid is None
         assert imported_hash.cracked is True
-        assert imported_hash.plaintext == encode_plaintext_for_storage("RecoveredWhilePaused")
+        assert imported_hash.plaintext == encode_plaintext_for_storage(
+            "RecoveredWhilePaused"
+        )
 
 
 @pytest.mark.security
@@ -2398,11 +3648,15 @@ def test_database_constraints_and_indexes_exist_on_core_link_tables():
         db.create_all()
         inspector = inspect(db.engine)
 
-        hashfile_hashes_indexes = {entry["name"] for entry in inspector.get_indexes("hashfile_hashes")}
+        hashfile_hashes_indexes = {
+            entry["name"] for entry in inspector.get_indexes("hashfile_hashes")
+        }
         assert "ix_hashfile_hashes_hashfile_id" in hashfile_hashes_indexes
         assert "ix_hashfile_hashes_hash_id" in hashfile_hashes_indexes
 
-        job_tasks_indexes = {entry["name"] for entry in inspector.get_indexes("job_tasks")}
+        job_tasks_indexes = {
+            entry["name"] for entry in inspector.get_indexes("job_tasks")
+        }
         assert "ix_job_tasks_status_priority_id" in job_tasks_indexes
 
         hashfile_hashes_fks = {

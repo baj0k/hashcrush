@@ -3,7 +3,7 @@
 <br>
 <h1>Wordlists</h1>
 <br>
-These are plaintext, newline-delimited files assigned to tasks. You can upload files or register existing files from the configured external wordlists path. The Dynamic Wordlist is automatically generated for you.
+These are plaintext, newline-delimited files assigned to tasks. Register files from the configured external wordlists path. The dynamic wordlist is generated from cracked plaintexts.
 <a class="btn btn-success btn-sm mt-1 mb-1" href="{{ url_for('wordlists.wordlists_add') }}">Add/Register</a>
 Configured root: <code>{{ wordlists_root }}</code>
 <br>
@@ -19,7 +19,6 @@ Configured root: <code>{{ wordlists_root }}</code>
                 <tr>
                     <th scope="col">Name</th>
                     <th scope="col">Size</th>
-                    <th scope="col">Owner</th>
                     <th scope="col">Last Updated</th>
                     <th scope="col">Control</th>
                 </tr>
@@ -29,13 +28,6 @@ Configured root: <code>{{ wordlists_root }}</code>
                         <tr>
                             <td>{{ wordlist.name }}</td>
                             <td>{{ wordlist.size }}</td>
-                            <td>
-                                {% for user in users %}
-                                    {% if user.id == wordlist.owner_id %}
-                                        {{ user.username }}
-                                    {% endif %}
-                                {% endfor %}
-                            </td>
                             <td>
                                 {{ wordlist.last_updated }}
                             </td>

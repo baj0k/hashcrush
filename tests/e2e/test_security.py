@@ -14,6 +14,10 @@ def _xss_payload(label: str):
     return element_id, payload
 
 
+def _unique_job_name(prefix: str) -> str:
+    return f"{prefix} {uuid.uuid4().hex[:8]}"
+
+
 def _select_domain(page):
     domain_id = os.getenv("HASHCRUSH_E2E_DOMAIN_ID")
     if domain_id:
@@ -26,6 +30,33 @@ def _select_domain(page):
     page.locator("#new_domain_div input[name='domain_name']").fill(domain_name)
 
 
+def _detect_login_failure(page) -> tuple[str, str] | None:
+    if page.locator(".alert").count() > 0:
+        alert_text = page.locator(".alert").first.inner_text().strip()
+        if alert_text:
+            return ("alert", alert_text)
+    rendered = page.content().lower()
+    if "too many failed login attempts" in rendered:
+        return (
+            "throttle",
+            "Login account appears throttled by prior failed attempts. "
+            "Wait lockout expiry or clear auth_throttle rows for this account/IP.",
+        )
+    if (
+        "400 bad request" in rendered
+        or ">bad request<" in rendered
+        or "the csrf token" in rendered
+        or "csrf session token is missing" in rendered
+        or "csrf tokens do not match" in rendered
+    ):
+        return (
+            "csrf",
+            "Login POST appears blocked by CSRF/400. "
+            "Use HTTPS and ensure session/cookie settings are compatible with your endpoint.",
+        )
+    return None
+
+
 def _login(page, live_server, username, password):
     page.goto(f"{live_server}/login", wait_until="domcontentloaded")
     page.get_by_label("Username").fill(username)
@@ -34,6 +65,13 @@ def _login(page, live_server, username, password):
     if page.get_by_role("link", name="Jobs").count() > 0:
         return
 
+    if "/setup/" in page.url:
+        pytest.skip("Live host is in setup flow; complete setup before running e2e tests.")
+    failure = _detect_login_failure(page)
+    if failure is not None:
+        _failure_type, message = failure
+        pytest.skip(f"Login failed against external server (url={page.url}, alert={message!r}).")
+
     # Fallback auth check that does not depend on navbar visibility.
     page.goto(f"{live_server}/jobs", wait_until="domcontentloaded")
     current_path = urlparse(page.url).path.rstrip("/")
@@ -41,19 +79,6 @@ def _login(page, live_server, username, password):
     if authenticated:
         return
 
-    rendered = page.content().lower()
-    if "too many failed login attempts" in rendered:
-        pytest.skip(
-            "Login account appears throttled by prior failed attempts. "
-            "Wait lockout expiry or clear auth_throttle rows for this account/IP."
-        )
-    if "/setup/" in page.url:
-        pytest.skip("Live host is in setup flow; complete setup before running e2e tests.")
-    alert_text = ""
-    if page.locator(".alert").count() > 0:
-        alert_text = page.locator(".alert").first.inner_text().strip()
-    if alert_text:
-        pytest.skip(f"Login failed against external server (url={page.url}, alert={alert_text!r}).")
     pytest.skip(f"Login failed against external server (url={page.url}).")
 
 
@@ -166,7 +191,7 @@ def test_job_idor_access_denied_for_other_user(
     page.get_by_role("link", name="Create a New Job").click()
     expect(page.get_by_role("heading", name="Create a new Job")).to_be_visible()
 
-    page.get_by_label("Job Name").fill("E2E IDOR Job")
+    page.get_by_label("Job Name").fill(_unique_job_name("E2E IDOR Job"))
     _select_domain(page)
     page.get_by_role("button", name="Next").click()
     match = re.search(r"/jobs/(\d+)/assigned_hashfile", page.url)

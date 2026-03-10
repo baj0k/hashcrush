@@ -2,43 +2,28 @@
 import os
 
 from flask import Blueprint, current_app, flash, redirect, render_template, url_for
-from flask_login import login_required, current_user
+from flask_login import login_required
+from sqlalchemy.exc import IntegrityError
 
-from hashcrush.models import JobTasks, Jobs, Rules, Tasks, Users
-from hashcrush.models import db
+from hashcrush.models import Jobs, JobTasks, Rules, Tasks, db
 from hashcrush.rules.forms import RulesForm
 from hashcrush.utils.utils import get_filehash, get_linecount
-
 
 rules = Blueprint('rules', __name__)
 MAX_SELECTABLE_RULE_FILES = 5000
 
 
-def _visible_rules_query():
-    query = Rules.query
-    if not current_user.admin:
-        query = query.filter(Rules.owner_id == current_user.id)
-    return query
-
-
-def _visible_tasks_query():
-    query = Tasks.query
-    if not current_user.admin:
-        query = query.filter(Tasks.owner_id == current_user.id)
-    return query
-
-
-def _visible_jobs_query():
-    query = Jobs.query
-    if not current_user.admin:
-        query = query.filter(Jobs.owner_id == current_user.id)
-    return query
-
-
-def _visible_users():
-    if current_user.admin:
-        return Users.query.all()
-    return [current_user]
+def _render_rules_add_form(form, rules_root, rules_root_exists, selectable_files, selectable_truncated, selectable_tree):
+    return render_template(
+        'rules_add.html',
+        title='Rules Add',
+        form=form,
+        rules_root=rules_root,
+        rules_root_exists=rules_root_exists,
+        selectable_count=len(selectable_files),
+        selectable_truncated=selectable_truncated,
+        selectable_tree=selectable_tree,
+    )
 
 
 def _contains_hidden_segment(relative_path: str) -> bool:
@@ -138,17 +123,16 @@ def _resolve_selected_file(selected_relative_path: str, base_dir: str) -> str | 
 @login_required
 def rules_list():
     """Function to return list of rules"""
-    rules = _visible_rules_query().all()
-    tasks = _visible_tasks_query().all()
-    jobs = _visible_jobs_query().all()
+    rules = Rules.query.all()
+    tasks = Tasks.query.all()
+    jobs = Jobs.query.all()
     visible_job_ids = [job.id for job in jobs]
     jobtasks = (
         JobTasks.query.filter(JobTasks.job_id.in_(visible_job_ids)).all()
         if visible_job_ids
         else []
     )
-    users = _visible_users()
-    return render_template('rules.html', title='Rules', rules=rules, tasks=tasks, jobs=jobs, jobtasks=jobtasks, users=users, rules_root=_rules_root_path())
+    return render_template('rules.html', title='Rules', rules=rules, tasks=tasks, jobs=jobs, jobtasks=jobtasks, rules_root=_rules_root_path())
 
 
 @rules.route("/rules/add", methods=['GET', 'POST'])
@@ -166,57 +150,65 @@ def rules_add():
     if form.validate_on_submit():
         if not rules_root_exists:
             flash('Configured rules_path directory does not exist. Cannot register rules until it is fixed.', 'danger')
-            return render_template(
-                'rules_add.html',
-                title='Rules Add',
-                form=form,
-                rules_root=rules_root,
-                rules_root_exists=rules_root_exists,
-                selectable_count=len(selectable_files),
-                selectable_truncated=selectable_truncated,
-                selectable_tree=selectable_tree,
+            return _render_rules_add_form(
+                form,
+                rules_root,
+                rules_root_exists,
+                selectable_files,
+                selectable_truncated,
+                selectable_tree,
             )
 
         rules_path = _resolve_selected_file(form.existing_file.data, rules_root)
         if not rules_path:
             flash('Invalid file selection. Choose an existing file from the configured rules_path list.', 'danger')
-            return render_template(
-                'rules_add.html',
-                title='Rules Add',
-                form=form,
-                rules_root=rules_root,
-                rules_root_exists=rules_root_exists,
-                selectable_count=len(selectable_files),
-                selectable_truncated=selectable_truncated,
-                selectable_tree=selectable_tree,
+            return _render_rules_add_form(
+                form,
+                rules_root,
+                rules_root_exists,
+                selectable_files,
+                selectable_truncated,
+                selectable_tree,
             )
 
         rules_path = os.path.abspath(rules_path)
         if Rules.query.filter_by(path=rules_path).first():
             flash('Rules file is already registered.', 'warning')
             return redirect(url_for('rules.rules_list'))
+        if Rules.query.filter_by(name=form.name.data).first():
+            flash('Rules name is already registered.', 'warning')
+            return redirect(url_for('rules.rules_list'))
 
         rule = Rules(
             name=form.name.data,
-            owner_id=current_user.id,
             path=rules_path,
             size=get_linecount(rules_path),
             checksum=get_filehash(rules_path),
         )
         db.session.add(rule)
-        db.session.commit()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash('Rule file could not be registered because that name or path already exists. Refresh and retry.', 'danger')
+            return _render_rules_add_form(
+                form,
+                rules_root,
+                rules_root_exists,
+                selectable_files,
+                selectable_truncated,
+                selectable_tree,
+            )
         flash('Rules File created!', 'success')
         return redirect(url_for('rules.rules_list'))
 
-    return render_template(
-        'rules_add.html',
-        title='Rules Add',
-        form=form,
-        rules_root=rules_root,
-        rules_root_exists=rules_root_exists,
-        selectable_count=len(selectable_files),
-        selectable_truncated=selectable_truncated,
-        selectable_tree=selectable_tree,
+    return _render_rules_add_form(
+        form,
+        rules_root,
+        rules_root_exists,
+        selectable_files,
+        selectable_truncated,
+        selectable_tree,
     )
 
 
@@ -225,15 +217,17 @@ def rules_add():
 def rules_delete(rule_id):
     """Function to delete rule file record"""
     rule = Rules.query.get_or_404(rule_id)
-    if current_user.admin or rule.owner_id == current_user.id:
-        # Check if part of a task
-        tasks = Tasks.query.filter_by(rule_id=rule.id).first()
-        if tasks:
-            flash('Rules is currently used in a task and can not be delete.', 'danger')
-        else:
-            db.session.delete(rule)
-            db.session.commit()
-            flash('Rule file has been deleted!', 'success')
+    # Check if part of a task.
+    task = Tasks.query.filter_by(rule_id=rule.id).first()
+    if task:
+        flash('Rule file is currently used in a task and cannot be deleted.', 'danger')
     else:
-        flash('Unauthorized action!', 'danger')
+        db.session.delete(rule)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash('Rule file is currently used in a task or changed concurrently and cannot be deleted.', 'danger')
+            return redirect(url_for('rules.rules_list'))
+        flash('Rule file has been deleted!', 'success')
     return redirect(url_for('rules.rules_list'))

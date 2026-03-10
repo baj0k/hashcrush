@@ -1,9 +1,18 @@
 """Flask routes to handle Domains"""
-from flask import Blueprint, render_template, redirect, url_for, flash, current_app
-from flask_login import login_required, current_user
-from sqlalchemy import exists, or_
-from hashcrush.models import Domains, Jobs, Hashfiles, HashfileHashes, Hashes, JobTasks
-from hashcrush.models import db
+from flask import Blueprint, current_app, flash, redirect, render_template, url_for
+from flask_login import current_user, login_required
+from sqlalchemy import exists
+from sqlalchemy.exc import IntegrityError
+
+from hashcrush.models import (
+    Domains,
+    Hashes,
+    HashfileHashes,
+    Hashfiles,
+    Jobs,
+    JobTasks,
+    db,
+)
 
 domains = Blueprint('domains', __name__)
 ACTIVE_JOB_STATUSES = {'Running', 'Queued', 'Paused', 'Ready', 'Incomplete'}
@@ -14,28 +23,15 @@ ACTIVE_JOB_STATUSES = {'Running', 'Queued', 'Paused', 'Ready', 'Incomplete'}
 
 
 def _visible_domains_query():
-    query = Domains.query.order_by(Domains.name)
-    if current_user.admin:
-        return query
-
-    return query.filter(
-        or_(
-            exists().where(Jobs.domain_id == Domains.id).where(Jobs.owner_id == current_user.id),
-            exists().where(Hashfiles.domain_id == Domains.id).where(Hashfiles.owner_id == current_user.id),
-        )
-    )
+    return Domains.query.order_by(Domains.name)
 
 @domains.route("/domains", methods=['GET'])
 @login_required
 def domains_list():
     """Function to return list of domains"""
     domains = _visible_domains_query().all()
-    if current_user.admin:
-        jobs = Jobs.query.all()
-        hashfiles = Hashfiles.query.all()
-    else:
-        jobs = Jobs.query.filter_by(owner_id=current_user.id).all()
-        hashfiles = Hashfiles.query.filter_by(owner_id=current_user.id).all()
+    jobs = Jobs.query.all()
+    hashfiles = Hashfiles.query.all()
     return render_template('domains.html', title='Domains', domains=domains, jobs=jobs, hashfiles=hashfiles)
 
 @domains.route("/domains/delete/<int:domain_id>", methods=['POST'])
@@ -80,6 +76,9 @@ def domains_delete(domain_id):
         db.session.delete(domain)
         db.session.commit()
         flash('Domain has been deleted!', 'success')
+    except IntegrityError:
+        db.session.rollback()
+        flash('Unable to delete domain because related records changed concurrently. Refresh and retry.', 'danger')
     except Exception:
         db.session.rollback()
         current_app.logger.exception('Failed deleting domain id=%s', domain_id)

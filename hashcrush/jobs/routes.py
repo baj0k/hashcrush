@@ -1,17 +1,48 @@
 """Flask routes to handle Jobs"""
-import os
-import secrets
 import json
+import os
 import re
+import secrets
 from datetime import UTC, datetime
-from flask import Blueprint, render_template, redirect, flash, url_for, current_app, request
-from flask_login import login_required, current_user
-from sqlalchemy import func, case, exists, or_
-from hashcrush.jobs.forms import JobsForm, JobsNewHashFileForm, JobSummaryForm
-from hashcrush.models import Jobs, Domains, Hashfiles, Users, HashfileHashes, Hashes, JobTasks, Tasks, TaskGroups
-from hashcrush.utils.utils import save_file, import_hashfilehashes, build_hashcat_command, validate_pwdump_hashfile, validate_netntlm_hashfile, validate_kerberos_hashfile, validate_shadow_hashfile, validate_user_hash_hashfile, validate_hash_only_hashfile, get_runtime_subdir
-from hashcrush.models import db
 
+from flask import (
+    Blueprint,
+    current_app,
+    flash,
+    redirect,
+    render_template,
+    request,
+    url_for,
+)
+from flask_login import current_user, login_required
+from sqlalchemy import case, func
+from sqlalchemy.exc import IntegrityError
+
+from hashcrush.jobs.forms import JobsForm, JobsNewHashFileForm, JobSummaryForm
+from hashcrush.models import (
+    Domains,
+    Hashes,
+    HashfileHashes,
+    Hashfiles,
+    Jobs,
+    JobTasks,
+    TaskGroups,
+    Tasks,
+    Users,
+    db,
+)
+from hashcrush.utils.utils import (
+    build_hashcat_command,
+    get_runtime_subdir,
+    import_hashfilehashes,
+    save_file,
+    validate_hash_only_hashfile,
+    validate_kerberos_hashfile,
+    validate_netntlm_hashfile,
+    validate_pwdump_hashfile,
+    validate_shadow_hashfile,
+    validate_user_hash_hashfile,
+)
 
 jobs = Blueprint('jobs', __name__)
 ACTIVE_JOB_TASK_MUTATION_STATUSES = {'Running', 'Queued', 'Paused'}
@@ -58,50 +89,13 @@ def _normalize_task_id_list(raw_values) -> list[int]:
 
 
 def _visible_hashfiles_for_job(job: Jobs) -> list[Hashfiles]:
-    query = Hashfiles.query.filter_by(domain_id=job.domain_id)
-    if not current_user.admin:
-        query = query.filter(Hashfiles.owner_id == current_user.id)
-    return query.all()
-
-
-def _visible_jobs_query():
-    query = Jobs.query
-    if not current_user.admin:
-        query = query.filter(Jobs.owner_id == current_user.id)
-    return query
-
+    return Hashfiles.query.filter_by(domain_id=job.domain_id).all()
 
 def _visible_domains_query():
-    query = Domains.query.order_by(Domains.name)
-    if current_user.admin:
-        return query
-    return query.filter(
-        or_(
-            exists().where(Jobs.domain_id == Domains.id).where(Jobs.owner_id == current_user.id),
-            exists().where(Hashfiles.domain_id == Domains.id).where(Hashfiles.owner_id == current_user.id),
-        )
-    )
+    return Domains.query.order_by(Domains.name)
 
-
-def _visible_hashfiles_query():
-    query = Hashfiles.query
-    if not current_user.admin:
-        query = query.filter(Hashfiles.owner_id == current_user.id)
-    return query
-
-
-def _visible_tasks_query():
-    query = Tasks.query
-    if not current_user.admin:
-        query = query.filter(Tasks.owner_id == current_user.id)
-    return query
-
-
-def _visible_task_groups_query():
-    query = TaskGroups.query
-    if not current_user.admin:
-        query = query.filter(TaskGroups.owner_id == current_user.id)
-    return query
+def _render_jobs_add_form(jobs, domains, jobs_form):
+    return render_template('jobs_add.html', title='Jobs', jobs=jobs, domains=domains, jobsForm=jobs_form)
 
 
 def _get_assignable_hashfile(job: Jobs, raw_hashfile_id) -> Hashfiles | None:
@@ -113,9 +107,6 @@ def _get_assignable_hashfile(job: Jobs, raw_hashfile_id) -> Hashfiles | None:
         Hashfiles.id == hashfile_id,
         Hashfiles.domain_id == job.domain_id,
     )
-    if not current_user.admin:
-        query = query.filter(Hashfiles.owner_id == current_user.id)
-
     return query.first()
 
 
@@ -147,10 +138,10 @@ def _parse_jobtask_progress(progress_payload: str | None) -> tuple[str | None, s
 @login_required
 def jobs_list():
     """Function to return list of Jobs"""
-    jobs = _visible_jobs_query().order_by(Jobs.created_at.desc()).all()
+    jobs = Jobs.query.order_by(Jobs.created_at.desc()).all()
     domains = _visible_domains_query().all()
-    users = Users.query.all() if current_user.admin else [current_user]
-    hashfiles = _visible_hashfiles_query().all()
+    users = Users.query.all()
+    hashfiles = Hashfiles.query.all()
     visible_job_ids = [job.id for job in jobs]
     job_tasks = (
         JobTasks.query.filter(JobTasks.job_id.in_(visible_job_ids)).all()
@@ -159,7 +150,7 @@ def jobs_list():
     )
     visible_task_ids = sorted({job_task.task_id for job_task in job_tasks})
     tasks = (
-        _visible_tasks_query().filter(Tasks.id.in_(visible_task_ids)).all()
+        Tasks.query.filter(Tasks.id.in_(visible_task_ids)).all()
         if visible_task_ids
         else []
     )
@@ -221,16 +212,33 @@ def jobs_list():
 @login_required
 def jobs_add():
     """Function to manage adding of new job"""
-    jobs = _visible_jobs_query().all()
+    jobs = Jobs.query.all()
     domains = _visible_domains_query().all()
     jobs_form = JobsForm()
     if jobs_form.validate_on_submit():
         domain_id = jobs_form.domain_id.data
         if jobs_form.domain_id.data == 'add_new':
-            domain = Domains(name=jobs_form.domain_name.data)
-            db.session.add(domain)
-            db.session.commit()
-            domain_id = domain.id
+            domain_name = (jobs_form.domain_name.data or '').strip()
+            if not domain_name:
+                flash('Domain name is required when creating a new domain.', 'danger')
+                return _render_jobs_add_form(jobs, domains, jobs_form)
+            existing_domain = Domains.query.filter_by(name=domain_name).first()
+            if existing_domain:
+                domain_id = existing_domain.id
+            else:
+                domain = Domains(name=domain_name)
+                db.session.add(domain)
+                try:
+                    db.session.flush()
+                except IntegrityError:
+                    db.session.rollback()
+                    existing_domain = Domains.query.filter_by(name=domain_name).first()
+                    if not existing_domain:
+                        flash('Domain could not be created. Refresh and retry.', 'danger')
+                        return _render_jobs_add_form(jobs, domains, jobs_form)
+                    domain_id = existing_domain.id
+                else:
+                    domain_id = domain.id
         else:
             parsed_domain_id = _parse_positive_int(jobs_form.domain_id.data)
             if parsed_domain_id is None:
@@ -238,7 +246,7 @@ def jobs_add():
                 return redirect(url_for('jobs.jobs_add'))
             visible_domain = _visible_domains_query().filter(Domains.id == parsed_domain_id).first()
             if not visible_domain:
-                flash('Selected domain is outside your access scope.', 'danger')
+                flash('Selected domain is invalid or no longer available.', 'danger')
                 return redirect(url_for('jobs.jobs_add'))
             domain_id = visible_domain.id
 
@@ -254,7 +262,12 @@ def jobs_add():
                     domain_id = int(domain_id),
                     owner_id = current_user.id)
         db.session.add(job)
-        db.session.commit()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash('Job could not be created because its name already exists or the selected domain changed. Refresh and retry.', 'danger')
+            return _render_jobs_add_form(jobs, domains, jobs_form)
         return redirect(str(job.id)+"/assigned_hashfile/")
     return render_template('jobs_add.html', title='Jobs', jobs=jobs, domains=domains, jobsForm=jobs_form)
 
@@ -350,9 +363,9 @@ def jobs_assigned_hashfile(job_id):
                 if not hashfile_name and jobs_new_hashfile_form.hashfile.data:
                     hashfile_name = jobs_new_hashfile_form.hashfile.data.filename
                 hashfile_name = hashfile_name or f'hashfile_{secrets.token_hex(4)}.txt'
-                hashfile = Hashfiles(name=hashfile_name, domain_id=job.domain_id, owner_id=current_user.id)
+                hashfile = Hashfiles(name=hashfile_name, domain_id=job.domain_id)
                 db.session.add(hashfile)
-                db.session.commit()
+                db.session.flush()
 
                 if not import_hashfilehashes(
                     hashfile_id=hashfile.id,
@@ -360,6 +373,7 @@ def jobs_assigned_hashfile(job_id):
                     file_type=jobs_new_hashfile_form.file_type.data,
                     hash_type=hash_type,
                 ):
+                    db.session.rollback()
                     flash('Failed importing hashfile. Check file format/hash type and retry.', 'danger')
                     return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job_id))
 
@@ -376,7 +390,7 @@ def jobs_assigned_hashfile(job_id):
     elif request.method == 'POST' and request.form.get('hashfile_id'):
         selected_hashfile = _get_assignable_hashfile(job, request.form.get('hashfile_id'))
         if not selected_hashfile:
-            flash('Selected hashfile is invalid for this job domain or user scope.', 'danger')
+            flash('Selected hashfile is invalid for this job domain.', 'danger')
             return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job_id))
 
         job.hashfile_id = selected_hashfile.id
@@ -385,20 +399,6 @@ def jobs_assigned_hashfile(job_id):
     elif request.method == 'POST' and 'hashfile_id' in request.form:
         flash('Please select a valid hashfile.', 'danger')
         return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job_id))
-
-    else:
-        for error in jobs_new_hashfile_form.name.errors:
-            print(str(error))
-        for error in jobs_new_hashfile_form.file_type.errors:
-            print(str(error))
-        for error in jobs_new_hashfile_form.hash_type.errors:
-            print(str(error))
-        for error in jobs_new_hashfile_form.hashfile.errors:
-            print(str(error))
-        for error in jobs_new_hashfile_form.hashfilehashes.errors:
-            print(str(error))
-        for error in jobs_new_hashfile_form.submit.errors:
-            print(str(error))
 
     return render_template('jobs_assigned_hashfiles.html', title='Jobs Assigned Hashfiles', hashfiles=hashfiles, job=job, jobs_new_hashfile_form=jobs_new_hashfile_form, hashfile_cracked_rate=hashfile_cracked_rate)
 
@@ -417,7 +417,6 @@ def jobs_assigned_hashfile_cracked(job_id, hashfile_id):
         not hashfile
         or hashfile.id != job.hashfile_id
         or hashfile.domain_id != job.domain_id
-        or (not current_user.admin and hashfile.owner_id != current_user.id)
     ):
         flash('Invalid hashfile for this job.', 'danger')
         return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job.id))
@@ -451,9 +450,9 @@ def jobs_list_tasks(job_id):
         flash('You do not have rights to view this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
-    tasks = _visible_tasks_query().all()
+    tasks = Tasks.query.all()
     job_tasks = JobTasks.query.filter_by(job_id=job_id).order_by(JobTasks.id.asc())
-    task_groups = _visible_task_groups_query().all()
+    task_groups = TaskGroups.query.all()
     # Right now we're doing nested loops in the template, this could probably be solved with a left/join select
 
     return render_template('jobs_assigned_tasks.html', title='Jobs Assigned Tasks', job=job, tasks=tasks, job_tasks=job_tasks, task_groups=task_groups)
@@ -469,9 +468,9 @@ def jobs_assigned_task(job_id, task_id):
     if not _require_job_allows_task_mutation(job):
         return redirect(url_for('jobs.jobs_list_tasks', job_id=job.id))
 
-    task = _visible_tasks_query().filter(Tasks.id == task_id).first()
+    task = Tasks.query.filter(Tasks.id == task_id).first()
     if not task:
-        flash('Task is outside your access scope.', 'danger')
+        flash('Task is invalid or no longer available.', 'danger')
         return redirect(url_for('jobs.jobs_list_tasks', job_id=job.id))
 
     exists = JobTasks.query.filter_by(job_id=job_id, task_id=task_id).first()
@@ -480,7 +479,11 @@ def jobs_assigned_task(job_id, task_id):
     else:
         job_task = JobTasks(job_id=job_id, task_id=task_id, status='Not Started')
         db.session.add(job_task)
-        db.session.commit()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash('Task already assigned to the job.', 'warning')
 
     return redirect("/jobs/"+str(job_id)+"/tasks")
 
@@ -496,9 +499,9 @@ def jobs_assign_task_group(job_id, task_group_id):
     if not _require_job_allows_task_mutation(job):
         return redirect(url_for('jobs.jobs_list_tasks', job_id=job.id))
 
-    task_group = _visible_task_groups_query().filter(TaskGroups.id == task_group_id).first()
+    task_group = TaskGroups.query.filter(TaskGroups.id == task_group_id).first()
     if not task_group:
-        flash('Task Group is outside your access scope.', 'danger')
+        flash('Task Group is invalid or no longer available.', 'danger')
         return redirect(url_for('jobs.jobs_list_tasks', job_id=job.id))
     try:
         task_group_entries = json.loads(task_group.tasks)
@@ -511,7 +514,7 @@ def jobs_assign_task_group(job_id, task_group_id):
     }
     visible_task_ids = {
         row.id
-        for row in _visible_tasks_query()
+        for row in Tasks.query
         .with_entities(Tasks.id)
         .filter(Tasks.id.in_(task_group_task_ids))
         .all()
@@ -526,7 +529,12 @@ def jobs_assign_task_group(job_id, task_group_id):
         db.session.add(job_task)
         existing_task_ids.add(task_group_entry)
         new_assignments += 1
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        flash('One or more tasks were already assigned to this job. Refresh and retry.', 'warning')
+        return redirect("/jobs/" + str(job_id) + "/tasks")
     if new_assignments == 0:
         flash('Task Group did not add any new tasks to this job.', 'info')
 	
@@ -708,7 +716,12 @@ def jobs_delete(job_id):
         JobTasks.query.filter_by(job_id=job_id).delete()
 
         db.session.delete(job)
-        db.session.commit()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash('Job could not be deleted because it changed concurrently. Refresh and retry.', 'danger')
+            return redirect(url_for('jobs.jobs_list'))
         flash('Job has been deleted!', 'success')
         return redirect(url_for('jobs.jobs_list'))
 
@@ -731,9 +744,9 @@ def jobs_summary(job_id):
         return redirect("/jobs/"+str(job_id)+"/tasks")
 
     form = JobSummaryForm()
-    tasks = _visible_tasks_query().all()
+    tasks = Tasks.query.all()
     hashfile = Hashfiles.query.get(job.hashfile_id)
-    if (not hashfile) or ((not current_user.admin) and hashfile.owner_id != current_user.id):
+    if not hashfile:
         flash('You must assign a valid hashfile before reviewing summary.', 'danger')
         return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job.id))
     domain = Domains.query.get(job.domain_id)
@@ -785,12 +798,12 @@ def jobs_start(job_id):
     job.status = 'Queued'
     job.queued_at = _utc_now_naive()
     visible_task_ids = {
-        row.id for row in _visible_tasks_query().with_entities(Tasks.id).all()
+        row.id for row in Tasks.query.with_entities(Tasks.id).all()
     }
     for job_task in job_tasks:
         if job_task.task_id not in visible_task_ids:
             db.session.rollback()
-            flash('One or more assigned tasks are outside your access scope.', 'danger')
+            flash('One or more assigned tasks are invalid or no longer available.', 'danger')
             return redirect(url_for('jobs.jobs_list_tasks', job_id=job.id))
         job_task.status = 'Queued'
         job_task.priority = job.priority

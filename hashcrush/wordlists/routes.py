@@ -2,36 +2,28 @@
 import os
 
 from flask import Blueprint, current_app, flash, redirect, render_template, url_for
-from flask_login import login_required, current_user
+from flask_login import login_required
+from sqlalchemy.exc import IntegrityError
 
-from hashcrush.models import Tasks, Users, Wordlists
-from hashcrush.models import db
+from hashcrush.models import Tasks, Wordlists, db
 from hashcrush.utils.utils import get_filehash, get_linecount, update_dynamic_wordlist
 from hashcrush.wordlists.forms import WordlistsForm
-
 
 wordlists = Blueprint('wordlists', __name__)
 MAX_SELECTABLE_WORDLIST_FILES = 5000
 
 
-def _visible_wordlists_query():
-    query = Wordlists.query
-    if not current_user.admin:
-        query = query.filter(Wordlists.owner_id == current_user.id)
-    return query
-
-
-def _visible_tasks_query():
-    query = Tasks.query
-    if not current_user.admin:
-        query = query.filter(Tasks.owner_id == current_user.id)
-    return query
-
-
-def _visible_users():
-    if current_user.admin:
-        return Users.query.all()
-    return [current_user]
+def _render_wordlists_add_form(form, wordlists_root, wordlists_root_exists, selectable_files, selectable_truncated, selectable_tree):
+    return render_template(
+        'wordlists_add.html',
+        title='Wordlist Add',
+        form=form,
+        wordlists_root=wordlists_root,
+        wordlists_root_exists=wordlists_root_exists,
+        selectable_count=len(selectable_files),
+        selectable_truncated=selectable_truncated,
+        selectable_tree=selectable_tree,
+    )
 
 
 def _contains_hidden_segment(relative_path: str) -> bool:
@@ -128,12 +120,11 @@ def _resolve_selected_file(selected_relative_path: str, base_dir: str) -> str | 
 def wordlists_list():
     """Function to present list of wordlists"""
 
-    visible_wordlists = _visible_wordlists_query()
+    visible_wordlists = Wordlists.query
     static_wordlists = visible_wordlists.filter_by(type='static').all()
     dynamic_wordlists = visible_wordlists.filter_by(type='dynamic').all()
     wordlists = visible_wordlists.all()
-    tasks = _visible_tasks_query().all()
-    users = _visible_users()
+    tasks = Tasks.query.all()
     return render_template(
         'wordlists.html',
         title='Wordlists',
@@ -141,7 +132,6 @@ def wordlists_list():
         dynamic_wordlists=dynamic_wordlists,
         wordlists=wordlists,
         tasks=tasks,
-        users=users,
         wordlists_root=_wordlists_root_path(),
     )
 
@@ -162,58 +152,66 @@ def wordlists_add():
     if form.validate_on_submit():
         if not wordlists_root_exists:
             flash('Configured wordlists_path directory does not exist. Cannot register wordlists until it is fixed.', 'danger')
-            return render_template(
-                'wordlists_add.html',
-                title='Wordlist Add',
-                form=form,
-                wordlists_root=wordlists_root,
-                wordlists_root_exists=wordlists_root_exists,
-                selectable_count=len(selectable_files),
-                selectable_truncated=selectable_truncated,
-                selectable_tree=selectable_tree,
+            return _render_wordlists_add_form(
+                form,
+                wordlists_root,
+                wordlists_root_exists,
+                selectable_files,
+                selectable_truncated,
+                selectable_tree,
             )
 
         wordlist_path = _resolve_selected_file(form.existing_file.data, wordlists_root)
         if not wordlist_path:
             flash('Invalid file selection. Choose an existing file from the configured wordlists_path list.', 'danger')
-            return render_template(
-                'wordlists_add.html',
-                title='Wordlist Add',
-                form=form,
-                wordlists_root=wordlists_root,
-                wordlists_root_exists=wordlists_root_exists,
-                selectable_count=len(selectable_files),
-                selectable_truncated=selectable_truncated,
-                selectable_tree=selectable_tree,
+            return _render_wordlists_add_form(
+                form,
+                wordlists_root,
+                wordlists_root_exists,
+                selectable_files,
+                selectable_truncated,
+                selectable_tree,
             )
 
         wordlist_path = os.path.abspath(wordlist_path)
         if Wordlists.query.filter_by(path=wordlist_path).first():
             flash('Wordlist is already registered.', 'warning')
             return redirect(url_for('wordlists.wordlists_list'))
+        if Wordlists.query.filter_by(name=form.name.data).first():
+            flash('Wordlist name is already registered.', 'warning')
+            return redirect(url_for('wordlists.wordlists_list'))
 
         wordlist = Wordlists(
             name=form.name.data,
-            owner_id=current_user.id,
             type='static',
             path=wordlist_path,
             checksum=get_filehash(wordlist_path),
             size=get_linecount(wordlist_path),
         )
         db.session.add(wordlist)
-        db.session.commit()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash('Wordlist could not be registered because that name or path already exists. Refresh and retry.', 'danger')
+            return _render_wordlists_add_form(
+                form,
+                wordlists_root,
+                wordlists_root_exists,
+                selectable_files,
+                selectable_truncated,
+                selectable_tree,
+            )
         flash('Wordlist created!', 'success')
         return redirect(url_for('wordlists.wordlists_list'))
 
-    return render_template(
-        'wordlists_add.html',
-        title='Wordlist Add',
-        form=form,
-        wordlists_root=wordlists_root,
-        wordlists_root_exists=wordlists_root_exists,
-        selectable_count=len(selectable_files),
-        selectable_truncated=selectable_truncated,
-        selectable_tree=selectable_tree,
+    return _render_wordlists_add_form(
+        form,
+        wordlists_root,
+        wordlists_root_exists,
+        selectable_files,
+        selectable_truncated,
+        selectable_tree,
     )
 
 
@@ -223,24 +221,25 @@ def wordlists_delete(wordlist_id):
     """Function to delete wordlist record"""
 
     wordlist = Wordlists.query.get_or_404(wordlist_id)
-    if current_user.admin or wordlist.owner_id == current_user.id:
+    # prevent deletion of dynamic list
+    if wordlist.type == 'dynamic':
+        flash('Dynamic Wordlists can not be deleted.', 'danger')
+        return redirect(url_for('wordlists.wordlists_list'))
 
-        # prevent deletion of dynamic list
-        if wordlist.type == 'dynamic':
-            flash('Dynamic Wordlists can not be deleted.', 'danger')
-            return redirect(url_for('wordlists.wordlists_list'))
+    # Check if associated with a Task
+    task = Tasks.query.filter_by(wl_id=wordlist_id).first()
+    if task:
+        flash('Failed. Wordlist is associated to one or more tasks', 'danger')
+        return redirect(url_for('wordlists.wordlists_list'))
 
-        # Check if associated with a Task
-        task = Tasks.query.filter_by(wl_id=wordlist_id).first()
-        if task:
-            flash('Failed. Wordlist is associated to one or more tasks', 'danger')
-            return redirect(url_for('wordlists.wordlists_list'))
-
-        db.session.delete(wordlist)
+    db.session.delete(wordlist)
+    try:
         db.session.commit()
-        flash('Wordlist has been deleted!', 'success')
-    else:
-        flash('Unauthorized Action!', 'danger')
+    except IntegrityError:
+        db.session.rollback()
+        flash('Failed. Wordlist is associated to one or more tasks or changed concurrently.', 'danger')
+        return redirect(url_for('wordlists.wordlists_list'))
+    flash('Wordlist has been deleted!', 'success')
     return redirect(url_for('wordlists.wordlists_list'))
 
 
@@ -250,18 +249,10 @@ def dynamicwordlist_update(wordlist_id):
     """Function to update dynamic wordlist"""
 
     wordlist = Wordlists.query.get_or_404(wordlist_id)
-    if not (current_user.admin or wordlist.owner_id == current_user.id):
-        flash('Unauthorized Action!', 'danger')
-        return redirect(url_for('wordlists.wordlists_list'))
-
     if wordlist.type != 'dynamic':
         flash('Invalid wordlist', 'danger')
         return redirect(url_for('wordlists.wordlists_list'))
 
-    update_dynamic_wordlist(
-        wordlist_id,
-        requesting_user_id=current_user.id,
-        include_all=bool(current_user.admin),
-    )
+    update_dynamic_wordlist(wordlist_id)
     flash('Updated Dynamic Wordlist', 'success')
     return redirect(url_for('wordlists.wordlists_list'))

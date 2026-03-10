@@ -1,16 +1,27 @@
 """Flask routes to handle utils"""
-import os
-import secrets
+import _md5
 import hashlib
+import os
 import re
+import secrets
 import shlex
 import tempfile
 from datetime import UTC, datetime
-import _md5
+
 from flask import current_app, has_app_context
-from hashcrush.models import db
-from hashcrush.models import Rules, Wordlists, Hashfiles, HashfileHashes, Hashes, Tasks, Jobs, JobTasks
 from werkzeug.utils import secure_filename
+
+from hashcrush.models import (
+    Hashes,
+    HashfileHashes,
+    Hashfiles,
+    Jobs,
+    JobTasks,
+    Rules,
+    Tasks,
+    Wordlists,
+    db,
+)
 
 _PLAINTEXT_HEX_PATTERN = re.compile(r'^[0-9a-f]+$')
 DEFAULT_HASHFILE_MAX_LINE_LENGTH = 50_000
@@ -362,7 +373,7 @@ def import_hashfilehashes(hashfile_id, hashfile_path, file_type, hash_type):
     db.session.commit()
     return True
 
-def update_dynamic_wordlist(wordlist_id, requesting_user_id: int | None = None, include_all: bool = False):
+def update_dynamic_wordlist(wordlist_id):
     """Function to update dynamic wordlist"""
 
     wordlist = Wordlists.query.get(wordlist_id)
@@ -376,10 +387,6 @@ def update_dynamic_wordlist(wordlist_id, requesting_user_id: int | None = None, 
         .filter(Hashes.cracked.is_(True))
         .filter(Hashes.plaintext.isnot(None))
     )
-    if not include_all:
-        owner_scope = requesting_user_id if requesting_user_id is not None else wordlist.owner_id
-        plaintext_query = plaintext_query.filter(Hashfiles.owner_id == owner_scope)
-
     plaintext_rows = plaintext_query.distinct().all()
 
     # Do we delete the original file, or overwrite it?
@@ -389,7 +396,7 @@ def update_dynamic_wordlist(wordlist_id, requesting_user_id: int | None = None, 
     resolved_path = _resolve_storage_path(wordlist.path)
     os.makedirs(os.path.dirname(resolved_path), exist_ok=True)
 
-    with open(resolved_path, 'wt') as file:
+    with open(resolved_path, 'w') as file:
         for entry in plaintext_rows:
             decoded_plaintext = decode_plaintext_from_storage(entry.plaintext)
             if decoded_plaintext is not None:

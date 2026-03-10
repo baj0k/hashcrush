@@ -1,10 +1,12 @@
 """Flask routes to handle Tasks"""
 import json
-from flask import Blueprint, render_template, redirect, url_for, flash
-from flask_login import login_required, current_user
+
+from flask import Blueprint, flash, redirect, render_template, url_for
+from flask_login import login_required
+from sqlalchemy.exc import IntegrityError
+
+from hashcrush.models import Jobs, JobTasks, Rules, TaskGroups, Tasks, Wordlists, db
 from hashcrush.tasks.forms import TasksForm
-from hashcrush.models import TaskGroups, Tasks, Wordlists, Rules, Users, Jobs, JobTasks
-from hashcrush.models import db
 
 tasks = Blueprint('tasks', __name__)
 
@@ -17,45 +19,24 @@ def _parse_positive_int(raw_value) -> int | None:
     return parsed if parsed > 0 else None
 
 
-def _visible_tasks_query():
-    query = Tasks.query
-    if not current_user.admin:
-        query = query.filter(Tasks.owner_id == current_user.id)
-    return query
+def _render_task_form(template_name, title, tasks_form, task=None, wordlists=None, rules=None):
+    return render_template(
+        template_name,
+        title=title,
+        tasksForm=tasks_form,
+        task=task,
+        wordlists=wordlists,
+        rules=rules,
+    )
 
 
-def _visible_wordlists_query():
-    query = Wordlists.query
-    if not current_user.admin:
-        query = query.filter(Wordlists.owner_id == current_user.id)
-    return query
-
-
-def _visible_rules_query():
-    query = Rules.query
-    if not current_user.admin:
-        query = query.filter(Rules.owner_id == current_user.id)
-    return query
-
-
-def _visible_jobs_query():
-    query = Jobs.query
-    if not current_user.admin:
-        query = query.filter(Jobs.owner_id == current_user.id)
-    return query
-
-
-def _visible_task_groups_query():
-    query = TaskGroups.query
-    if not current_user.admin:
-        query = query.filter(TaskGroups.owner_id == current_user.id)
-    return query
-
-
-def _visible_users():
-    if current_user.admin:
-        return Users.query.all()
-    return [current_user]
+def _task_save_conflict_response(template_name, title, tasks_form, task=None, wordlists=None, rules=None):
+    db.session.rollback()
+    flash(
+        'Task could not be saved because its name already exists or the selected resources changed. Refresh and retry.',
+        'danger',
+    )
+    return _render_task_form(template_name, title, tasks_form, task=task, wordlists=wordlists, rules=rules)
 
 
 @tasks.route("/tasks", methods=['GET', 'POST'])
@@ -63,18 +44,17 @@ def _visible_users():
 def tasks_list():
     """Function to list tasks"""
 
-    tasks = _visible_tasks_query().all()
-    users = _visible_users()
-    jobs = _visible_jobs_query().all()
+    tasks = Tasks.query.all()
+    jobs = Jobs.query.all()
     visible_job_ids = [job.id for job in jobs]
     job_tasks = (
         JobTasks.query.filter(JobTasks.job_id.in_(visible_job_ids)).all()
         if visible_job_ids
         else []
     )
-    wordlists = _visible_wordlists_query().all()
-    task_groups = _visible_task_groups_query().all()
-    return render_template('tasks.html', title='tasks', tasks=tasks, users=users, jobs=jobs, job_tasks=job_tasks, wordlists=wordlists, task_groups=task_groups)
+    wordlists = Wordlists.query.all()
+    task_groups = TaskGroups.query.all()
+    return render_template('tasks.html', title='tasks', tasks=tasks, jobs=jobs, job_tasks=job_tasks, wordlists=wordlists, task_groups=task_groups)
 
 @tasks.route("/tasks/add", methods=['GET', 'POST'])
 @login_required
@@ -87,8 +67,8 @@ def tasks_add():
     tasksForm.rule_id.choices = []
     tasksForm.wl_id.choices = []
 
-    wordlists = _visible_wordlists_query().all()
-    rules = _visible_rules_query().all()
+    wordlists = Wordlists.query.all()
+    rules = Rules.query.all()
 
     for wordlist in wordlists:
         tasksForm.wl_id.choices += [(wordlist.id, wordlist.name)]
@@ -101,53 +81,57 @@ def tasks_add():
         if tasksForm.hc_attackmode.data == 'dictionary':
             selected_wl_id = _parse_positive_int(tasksForm.wl_id.data)
             selected_wordlist = (
-                _visible_wordlists_query().filter(Wordlists.id == selected_wl_id).first()
+                Wordlists.query.filter(Wordlists.id == selected_wl_id).first()
                 if selected_wl_id is not None
                 else None
             )
             if not selected_wordlist:
-                flash('Dictionary tasks require a valid visible wordlist.', 'danger')
-                return render_template('tasks_add.html', title='Tasks Add', tasksForm=tasksForm)
+                flash('Dictionary tasks require a valid registered wordlist.', 'danger')
+                return _render_task_form('tasks_add.html', 'Tasks Add', tasksForm)
 
             selected_rule_id = None
             if tasksForm.rule_id.data not in ('None', None, ''):
                 selected_rule_id = _parse_positive_int(tasksForm.rule_id.data)
                 selected_rule = (
-                    _visible_rules_query().filter(Rules.id == selected_rule_id).first()
+                    Rules.query.filter(Rules.id == selected_rule_id).first()
                     if selected_rule_id is not None
                     else None
                 )
                 if not selected_rule:
-                    flash('Selected rule is invalid or outside your access scope.', 'danger')
-                    return render_template('tasks_add.html', title='Tasks Add', tasksForm=tasksForm)
+                    flash('Selected rule is invalid or no longer available.', 'danger')
+                    return _render_task_form('tasks_add.html', 'Tasks Add', tasksForm)
 
             task = Tasks(
                 name=tasksForm.name.data,
-                owner_id=current_user.id,
                 wl_id=selected_wordlist.id,
                 rule_id=selected_rule_id,
                 hc_attackmode=tasksForm.hc_attackmode.data,
             )
             db.session.add(task)
-            db.session.commit()
+            try:
+                db.session.commit()
+            except IntegrityError:
+                return _task_save_conflict_response('tasks_add.html', 'Tasks Add', tasksForm)
             flash(f'Task {tasksForm.name.data} created!', 'success')
         elif tasksForm.hc_attackmode.data == 'maskmode':
             selected_mask = (tasksForm.mask.data or '').strip()
             if not selected_mask:
                 flash('Maskmode tasks require a non-empty hashcat mask.', 'danger')
-                return render_template('tasks_add.html', title='Tasks Add', tasksForm=tasksForm)
+                return _render_task_form('tasks_add.html', 'Tasks Add', tasksForm)
             task = Tasks(   name=tasksForm.name.data,
-                            owner_id=current_user.id,
                             wl_id=None,
                             rule_id=None,
                             hc_attackmode=tasksForm.hc_attackmode.data,
                             hc_mask=selected_mask
             )
             db.session.add(task)
-            db.session.commit()
+            try:
+                db.session.commit()
+            except IntegrityError:
+                return _task_save_conflict_response('tasks_add.html', 'Tasks Add', tasksForm)
             flash(f'Task {tasksForm.name.data} created!', 'success')
         else:
-            flash('Attack Mode not supported... yet...', 'danger')
+            flash('Invalid attack mode selection.', 'danger')
         return redirect(url_for('tasks.tasks_list'))
     return render_template('tasks_add.html', title='Tasks Add', tasksForm=tasksForm)
 
@@ -156,12 +140,12 @@ def tasks_add():
 def task_edit(task_id):
     """Function to edit task"""
 
-    task = _visible_tasks_query().filter(Tasks.id == task_id).first_or_404()
+    task = Tasks.query.filter(Tasks.id == task_id).first_or_404()
 
-    # Check whether the task is currently assigned to any active job task.
+    # Shared tasks are immutable once any job references them.
     affected_jobs = JobTasks.query.filter_by(task_id=task_id).all()
     if affected_jobs:
-        flash('Can not edit this task. It is currently associated to one or more jobs.', 'danger')
+        flash('Cannot edit this task. It is already associated with one or more jobs.', 'danger')
         return redirect(url_for('tasks.tasks_list'))
 
     tasksForm = TasksForm(current_task_id=task.id)
@@ -170,16 +154,16 @@ def task_edit(task_id):
     tasksForm.rule_id.choices = []
     tasksForm.wl_id.choices = []
 
-    wordlists = _visible_wordlists_query().all()
+    wordlists = Wordlists.query.all()
     # Add the current value for wordlist.
     if task.hc_attackmode == 'dictionary':
-        edit_task_wl = _visible_wordlists_query().filter(Wordlists.id == task.wl_id).first()
+        edit_task_wl = Wordlists.query.filter(Wordlists.id == task.wl_id).first()
         if edit_task_wl:
             tasksForm.wl_id.choices.append((edit_task_wl.id, edit_task_wl.name))
-    rules = _visible_rules_query().all()
+    rules = Rules.query.all()
     # Check if the current value for rule is an integer.
     if isinstance(task.rule_id, int):
-        edit_task_rl = _visible_rules_query().filter(Rules.id == task.rule_id).first()
+        edit_task_rl = Rules.query.filter(Rules.id == task.rule_id).first()
         if edit_task_rl:
             tasksForm.rule_id.choices.append((edit_task_rl.id, edit_task_rl.name))
             tasksForm.rule_id.choices.append(('None', 'None'))
@@ -199,25 +183,25 @@ def task_edit(task_id):
         if tasksForm.hc_attackmode.data == 'dictionary':
             selected_wl_id = _parse_positive_int(tasksForm.wl_id.data)
             selected_wordlist = (
-                _visible_wordlists_query().filter(Wordlists.id == selected_wl_id).first()
+                Wordlists.query.filter(Wordlists.id == selected_wl_id).first()
                 if selected_wl_id is not None
                 else None
             )
             if not selected_wordlist:
-                flash('Dictionary tasks require a valid visible wordlist.', 'danger')
-                return render_template('tasks_edit.html', title='Tasks Edit', tasksForm=tasksForm, task=task, wordlists=wordlists, rules=rules)
+                flash('Dictionary tasks require a valid registered wordlist.', 'danger')
+                return _render_task_form('tasks_edit.html', 'Tasks Edit', tasksForm, task=task, wordlists=wordlists, rules=rules)
 
             selected_rule_id = None
             if tasksForm.rule_id.data not in ('None', None, ''):
                 selected_rule_id = _parse_positive_int(tasksForm.rule_id.data)
                 selected_rule = (
-                    _visible_rules_query().filter(Rules.id == selected_rule_id).first()
+                    Rules.query.filter(Rules.id == selected_rule_id).first()
                     if selected_rule_id is not None
                     else None
                 )
                 if not selected_rule:
-                    flash('Selected rule is invalid or outside your access scope.', 'danger')
-                    return render_template('tasks_edit.html', title='Tasks Edit', tasksForm=tasksForm, task=task, wordlists=wordlists, rules=rules)
+                    flash('Selected rule is invalid or no longer available.', 'danger')
+                    return _render_task_form('tasks_edit.html', 'Tasks Edit', tasksForm, task=task, wordlists=wordlists, rules=rules)
 
             task.name = tasksForm.name.data
             task.wl_id = selected_wordlist.id
@@ -226,13 +210,23 @@ def task_edit(task_id):
             task.hc_mask = None
 
             db.session.add(task)
-            db.session.commit()
+            try:
+                db.session.commit()
+            except IntegrityError:
+                return _task_save_conflict_response(
+                    'tasks_edit.html',
+                    'Tasks Edit',
+                    tasksForm,
+                    task=task,
+                    wordlists=wordlists,
+                    rules=rules,
+                )
             flash(f'Task {tasksForm.name.data} updated!', 'success')
         elif tasksForm.hc_attackmode.data == 'maskmode':
             selected_mask = (tasksForm.mask.data or '').strip()
             if not selected_mask:
                 flash('Maskmode tasks require a non-empty hashcat mask.', 'danger')
-                return render_template('tasks_edit.html', title='Tasks Edit', tasksForm=tasksForm, task=task, wordlists=wordlists, rules=rules)
+                return _render_task_form('tasks_edit.html', 'Tasks Edit', tasksForm, task=task, wordlists=wordlists, rules=rules)
             task.name = tasksForm.name.data
             task.wl_id = None
             task.rule_id = None
@@ -240,10 +234,20 @@ def task_edit(task_id):
             task.hc_mask = selected_mask
 
             db.session.add(task)
-            db.session.commit()
+            try:
+                db.session.commit()
+            except IntegrityError:
+                return _task_save_conflict_response(
+                    'tasks_edit.html',
+                    'Tasks Edit',
+                    tasksForm,
+                    task=task,
+                    wordlists=wordlists,
+                    rules=rules,
+                )
             flash(f'Task {tasksForm.name.data} updated!', 'success')
         else:
-            flash('Attack Mode not supported... yet...', 'danger')
+            flash('Invalid attack mode selection.', 'danger')
         return redirect(url_for('tasks.tasks_list'))
 
     tasksForm.name.data = task.name
@@ -259,13 +263,13 @@ def task_edit(task_id):
 def tasks_delete(task_id):
     """Function to delete task"""
 
-    task = _visible_tasks_query().filter(Tasks.id == task_id).first_or_404()
-    task_groups = _visible_task_groups_query().all()
+    task = Tasks.query.filter(Tasks.id == task_id).first_or_404()
+    task_groups = TaskGroups.query.all()
 
     # Check if associated with JobTask (which implies its associated with a job)
     jobtask = JobTasks.query.filter_by(task_id=task_id).first()
     if jobtask:
-        flash('Can not delete. Task is associated to one or more jobs.', 'danger')
+        flash('Cannot delete. Task is associated with one or more jobs.', 'danger')
         return redirect(url_for('tasks.tasks_list'))
 
     for task_group in task_groups:
@@ -274,10 +278,15 @@ def tasks_delete(task_id):
         except (TypeError, ValueError):
             task_ids = []
         if task_id in task_ids:
-            flash('Can not delete. The Task is associated to one or more Task Groups.', 'danger')
+            flash('Cannot delete. Task is associated with one or more task groups.', 'danger')
             return redirect(url_for('tasks.tasks_list'))
 
     db.session.delete(task)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        flash('Cannot delete. Task is associated with one or more jobs or task groups.', 'danger')
+        return redirect(url_for('tasks.tasks_list'))
     flash('Task has been deleted!', 'success')
     return redirect(url_for('tasks.tasks_list'))

@@ -15,7 +15,15 @@ from typing import TextIO
 
 from flask import current_app
 
-from hashcrush.models import Hashes, HashfileHashes, Jobs, JobTasks, Tasks, Wordlists, db
+from hashcrush.models import (
+    Hashes,
+    HashfileHashes,
+    Jobs,
+    JobTasks,
+    Tasks,
+    Wordlists,
+    db,
+)
 from hashcrush.utils.utils import (
     build_hashcat_argv,
     encode_plaintext_for_storage,
@@ -39,7 +47,7 @@ def _parse_hashcat_status(filepath: str) -> dict[str, str]:
     if not os.path.exists(filepath):
         return status
 
-    with open(filepath, "r", encoding="utf-8", errors="ignore") as hashcat_output:
+    with open(filepath, encoding="utf-8", errors="ignore") as hashcat_output:
         for line in hashcat_output:
             if line.startswith("Time.Started."):
                 status["Time_Started"] = line.split(": ", 1)[-1].rstrip()
@@ -269,7 +277,7 @@ class LocalExecutorService:
         if not raw_cmdline:
             return False
 
-        expected_session = f"--session\x00job{job_task.job_id}_task{job_task.task_id}".encode("utf-8")
+        expected_session = f"--session\x00job{job_task.job_id}_task{job_task.task_id}".encode()
         return (b"hashcat" in raw_cmdline.lower()) and (expected_session in raw_cmdline)
 
     def _terminate_orphaned_pid(self, job_task: JobTasks) -> None:
@@ -569,7 +577,7 @@ class LocalExecutorService:
             return 0
 
         parsed_entries: list[tuple[str, str]] = []
-        with open(crack_path, "r", encoding="latin-1", errors="ignore") as file_contents:
+        with open(crack_path, encoding="latin-1", errors="ignore") as file_contents:
             for entry in file_contents.read().split("\n"):
                 if ":" not in entry:
                     continue

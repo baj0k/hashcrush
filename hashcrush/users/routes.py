@@ -1,17 +1,31 @@
 """Flask routes to handle Users"""
-from datetime import UTC, datetime
 import ipaddress
 import time
-
-from flask import Blueprint, render_template, url_for, flash, abort, redirect, request, current_app
+from datetime import UTC, datetime
 from urllib.parse import urlparse
-from flask_login import login_required, logout_user, current_user, login_user
-from flask_login import LoginManager
-from flask_bcrypt import Bcrypt
 
-from hashcrush.models import db
-from hashcrush.models import AuthThrottle, Hashfiles, Jobs, Rules, TaskGroups, Tasks, Users, Wordlists
-from hashcrush.users.forms import LoginForm, UsersForm, ProfileForm
+from flask import (
+    Blueprint,
+    abort,
+    current_app,
+    flash,
+    redirect,
+    render_template,
+    request,
+    url_for,
+)
+from flask_bcrypt import Bcrypt
+from flask_login import (
+    LoginManager,
+    current_user,
+    login_required,
+    login_user,
+    logout_user,
+)
+from sqlalchemy.exc import IntegrityError
+
+from hashcrush.models import AuthThrottle, Jobs, Users, db
+from hashcrush.users.forms import LoginForm, ProfileForm, UsersForm
 
 bcrypt = Bcrypt()
 
@@ -36,11 +50,6 @@ def _admin_count() -> int:
 def _owned_asset_counts(user_id: int) -> dict[str, int]:
     return {
         'jobs': Jobs.query.filter_by(owner_id=user_id).count(),
-        'hashfiles': Hashfiles.query.filter_by(owner_id=user_id).count(),
-        'wordlists': Wordlists.query.filter_by(owner_id=user_id).count(),
-        'rules': Rules.query.filter_by(owner_id=user_id).count(),
-        'tasks': Tasks.query.filter_by(owner_id=user_id).count(),
-        'task_groups': TaskGroups.query.filter_by(owner_id=user_id).count(),
     }
 
 
@@ -231,11 +240,7 @@ def users_list():
 
     users = Users.query.all()
     jobs = Jobs.query.all()
-    wordlists = Wordlists.query.all()
-    rules = Rules.query.all()
-    tasks = Tasks.query.all()
-    task_groups = TaskGroups.query.all()
-    return render_template('users.html', title='Users', users=users, jobs=jobs, wordlists=wordlists, rules=rules, tasks=tasks, task_groups=task_groups)
+    return render_template('users.html', title='Users', users=users, jobs=jobs)
 
 @users.route("/users/add", methods=['GET', 'POST'])
 @login_required
@@ -252,7 +257,12 @@ def users_add():
                 password=hashed_password,
             )
             db.session.add(user)
-            db.session.commit()
+            try:
+                db.session.commit()
+            except IntegrityError:
+                db.session.rollback()
+                flash('Account could not be created because that username already exists. Refresh and retry.', 'danger')
+                return render_template('users_add.html', title='User Add', form=form)
             flash(f'Account created for {form.username.data}!', 'success')
             return redirect(url_for('users.users_list'))
         return render_template('users_add.html', title='User Add', form=form)
@@ -288,7 +298,15 @@ def users_delete(user_id):
         return redirect(url_for('users.users_list'))
 
     db.session.delete(user)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        flash(
+            'Cannot delete user while they own records or while related jobs are being created. Refresh and retry.',
+            'danger',
+        )
+        return redirect(url_for('users.users_list'))
     flash('User has been deleted!', 'success')
     return redirect(url_for('users.users_list'))
 

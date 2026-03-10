@@ -122,14 +122,14 @@
                     <dt>Application Version (Code):</dt>
                     <dd>{{ application_version }}</dd>
 
-                    <dt>Database Schema Revision (Alembic):</dt>
-                    <dd>{% if database_version %}{{ database_version }}{% else %}Unavailable{% endif %}</dd>
+                    <dt>Database Schema Mode:</dt>
+                    <dd>{{ database_schema_mode }}</dd>
 
                     <dt>Python Runtime:</dt>
                     <dd>{{ python_version }}</dd>
                 </dl>
                 <small class="text-muted">
-                    Database schema revision is read from the active database <code>alembic_version</code> table.
+                    Schema history is not tracked in-app. Rebuild the database from current models for breaking schema changes.
                 </small>
             </div>
         </div>

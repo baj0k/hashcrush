@@ -1,8 +1,8 @@
 import os
 import ssl
 from pathlib import Path
-from urllib.parse import urlparse
 from urllib.error import URLError
+from urllib.parse import urlparse
 from urllib.request import urlopen
 
 import pytest
@@ -46,6 +46,34 @@ def _is_authenticated_session(page, live_server: str) -> bool:
     page.goto(f"{live_server}/jobs", wait_until="domcontentloaded")
     current_path = urlparse(page.url).path.rstrip("/")
     return current_path != "/login"
+
+
+def _detect_login_failure(page) -> tuple[str, str] | None:
+    """Inspect the current page for a concrete login failure before probing auth."""
+    if page.locator(".alert").count() > 0:
+        alert_text = page.locator(".alert").first.inner_text().strip()
+        if alert_text:
+            return ("alert", alert_text)
+    rendered = page.content().lower()
+    if "too many failed login attempts" in rendered:
+        return (
+            "throttle",
+            "Login account appears throttled by prior failed attempts. "
+            "Wait lockout expiry or clear auth_throttle rows for this account/IP.",
+        )
+    if (
+        "400 bad request" in rendered
+        or ">bad request<" in rendered
+        or "the csrf token" in rendered
+        or "csrf session token is missing" in rendered
+        or "csrf tokens do not match" in rendered
+    ):
+        return (
+            "csrf",
+            "Login POST appears blocked by CSRF/400. "
+            "Use HTTPS and ensure session/cookie settings are compatible with your endpoint.",
+        )
+    return None
 
 
 def build_test_config(db_path: Path):
@@ -164,26 +192,25 @@ def login(page, live_server, test_user_credentials):
         page.get_by_label("Username").fill(test_user_credentials["username"])
         page.get_by_label("Password").fill(test_user_credentials["password"])
         page.get_by_role("button", name="Login").click()
-        if page.get_by_role("link", name="Jobs").count() > 0 or _is_authenticated_session(page, live_server):
+        if page.get_by_role("link", name="Jobs").count() > 0:
             return page
         if "/setup/" in page.url:
             pytest.skip(
                 "Live host is in setup flow; complete setup before running e2e tests."
             )
-        rendered = page.content().lower()
-        if "too many failed login attempts" in rendered:
+        failure = _detect_login_failure(page)
+        if failure is not None:
+            failure_type, message = failure
+            if failure_type == "throttle":
+                pytest.skip(message)
+            if failure_type == "csrf":
+                pytest.skip(message)
             pytest.skip(
-                "Login account appears throttled by prior failed attempts. "
-                "Wait lockout expiry or clear auth_throttle rows for this account/IP."
-            )
-        alert_text = ""
-        if page.locator(".alert").count() > 0:
-            alert_text = page.locator(".alert").first.inner_text().strip()
-        if alert_text:
-            pytest.skip(
-                f"Login failed against external server (url={page.url}, alert={alert_text!r}); "
+                f"Login failed against external server (url={page.url}, alert={message!r}); "
                 "set HASHCRUSH_E2E_USERNAME/PASSWORD."
             )
+        if _is_authenticated_session(page, live_server):
+            return page
         pytest.skip(
             f"Login failed against external server (url={page.url}); "
             "set HASHCRUSH_E2E_USERNAME/PASSWORD."

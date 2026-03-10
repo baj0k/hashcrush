@@ -1,24 +1,25 @@
-"""Flask routes to handle Rules"""
+"""Flask routes to handle Searches."""
 import csv
 import io
-from flask import Blueprint, flash, redirect, render_template, request, send_file, url_for
-from flask_login import login_required, current_user
+
+from flask import (
+    Blueprint,
+    flash,
+    redirect,
+    render_template,
+    request,
+    send_file,
+    url_for,
+)
+from flask_login import login_required
 from sqlalchemy import func, or_
 
-from hashcrush.searches.forms import SearchForm
-from hashcrush.models import Domains, Hashfiles, HashfileHashes, Hashes
-from hashcrush.models import db
 from hashcrush import jinja_hex_decode
+from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles, db
+from hashcrush.searches.forms import SearchForm
 from hashcrush.utils.utils import encode_plaintext_for_storage, get_md5_hash
 
 searches = Blueprint('searches', __name__)
-
-
-def _visible_hashfiles_query():
-    query = Hashfiles.query
-    if not current_user.admin:
-        query = query.filter(Hashfiles.owner_id == current_user.id)
-    return query
 
 
 def _visible_domains_for_hashfiles(hashfile_rows: list[Hashfiles]) -> list[Domains]:
@@ -29,14 +30,21 @@ def _visible_domains_for_hashfiles(hashfile_rows: list[Hashfiles]) -> list[Domai
 
 
 def _scoped_search_query():
-    query = db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
-    if not current_user.admin:
-        query = query.join(Hashfiles, HashfileHashes.hashfile_id == Hashfiles.id).filter(Hashfiles.owner_id == current_user.id)
-    return query
+    return db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
 
 
 def _normalized_query_text(raw_value: str | None) -> str:
     return (raw_value or '').strip()
+
+
+def _parse_positive_int(raw_value) -> int | None:
+    if raw_value in (None, ''):
+        return None
+    try:
+        parsed = int(str(raw_value).strip())
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _hash_search_filters(query_text: str):
@@ -72,7 +80,7 @@ def _password_search_filters(query_text: str):
 def searches_list():
     """Function to return list of search results"""
 
-    hashfiles = _visible_hashfiles_query().all()
+    hashfiles = Hashfiles.query.all()
     domains = _visible_domains_for_hashfiles(hashfiles)
     search_form = SearchForm()
     # Domain and hashfile labels are resolved at render/export time.
@@ -99,15 +107,20 @@ def searches_list():
         else:
             flash('No results found', 'warning')
             return redirect(url_for('searches.searches_list'))
-    elif request.args.get("hash_id"):
-        results = _scoped_search_query().filter(Hashes.id == request.args.get("hash_id")).all()
-        first_result = results[0] if results else None
-        if first_result: #Without a value in the search input the export button will not pass the form validation
-            search_form.query.data = first_result[0].ciphertext #All hashs should be the same, so set the search input as the first rows hash value
-            search_form.search_type.data = 'hash' #Set the search type to hash
     else:
-        domains = None
-        results = None
+        raw_hash_id = request.args.get("hash_id")
+        hash_id = _parse_positive_int(raw_hash_id)
+        if raw_hash_id and hash_id is None:
+            return redirect(url_for('searches.searches_list'))
+        if hash_id is not None:
+            results = _scoped_search_query().filter(Hashes.id == hash_id).all()
+            first_result = results[0] if results else None
+            if first_result: #Without a value in the search input the export button will not pass the form validation
+                search_form.query.data = first_result[0].ciphertext #All hashs should be the same, so set the search input as the first rows hash value
+                search_form.search_type.data = 'hash' #Set the search type to hash
+        else:
+            domains = None
+            results = None
     if not results and request.method == 'POST':
         flash('No results found', 'warning')
 
@@ -116,7 +129,7 @@ def searches_list():
 
     return render_template('search.html', title='Search', searchForm=search_form, domains=domains, results=results, hashfiles=hashfiles )
 
-#Creating this in memory instead of on disk to avoid any extra cleanup. This can be changed later if files get too large
+# Creating this in memory instead of on disk to avoid extra cleanup.
 def export_results(domains, results, hashfiles, separator):
     """Function to export search results"""
     str_io = io.StringIO()

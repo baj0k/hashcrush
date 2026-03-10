@@ -4,6 +4,7 @@ from flask_wtf import FlaskForm
 from wtforms import SelectField, StringField, SubmitField
 from wtforms.validators import DataRequired, ValidationError
 
+from hashcrush.forms_utils import normalize_text_input
 from hashcrush.models import Tasks
 
 
@@ -14,7 +15,7 @@ class TasksForm(FlaskForm):
         super().__init__(*args, **kwargs)
         self.current_task_id = current_task_id
 
-    name = StringField('Name', validators=[DataRequired()])
+    name = StringField('Name', validators=[DataRequired()], filters=[normalize_text_input])
     hc_attackmode = SelectField(
         'Attack Mode',
         choices=[('', '--SELECT--'), ('dictionary', 'dictionary'), ('maskmode', 'maskmode')],

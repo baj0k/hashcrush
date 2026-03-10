@@ -75,47 +75,6 @@ These are the awesome people that use HashCrush.
                                         {% endfor %}
                                     </td>
                                 </tr>
-                                <tr>
-                                    <th scope="row">Associated Wordlists</th>
-                                    <td>
-                                        {% for wordlist in wordlists %}
-                                            {% if wordlist.owner_id == user.id %}
-                                                {{ wordlist.name }} <br>
-                                            {% endif %}
-                                        {% endfor %}
-                                    </td>
-                                </tr>
-                                <tr>                              
-                                    <th scope="row">Associated Rules</th>
-                                    <td>
-                                        {% for rule in rules %}
-                                            {% if rule.owner_id == user.id %}
-                                                {{ rule.name }} <br>
-                                            {% endif %}
-                                        {% endfor %}
-                                    </td>
-                                </tr>
-                                <tr>  
-                                    <th scope="row">Associated Tasks</th>
-                                    <td>
-                                        {% for task in tasks %}
-                                            {% if task.owner_id == user.id %}
-                                                {{ task.name }} <br>
-                                            {% endif %}
-                                        {% endfor %}
-                                    </td>
-                                </tr>
-                                </tr>
-                                <tr>   
-                                    <th scope="row">Associated Task Groups</th>
-                                    <td>
-                                        {% for task_group in task_groups %}
-                                            {% if task_group.owner_id == user.id %}
-                                                {{ task_group.name }} <br>
-                                            {% endif %}
-                                        {% endfor %}
-                                    </td>
-                                </tr>                                
                             </tbody>
                       </table>
                 </div>

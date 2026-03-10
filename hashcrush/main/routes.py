@@ -3,24 +3,23 @@
 import json
 import re
 
-from flask import Blueprint, render_template, redirect, flash
-from flask_login import login_required, current_user
-
+from flask import Blueprint, flash, redirect, render_template
+from flask_login import current_user, login_required
 from sqlalchemy import case, func
 
-from hashcrush.models import Jobs, JobTasks, Users, Domains, Tasks, HashfileHashes, Hashes
-from hashcrush.models import db
+from hashcrush.models import (
+    Domains,
+    Hashes,
+    HashfileHashes,
+    Jobs,
+    JobTasks,
+    Tasks,
+    Users,
+    db,
+)
 from hashcrush.utils.utils import update_job_task_status
 
-
 main = Blueprint('main', __name__)
-
-
-def _visible_jobs_query():
-    query = Jobs.query
-    if not current_user.admin:
-        query = query.filter(Jobs.owner_id == current_user.id)
-    return query
 
 
 def _parse_jobtask_progress(progress_payload: str | None) -> tuple[str | None, str | None]:
@@ -52,19 +51,19 @@ def _parse_jobtask_progress(progress_payload: str | None) -> tuple[str | None, s
 def home():
     """Function to return the home page"""
     running_jobs = (
-        _visible_jobs_query()
+        Jobs.query
         .filter_by(status='Running')
         .order_by(Jobs.priority.desc(), Jobs.queued_at.asc())
         .all()
     )
     queued_jobs = (
-        _visible_jobs_query()
+        Jobs.query
         .filter_by(status='Queued')
         .order_by(Jobs.priority.desc(), Jobs.queued_at.asc())
         .all()
     )
     jobs = running_jobs + queued_jobs
-    users = Users.query.all() if current_user.admin else [current_user]
+    users = Users.query.all()
     domain_ids = sorted({job.domain_id for job in jobs})
     domains = (
         Domains.query.filter(Domains.id.in_(domain_ids)).all()
@@ -144,6 +143,9 @@ def stop_job_task(job_task_id):
 
     if job_task and job:
         if current_user.admin or job.owner_id == current_user.id:
+            if job_task.status not in ('Running', 'Importing'):
+                flash('Task is not actively running.', 'danger')
+                return redirect("/")
             update_job_task_status(job_task.id, 'Canceled')
         else:
             flash('You are unauthorized to stop this task', 'danger')

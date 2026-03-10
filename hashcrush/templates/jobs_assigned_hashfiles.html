@@ -243,6 +243,7 @@ Apply hashes to be cracked. You can either copy/paste the desired hashes below, 
         <br>
         <div class="content-section">
             <form action='' class='form-horizontal' id='hf_form' method='post' name='hf_form'>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <fieldset class="form-group">
                     <div class="form-group">
                         <label class="form-control-label" for="hashfile">Hashfile</label>

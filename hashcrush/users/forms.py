@@ -1,13 +1,22 @@
 """Forms Page to manage Users"""
 from flask_wtf import FlaskForm
-from wtforms import StringField, PasswordField, BooleanField, ValidationError, SubmitField
+from wtforms import (
+    BooleanField,
+    PasswordField,
+    StringField,
+    SubmitField,
+    ValidationError,
+)
 from wtforms.validators import DataRequired, EqualTo, Length, Optional
+
+from hashcrush.forms_utils import normalize_text_input
 from hashcrush.models import Users
+
 
 class UsersForm(FlaskForm):
     """Class representing Users Form"""
 
-    username = StringField('Username', validators=[DataRequired(), Length(min=1, max=50)])
+    username = StringField('Username', validators=[DataRequired(), Length(min=1, max=50)], filters=[normalize_text_input])
     is_admin = BooleanField('Is Admin')
     password = PasswordField('Password', validators=[DataRequired(), Length(min=14)])
     confirm_password = PasswordField('Confirm Password', validators=[DataRequired(), EqualTo('password')])
@@ -22,7 +31,7 @@ class UsersForm(FlaskForm):
 class LoginForm(FlaskForm):
     """Class representing Login Form"""
 
-    username = StringField('Username', validators=[DataRequired(), Length(min=1, max=50)])
+    username = StringField('Username', validators=[DataRequired(), Length(min=1, max=50)], filters=[normalize_text_input])
     password = PasswordField('Password', validators=[DataRequired()])
     remember = BooleanField('Remember Me')
     submit = SubmitField('Login')
