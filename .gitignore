@@ -19,7 +19,6 @@
 !requirements-test.txt
 !hashcrush.py
 !bootstrap_cli.py
-!.env.test.example
 
 # Application source and frontend assets
 !hashcrush/**/*.py

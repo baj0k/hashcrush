@@ -38,8 +38,7 @@ done
 if (( ${#missing_vars[@]} > 0 )); then
   echo >&2
   echo "Missing E2E variables: ${missing_vars[*]}" >&2
-  echo "Copy .env.test.example to .env.test and fill it in." >&2
-  echo "Use python3 ./scripts/print_e2e_context.py to print recommended IDs and names." >&2
+  echo "Run python3 ./hashcrush.py setup --test to generate a ready-to-use .env.test." >&2
   exit 1
 fi
 
