@@ -3,7 +3,7 @@ Flask==3.0.2
 Flask-WTF==1.2.2
 email-validator==2.3.0
 Flask-SQLAlchemy==3.0.5
-mysql-connector-python==9.6.0
+psycopg2-binary==2.9.11
 bcrypt-flask==1.0.2
 Flask-Login==0.6.3
 Flask-APScheduler==1.13.1

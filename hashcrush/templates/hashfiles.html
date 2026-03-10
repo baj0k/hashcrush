@@ -5,6 +5,12 @@
 <br>
 The following are hash files currently configured in HashCrush. Each hash file is assigned to a single domain. Deleting a hash file removes only that file; recovered hashes remain in the database.
 <br>
+{% if current_user.admin %}
+<a class="btn btn-success btn-sm mt-2" href="{{ url_for('hashfiles.hashfiles_add') }}">Add Hashfile</a>
+{% else %}
+<p class="text-muted mb-0 mt-2">Shared hashfiles are visible to all users. Admins manage additions and deletions.</p>
+{% endif %}
+<br>
 <br>
 <br>
 {% endblock header %}

@@ -43,6 +43,14 @@ class JobsForm(FlaskForm):
 class JobsNewHashFileForm(FlaskForm):
     """Class representing an Jobs New Hashfile Form"""
 
+    _OPTIONAL_HASH_SELECTOR_FIELDS = (
+        "hash_type",
+        "shadow_hash_type",
+        "pwdump_hash_type",
+        "netntlm_hash_type",
+        "kerberos_hash_type",
+    )
+
     name = StringField(
         "Hashfile Name", filters=[normalize_text_input]
     )  # While required we may dynamically create this based on file upload
@@ -251,6 +259,17 @@ class JobsNewHashFileForm(FlaskForm):
     hashfilehashes = TextAreaField("Hashes")
     hashfile = FileField("Upload Hashfile")
     submit = SubmitField("Next")
+
+    def _normalize_optional_hash_selectors(self) -> None:
+        for field_name in self._OPTIONAL_HASH_SELECTOR_FIELDS:
+            field = getattr(self, field_name)
+            if field.raw_data in (None, []):
+                field.raw_data = [""]
+                field.data = ""
+
+    def validate(self, extra_validators=None):
+        self._normalize_optional_hash_selectors()
+        return super().validate(extra_validators=extra_validators)
 
 
 class JobSummaryForm(FlaskForm):

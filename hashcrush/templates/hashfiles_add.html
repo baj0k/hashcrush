@@ -1,0 +1,174 @@
+{% extends "layout.html" %}
+{% block header %}
+<br>
+<h1>Create Shared Hashfile</h1>
+<br>
+Create a shared hashfile outside the job flow. The hashfile will be available to jobs in the selected domain.
+<br>
+<br>
+<br>
+{% endblock header %}
+{% block content %}
+<script>
+    function showHashTypeSelected(selectedObject){
+        if (selectedObject.value == 'pwdump'){
+            document.getElementById('pwdump_hash_type_div').style.display = 'inline';
+            document.getElementById('netntlm_hash_type_div').style.display = 'none';
+            document.getElementById('kerberos_hash_type_div').style.display = 'none';
+            document.getElementById('shadow_hash_type_div').style.display = 'none';
+            document.getElementById('hash_type_div').style.display = 'none';
+            document.getElementById('hashfile_div').style.display = 'none';
+        }
+        if (selectedObject.value == 'NetNTLM'){
+            document.getElementById('pwdump_hash_type_div').style.display = 'none';
+            document.getElementById('netntlm_hash_type_div').style.display = 'inline';
+            document.getElementById('kerberos_hash_type_div').style.display = 'none';
+            document.getElementById('shadow_hash_type_div').style.display = 'none';
+            document.getElementById('hash_type_div').style.display = 'none';
+            document.getElementById('hashfile_div').style.display = 'none';
+        }
+        if (selectedObject.value == 'kerberos'){
+            document.getElementById('pwdump_hash_type_div').style.display = 'none';
+            document.getElementById('netntlm_hash_type_div').style.display = 'none';
+            document.getElementById('kerberos_hash_type_div').style.display = 'inline';
+            document.getElementById('shadow_hash_type_div').style.display = 'none';
+            document.getElementById('hash_type_div').style.display = 'none';
+            document.getElementById('hashfile_div').style.display = 'none';
+        }
+        if (selectedObject.value == 'shadow'){
+            document.getElementById('pwdump_hash_type_div').style.display = 'none';
+            document.getElementById('netntlm_hash_type_div').style.display = 'none';
+            document.getElementById('kerberos_hash_type_div').style.display = 'none';
+            document.getElementById('shadow_hash_type_div').style.display = 'inline';
+            document.getElementById('hash_type_div').style.display = 'none';
+            document.getElementById('hashfile_div').style.display = 'none';
+        }
+        if (selectedObject.value == 'user_hash' || selectedObject.value == 'hash_only'){
+            document.getElementById('pwdump_hash_type_div').style.display = 'none';
+            document.getElementById('netntlm_hash_type_div').style.display = 'none';
+            document.getElementById('kerberos_hash_type_div').style.display = 'none';
+            document.getElementById('shadow_hash_type_div').style.display = 'none';
+            document.getElementById('hash_type_div').style.display = 'inline';
+            document.getElementById('hashfile_div').style.display = 'none';
+        }
+    }
+    function showHashFileSubmit(){
+        document.getElementById('hashfile_div').style.display = 'inline';
+    }
+</script>
+<div class="content-section">
+    {% if domains %}
+    <form action="{{ url_for('hashfiles.hashfiles_add') }}" method="POST" enctype="multipart/form-data">
+        {{ hashfilesForm.hidden_tag() }}
+        <fieldset class="form-group">
+            <div class="form-group">
+                {{ hashfilesForm.domain_id.label(class="form-control-label") }}
+                {% if hashfilesForm.domain_id.errors %}
+                    {{ hashfilesForm.domain_id(class="form-control form-control-lg is-invalid") }}
+                    <div class="invalid-feedback">
+                        {% for error in hashfilesForm.domain_id.errors %}
+                            <span>{{ error }}</span>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    {{ hashfilesForm.domain_id(class="form-control form-control-lg") }}
+                {% endif %}
+            </div>
+            <div class="form-group">
+                {{ hashfilesForm.file_type.label(class="form-control-label") }}
+                {% if hashfilesForm.file_type.errors %}
+                    {{ hashfilesForm.file_type(class="form-control form-control-lg is-invalid") }}
+                    <div class="invalid-feedback">
+                        {% for error in hashfilesForm.file_type.errors %}
+                            <span>{{ error }}</span>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    {{ hashfilesForm.file_type(class="form-control form-control-lg", onchange="showHashTypeSelected(this)") }}
+                {% endif %}
+            </div>
+            <div class="form-group" style="display:none" id="pwdump_hash_type_div">
+                {{ hashfilesForm.pwdump_hash_type.label(class="form-control-label") }}
+                {{ hashfilesForm.pwdump_hash_type(class="form-control form-control-lg", onchange="showHashFileSubmit()") }}
+            </div>
+            <div class="form-group" style="display:none" id="netntlm_hash_type_div">
+                {{ hashfilesForm.netntlm_hash_type.label(class="form-control-label") }}
+                {{ hashfilesForm.netntlm_hash_type(class="form-control form-control-lg", onchange="showHashFileSubmit()") }}
+            </div>
+            <div class="form-group" style="display:none" id="kerberos_hash_type_div">
+                {{ hashfilesForm.kerberos_hash_type.label(class="form-control-label") }}
+                {{ hashfilesForm.kerberos_hash_type(class="form-control form-control-lg", onchange="showHashFileSubmit()") }}
+            </div>
+            <div class="form-group" style="display:none" id="shadow_hash_type_div">
+                {{ hashfilesForm.shadow_hash_type.label(class="form-control-label") }}
+                {{ hashfilesForm.shadow_hash_type(class="form-control form-control-lg", onchange="showHashFileSubmit()") }}
+            </div>
+            <div class="form-group" style="display:none" id="hash_type_div">
+                {{ hashfilesForm.hash_type.label(class="form-control-label") }}
+                {{ hashfilesForm.hash_type(class="form-control form-control-lg", onchange="showHashFileSubmit()") }}
+            </div>
+            <div class="form-group" style="display:none" id="hashfile_div">
+                <br>
+                <label class="form-control-label" for="hash_type">Hash File Content</label>
+                <ul class="nav nav-pills mb-3" id="pills-tab" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <a class="nav-link active" id="pills-home-tab" data-toggle="pill" href="#pills-home" role="tab" aria-controls="pills-home" aria-selected="true">Individual Hashes</a>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <a class="nav-link" id="pills-profile-tab" data-toggle="pill" href="#pills-profile" role="tab" aria-controls="pills-profile" aria-selected="false">File Upload</a>
+                    </li>
+                </ul>
+                <div class="tab-content" id="pills-tabContent">
+                    <div class="tab-pane fade show active" id="pills-home" role="tabpanel" aria-labelledby="pills-home-tab">
+                        <div class="form-group">
+                            {{ hashfilesForm.name.label(class="form-control-label") }}
+                            {% if hashfilesForm.name.errors %}
+                                {{ hashfilesForm.name(class="form-control form-control-lg is-invalid") }}
+                                <div class="invalid-feedback">
+                                    {% for error in hashfilesForm.name.errors %}
+                                        <span>{{ error }}</span>
+                                    {% endfor %}
+                                </div>
+                            {% else %}
+                                {{ hashfilesForm.name(class="form-control form-control-lg") }}
+                            {% endif %}
+                        </div>
+                        <div class="form-group">
+                            {{ hashfilesForm.hashfilehashes.label(class="form-control-label") }}
+                            {% if hashfilesForm.hashfilehashes.errors %}
+                                {{ hashfilesForm.hashfilehashes(class="form-control form-control-lg is-invalid") }}
+                                <div class="invalid-feedback">
+                                    {% for error in hashfilesForm.hashfilehashes.errors %}
+                                        <span>{{ error }}</span>
+                                    {% endfor %}
+                                </div>
+                            {% else %}
+                                {{ hashfilesForm.hashfilehashes(class="form-control form-control-lg") }}
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="tab-pane fade" id="pills-profile" role="tabpanel" aria-labelledby="pills-profile-tab">
+                        <div class="form-group">
+                            {{ hashfilesForm.hashfile.label() }}
+                            {{ hashfilesForm.hashfile(class="form-control-file") }}
+                            {% if hashfilesForm.hashfile.errors %}
+                                {% for error in hashfilesForm.hashfile.errors %}
+                                    <span class="text-danger">{{ error }}</span><br>
+                                {% endfor %}
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </fieldset>
+        <div class="form-group">
+            <a class="btn btn-secondary" href="{{ url_for('hashfiles.hashfiles_list') }}">Back</a>
+            {{ hashfilesForm.submit(class="btn btn-primary") }}
+        </div>
+    </form>
+    {% else %}
+    <p class="text-muted mb-3">No domains are available. Create a domain first, then add a hashfile.</p>
+    <a class="btn btn-secondary" href="{{ url_for('domains.domains_list') }}">Go to Domains</a>
+    {% endif %}
+</div>
+{% endblock content %}

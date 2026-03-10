@@ -1,14 +1,18 @@
-"""Forms to manage hashfiles."""
-from flask_wtf import FlaskForm
-from wtforms import FileField, StringField, SubmitField
+"""Forms to manage shared hashfiles."""
+
+from wtforms import SelectField, SubmitField
 from wtforms.validators import DataRequired
 
-from hashcrush.forms_utils import normalize_text_input
+from hashcrush.jobs.forms import JobsNewHashFileForm
 
 
-class HashfilesForm(FlaskForm):
-    """Class representing hashfile upload forms."""
+class HashfilesAddForm(JobsNewHashFileForm):
+    """Form for creating a shared hashfile outside the job flow."""
 
-    name = StringField('Hashfile Name', validators=[DataRequired()], filters=[normalize_text_input])
-    hashfile = FileField('Upload Hashfile')
-    submit = SubmitField('Upload')
+    domain_id = SelectField(
+        "Domain",
+        choices=[],
+        coerce=int,
+        validators=[DataRequired()],
+    )
+    submit = SubmitField("Create Hashfile")

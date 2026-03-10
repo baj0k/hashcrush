@@ -738,6 +738,7 @@ def test_settings_page_renders_without_csrf_template_failure():
         response = client.get("/settings")
         assert response.status_code == 200
         assert b"csrf_token" in response.data
+        assert b"database.uri" in response.data
         assert b"database.host" in response.data
         assert b"app.hashcat_bin" in response.data
         assert b"Default When Empty" in response.data
@@ -747,7 +748,10 @@ def test_settings_hashcrush_config_update_persists_values(tmp_path):
     config_path = tmp_path / "config.conf"
     config_path.write_text(
         "[database]\n"
+        "uri = \n"
         "host = old-db-host\n"
+        "port = 5432\n"
+        "name = old-db-name\n"
         "username = old-db-user\n"
         "password = old-db-pass\n\n"
         "[app]\n"
@@ -768,7 +772,10 @@ def test_settings_hashcrush_config_update_persists_values(tmp_path):
         response = client.post(
             "/settings/hashcrush_config",
             data={
+                "cfg__database__uri": "",
                 "cfg__database__host": "new-db-host",
+                "cfg__database__port": "5433",
+                "cfg__database__name": "new-db-name",
                 "cfg__database__username": "new-db-user",
                 "cfg__database__password": "hj\x7f\x7fhashcrush",
                 "cfg__app__hashcat_bin": "/usr/bin/hashcat",
@@ -781,12 +788,111 @@ def test_settings_hashcrush_config_update_persists_values(tmp_path):
         parser = ConfigParser(interpolation=None)
         parser.read(config_path)
 
+        assert parser.get("database", "uri", fallback="") == ""
         assert parser.get("database", "host") == "new-db-host"
+        assert parser.get("database", "port") == "5433"
+        assert parser.get("database", "name") == "new-db-name"
         assert parser.get("database", "username") == "new-db-user"
         assert parser.get("database", "password") == "hashcrush"
         assert parser.get("app", "hashcat_bin") == "/usr/bin/hashcat"
         assert parser.get("app", "hashcat_status_timer") == "10"
         assert parser.get("app", "runtime_path") == "/tmp/hashcrush-runtime-custom"
+
+@pytest.mark.security
+def test_config_prefers_database_uri_from_config(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.conf"
+    config_path.write_text(
+        "[database]\n"
+        "uri = postgresql+psycopg2://config-user:config-pass@db.example:5432/hashcrush\n\n"
+        "[app]\n"
+        "secret_key = test-secret\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("HASHCRUSH_DATABASE_URI", raising=False)
+    monkeypatch.setenv("HASHCRUSH_CONFIG_PATH", str(config_path))
+
+    project_root = Path(__file__).resolve().parents[2]
+    script_path = project_root / "hashcrush" / "config.py"
+    spec = importlib.util.spec_from_file_location(
+        "hashcrush_config_uri_test_module", script_path
+    )
+    config_module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(config_module)
+
+    assert (
+        config_module.Config.SQLALCHEMY_DATABASE_URI
+        == "postgresql+psycopg2://config-user:config-pass@db.example:5432/hashcrush"
+    )
+
+@pytest.mark.security
+def test_config_builds_postgresql_uri_from_discrete_fields(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.conf"
+    config_path.write_text(
+        "[database]\n"
+        "host = db.internal\n"
+        "port = 5433\n"
+        "name = hashcrush_app\n"
+        "username = app-user\n"
+        "password = app-pass\n\n"
+        "[app]\n"
+        "secret_key = test-secret\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("HASHCRUSH_DATABASE_URI", raising=False)
+    monkeypatch.setenv("HASHCRUSH_CONFIG_PATH", str(config_path))
+
+    project_root = Path(__file__).resolve().parents[2]
+    script_path = project_root / "hashcrush" / "config.py"
+    spec = importlib.util.spec_from_file_location(
+        "hashcrush_config_discrete_test_module", script_path
+    )
+    config_module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(config_module)
+
+    assert (
+        config_module.Config.SQLALCHEMY_DATABASE_URI
+        == "postgresql+psycopg2://app-user:app-pass@db.internal:5433/hashcrush_app"
+    )
+
+@pytest.mark.security
+def test_bootstrap_local_postgres_invokes_psql(monkeypatch):
+    bootstrap_module = _load_bootstrap_module()
+    captured = {}
+
+    def fake_run(command, *, input=None, check=None):
+        captured["command"] = command
+        captured["input"] = input.decode("utf-8")
+        captured["check"] = check
+        return None
+
+    monkeypatch.setattr(bootstrap_module.subprocess, "run", fake_run)
+
+    bootstrap_module._bootstrap_local_postgres(
+        "hashcrush",
+        "hashcrush",
+        "strong-password",
+        "5432",
+    )
+
+    assert captured["command"] == [
+        "sudo",
+        "-u",
+        "postgres",
+        "psql",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-p",
+        "5432",
+        "-d",
+        "postgres",
+    ]
+    assert 'DROP DATABASE IF EXISTS "hashcrush";' in captured["input"]
+    assert 'CREATE ROLE "hashcrush" LOGIN PASSWORD \'strong-password\';' in captured["input"]
+    assert captured["check"] is True
 
 @pytest.mark.security
 def test_get_linecount_handles_newline_edge_cases(tmp_path):

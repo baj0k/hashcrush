@@ -4,6 +4,8 @@ import os
 import tempfile
 from configparser import ConfigParser
 
+from sqlalchemy.engine import URL
+
 file_config = ConfigParser(interpolation=None)
 
 
@@ -71,13 +73,26 @@ class Config:
     _database_uri_from_env = sanitize_config_input(
         os.getenv("HASHCRUSH_DATABASE_URI")
     ).strip()
+    _database_uri_from_config = sanitize_config_input(
+        file_config.get("database", "uri", fallback="")
+    ).strip()
     if _database_uri_from_env:
         SQLALCHEMY_DATABASE_URI = _database_uri_from_env
+    elif _database_uri_from_config:
+        SQLALCHEMY_DATABASE_URI = _database_uri_from_config
     else:
         _db_host = sanitize_config_input(
             os.getenv("HASHCRUSH_DB_HOST")
         ) or file_config.get("database", "host", fallback="")
         _db_host = sanitize_config_input(_db_host).strip()
+        _db_port = sanitize_config_input(
+            os.getenv("HASHCRUSH_DB_PORT")
+        ) or file_config.get("database", "port", fallback="5432")
+        _db_port = sanitize_config_input(_db_port).strip()
+        _db_name = sanitize_config_input(
+            os.getenv("HASHCRUSH_DB_NAME")
+        ) or file_config.get("database", "name", fallback="hashcrush")
+        _db_name = sanitize_config_input(_db_name).strip()
         _db_username = sanitize_config_input(
             os.getenv("HASHCRUSH_DB_USERNAME")
         ) or file_config.get("database", "username", fallback="")
@@ -87,26 +102,34 @@ class Config:
         ) or file_config.get("database", "password", fallback="")
         _db_password = sanitize_config_input(_db_password).strip()
 
-        if not (_db_host and _db_username and _db_password):
+        if not (_db_host and _db_port and _db_name and _db_username and _db_password):
             if _config_files:
                 raise RuntimeError(
-                    "Invalid database configuration. Provide HASHCRUSH_DATABASE_URI or HASHCRUSH_DB_HOST/"
-                    "HASHCRUSH_DB_USERNAME/HASHCRUSH_DB_PASSWORD, or set [database] host/username/password in config."
+                    "Invalid database configuration. Provide HASHCRUSH_DATABASE_URI, set [database] uri, "
+                    "or provide HASHCRUSH_DB_HOST/HASHCRUSH_DB_PORT/HASHCRUSH_DB_NAME/"
+                    "HASHCRUSH_DB_USERNAME/HASHCRUSH_DB_PASSWORD (or matching [database] values in config)."
                 )
             raise RuntimeError(
                 f"Missing config file: {_config_path}. Create it from hashcrush/config.conf.example, "
-                "or set HASHCRUSH_DATABASE_URI (or HASHCRUSH_DB_HOST/HASHCRUSH_DB_USERNAME/HASHCRUSH_DB_PASSWORD)."
+                "or set HASHCRUSH_DATABASE_URI (or HASHCRUSH_DB_HOST/HASHCRUSH_DB_PORT/HASHCRUSH_DB_NAME/"
+                "HASHCRUSH_DB_USERNAME/HASHCRUSH_DB_PASSWORD)."
             )
 
-        SQLALCHEMY_DATABASE_URI = (
-            "mysql+mysqlconnector://"
-            + _db_username
-            + ":"
-            + _db_password
-            + "@"
-            + _db_host
-            + "/hashcrush"
-        )
+        try:
+            _db_port_number = int(_db_port)
+        except ValueError as exc:
+            raise RuntimeError(
+                "Invalid database configuration. HASHCRUSH_DB_PORT/[database] port must be an integer."
+            ) from exc
+
+        SQLALCHEMY_DATABASE_URI = URL.create(
+                "postgresql+psycopg2",
+                username=_db_username,
+                password=_db_password,
+                host=_db_host,
+                port=_db_port_number,
+                database=_db_name,
+            ).render_as_string(hide_password=False)
 
     # Require explicit key from env/app config.
     _configured_secret = sanitize_config_input(

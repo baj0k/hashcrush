@@ -30,8 +30,8 @@
                     {% endif %}
                 </p>
                 <p class="text-muted">
-                    Database values can also be supplied via <code>HASHCRUSH_DATABASE_URI</code> or
-                    <code>HASHCRUSH_DB_HOST</code>/<code>HASHCRUSH_DB_USERNAME</code>/<code>HASHCRUSH_DB_PASSWORD</code>.
+                    Database values can be supplied via <code>HASHCRUSH_DATABASE_URI</code> or
+                    the discrete PostgreSQL fields <code>HASHCRUSH_DB_HOST</code>/<code>HASHCRUSH_DB_PORT</code>/<code>HASHCRUSH_DB_NAME</code>/<code>HASHCRUSH_DB_USERNAME</code>/<code>HASHCRUSH_DB_PASSWORD</code>.
                 </p>
                 <form action="{{ url_for('settings.update_hashcrush_config') }}" method="POST">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

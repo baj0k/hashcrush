@@ -178,8 +178,10 @@ def setup_defaults_if_needed():
         from hashcrush.users.routes import bcrypt
 
         if admin_user_needs_added(db):
-            logger.info("Adding Admin User.")
+            logger.info("No admin user found; creating default admin account.")
             add_admin_user(db, bcrypt)
+        else:
+            logger.info("Admin user already exists; skipping default admin creation.")
     except Exception:
         logger.exception("Adding Admin User failed.")
 
@@ -187,8 +189,10 @@ def setup_defaults_if_needed():
         from hashcrush.setup import add_default_tasks, default_tasks_need_added
 
         if default_tasks_need_added(db):
-            logger.info("Adding Default Tasks.")
+            logger.info("No default tasks found; seeding shared mask tasks.")
             add_default_tasks(db)
+        else:
+            logger.info("Default tasks already exist; skipping default task seeding.")
     except Exception:
         logger.exception("Adding Default Tasks failed.")
 

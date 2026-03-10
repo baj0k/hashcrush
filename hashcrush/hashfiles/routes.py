@@ -14,7 +14,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql import exists
 
 from hashcrush.audit import record_audit_event
-from hashcrush.authz import visible_jobs_query
+from hashcrush.authz import admin_required_redirect, visible_jobs_query
+from hashcrush.hashfiles.forms import HashfilesAddForm
+from hashcrush.hashfiles.service import create_hashfile_from_form
 from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles, Jobs, db
 
 hashfiles = Blueprint('hashfiles', __name__)
@@ -47,6 +49,19 @@ def _hashfile_delete_impact(hashfile_id: int) -> dict[str, int]:
         'hash_links': HashfileHashes.query.filter_by(hashfile_id=hashfile_id).count(),
         'orphan_uncracked_hashes': _count_orphan_uncracked_hashes_for_hashfiles([hashfile_id]),
     }
+
+
+def _shared_domains() -> list[Domains]:
+    return Domains.query.order_by(Domains.name.asc()).all()
+
+
+def _render_hashfiles_add_form(form, domains):
+    return render_template(
+        'hashfiles_add.html',
+        title='Hashfiles Add',
+        hashfilesForm=form,
+        domains=domains,
+    )
 
 
 @hashfiles.route("/hashfiles", methods=['GET', 'POST'])
@@ -124,6 +139,53 @@ def hashfiles_list():
         hash_type_dict=hash_type_dict,
         hashfile_delete_impacts=hashfile_delete_impacts,
     )
+
+
+@hashfiles.route("/hashfiles/add", methods=['GET', 'POST'])
+@login_required
+@admin_required_redirect('hashfiles.hashfiles_list')
+def hashfiles_add():
+    """Create a new shared hashfile from the UI."""
+
+    domains = _shared_domains()
+    form = HashfilesAddForm()
+    form.domain_id.choices = [(0, '--SELECT DOMAIN--')] + [
+        (domain.id, domain.name) for domain in domains
+    ]
+
+    if request.method == 'POST' and form.validate_on_submit():
+        domain = Domains.query.get(form.domain_id.data)
+        if not domain:
+            flash('Selected domain is invalid or no longer available.', 'danger')
+            return _render_hashfiles_add_form(form, domains)
+
+        creation_result, error_message = create_hashfile_from_form(
+            form,
+            domain_id=domain.id,
+        )
+        if error_message:
+            flash(error_message, 'danger')
+            return _render_hashfiles_add_form(form, domains)
+
+        hashfile = creation_result.hashfile
+        db.session.commit()
+        record_audit_event(
+            'hashfile.create',
+            'hashfile',
+            target_id=hashfile.id,
+            summary=f'Registered shared hashfile "{hashfile.name}".',
+            details={
+                'hashfile_name': hashfile.name,
+                'domain_id': domain.id,
+                'domain_name': domain.name,
+                'hash_type': creation_result.hash_type,
+                'imported_hash_links': creation_result.imported_hash_links,
+            },
+        )
+        flash('Hashfile created!', 'success')
+        return redirect(url_for('hashfiles.hashfiles_list'))
+
+    return _render_hashfiles_add_form(form, domains)
 
 @hashfiles.route("/hashfiles/delete/<int:hashfile_id>", methods=['POST'])
 @login_required

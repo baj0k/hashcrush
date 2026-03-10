@@ -10,9 +10,10 @@ from getpass import getpass
 
 CONFIG_PATH = os.path.join("hashcrush", "config.conf")
 ENV_TEST_PATH = ".env.test"
-LOCAL_MYSQL_HOST = "127.0.0.1"
-LOCAL_MYSQL_HOST_ALIASES = {"localhost", "127.0.0.1", "::1"}
+LOCAL_POSTGRES_HOST_ALIASES = {"localhost", "127.0.0.1", "::1"}
 DEFAULT_DB_HOST = "127.0.0.1"
+DEFAULT_DB_PORT = "5432"
+DEFAULT_DB_NAME = "hashcrush"
 DEFAULT_DB_USERNAME = "hashcrush"
 DEFAULT_DB_PASSWORD = "hashcrush"
 DEFAULT_HASHCAT_BIN = "/usr/bin/hashcat"
@@ -131,6 +132,8 @@ def _ensure_runtime_directories(
 def _write_config_atomic(
     config_path: str,
     db_server: str,
+    db_port: str,
+    db_name: str,
     db_username: str,
     db_password: str,
     secret_key: str,
@@ -144,7 +147,10 @@ def _write_config_atomic(
 ) -> None:
     parser = ConfigParser()
     parser["database"] = {
+        "uri": "",
         "host": db_server,
+        "port": db_port,
+        "name": db_name,
         "username": db_username,
         "password": db_password,
     }
@@ -186,11 +192,15 @@ def _write_config_atomic(
             os.remove(tmp_path)
 
 
-def _escape_mysql_string(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("'", "''")
+def _escape_postgres_literal(value: str) -> str:
+    return value.replace("'", "''")
 
 
-def _normalize_local_mysql_host(value: str) -> str:
+def _escape_postgres_identifier(value: str) -> str:
+    return value.replace('"', '""')
+
+
+def _normalize_local_postgres_host(value: str) -> str:
     normalized = value.strip().lower()
     if normalized == "localhost":
         return "localhost"
@@ -201,26 +211,41 @@ def _normalize_local_mysql_host(value: str) -> str:
     return normalized
 
 
-def _bootstrap_local_mysql(app_username: str, app_password: str) -> None:
-    escaped_user = _escape_mysql_string(app_username)
-    escaped_pass = _escape_mysql_string(app_password)
+def _bootstrap_local_postgres(
+    db_name: str, app_username: str, app_password: str, db_port: str
+) -> None:
+    escaped_db_name_literal = _escape_postgres_literal(db_name)
+    escaped_db_name_identifier = _escape_postgres_identifier(db_name)
+    escaped_user_identifier = _escape_postgres_identifier(app_username)
+    escaped_pass_literal = _escape_postgres_literal(app_password)
     sql_lines = [
-        "DROP DATABASE IF EXISTS hashcrush;",
-        f"DROP USER IF EXISTS '{escaped_user}'@'localhost';",
-        f"DROP USER IF EXISTS '{escaped_user}'@'127.0.0.1';",
-        f"DROP USER IF EXISTS '{escaped_user}'@'::1';",
-        "CREATE DATABASE hashcrush;",
-        f"CREATE USER '{escaped_user}'@'localhost' IDENTIFIED BY '{escaped_pass}';",
-        f"CREATE USER '{escaped_user}'@'127.0.0.1' IDENTIFIED BY '{escaped_pass}';",
-        f"CREATE USER '{escaped_user}'@'::1' IDENTIFIED BY '{escaped_pass}';",
-        f"GRANT ALL PRIVILEGES ON hashcrush.* TO '{escaped_user}'@'localhost';",
-        f"GRANT ALL PRIVILEGES ON hashcrush.* TO '{escaped_user}'@'127.0.0.1';",
-        f"GRANT ALL PRIVILEGES ON hashcrush.* TO '{escaped_user}'@'::1';",
-        "FLUSH PRIVILEGES;",
+        "SELECT pg_terminate_backend(pid) "
+        "FROM pg_stat_activity "
+        f"WHERE datname = '{escaped_db_name_literal}' AND pid <> pg_backend_pid();",
+        f'DROP DATABASE IF EXISTS "{escaped_db_name_identifier}";',
+        f'DROP ROLE IF EXISTS "{escaped_user_identifier}";',
+        f'CREATE ROLE "{escaped_user_identifier}" LOGIN PASSWORD \'{escaped_pass_literal}\';',
+        f'CREATE DATABASE "{escaped_db_name_identifier}" OWNER "{escaped_user_identifier}";',
+        f'REVOKE ALL ON DATABASE "{escaped_db_name_identifier}" FROM PUBLIC;',
     ]
     sql = "\n".join(sql_lines) + "\n"
 
-    subprocess.run(["sudo", "mysql"], input=sql.encode("utf-8"), check=True)
+    subprocess.run(
+        [
+            "sudo",
+            "-u",
+            "postgres",
+            "psql",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-p",
+            str(db_port),
+            "-d",
+            "postgres",
+        ],
+        input=sql.encode("utf-8"),
+        check=True,
+    )
 
 
 def _build_seed_app():
@@ -301,29 +326,48 @@ def _env_ssl_dir() -> str | None:
 def _collect_interactive_install_config(existing_values: dict[str, str | None]) -> dict[str, str]:
     print("\nCollecting HashCrush Database Configuration Information")
     db_server = input(
-        f"Enter the IP or hostname of the server running mysql [{DEFAULT_DB_HOST}]: "
+        f"Enter the IP or hostname of the server running PostgreSQL [{DEFAULT_DB_HOST}]: "
     ).strip()
     if len(db_server) == 0:
         db_server = DEFAULT_DB_HOST
-    while db_server.strip().lower() not in LOCAL_MYSQL_HOST_ALIASES:
+    while db_server.strip().lower() not in LOCAL_POSTGRES_HOST_ALIASES:
         print(
-            "Error: hashcrush.py setup requires local mysql host "
+            "Error: hashcrush.py setup requires local PostgreSQL host "
             "(127.0.0.1, localhost, or ::1)."
         )
         db_server = input(
-            f"Enter the IP or hostname of the server running mysql [{DEFAULT_DB_HOST}]: "
+            f"Enter the IP or hostname of the server running PostgreSQL [{DEFAULT_DB_HOST}]: "
         ).strip()
         if len(db_server) == 0:
             db_server = DEFAULT_DB_HOST
-    db_server = _normalize_local_mysql_host(db_server)
+    db_server = _normalize_local_postgres_host(db_server)
+
+    db_port = input(
+        f"Enter the TCP port of the local PostgreSQL cluster [{DEFAULT_DB_PORT}]: "
+    ).strip()
+    if len(db_port) == 0:
+        db_port = DEFAULT_DB_PORT
+    while not db_port.isdigit() or int(db_port) <= 0:
+        print("Error: enter a valid positive TCP port.")
+        db_port = input(
+            f"Enter the TCP port of the local PostgreSQL cluster [{DEFAULT_DB_PORT}]: "
+        ).strip()
+        if len(db_port) == 0:
+            db_port = DEFAULT_DB_PORT
+
+    db_name = input(
+        f"Enter the PostgreSQL database name HashCrush should use [{DEFAULT_DB_NAME}]: "
+    ).strip()
+    if len(db_name) == 0:
+        db_name = DEFAULT_DB_NAME
 
     db_username = input(
-        "Enter the user account hashcrush should use to connect to the mysql instance: "
+        "Enter the user account HashCrush should use to connect to the PostgreSQL instance: "
     )
     while len(db_username) == 0:
         print("Error: Invalid entry. Please try again.")
         db_username = input(
-            "Enter the user account hashcrush should use to connect to the mysql instance: "
+            "Enter the user account HashCrush should use to connect to the PostgreSQL instance: "
         )
 
     db_password = getpass("Enter the password for " + db_username + ": ")
@@ -415,6 +459,8 @@ def _collect_interactive_install_config(existing_values: dict[str, str | None]) 
 
     return {
         "db_server": db_server,
+        "db_port": db_port,
+        "db_name": db_name,
         "db_username": db_username,
         "db_password": db_password,
         "hashcat_bin": hashcat_bin,
@@ -427,15 +473,22 @@ def _collect_interactive_install_config(existing_values: dict[str, str | None]) 
 
 
 def _collect_test_install_config(existing_values: dict[str, str | None]) -> dict[str, str]:
-    db_server = _normalize_local_mysql_host(
+    db_server = _normalize_local_postgres_host(
         os.getenv("HASHCRUSH_DB_HOST") or DEFAULT_DB_HOST
     )
-    if db_server.strip().lower() not in LOCAL_MYSQL_HOST_ALIASES:
+    if db_server.strip().lower() not in LOCAL_POSTGRES_HOST_ALIASES:
         raise RuntimeError(
-            "hashcrush.py setup --test requires local mysql host "
+            "hashcrush.py setup --test requires local PostgreSQL host "
             "(127.0.0.1, localhost, or ::1)."
         )
 
+    db_port = os.getenv("HASHCRUSH_DB_PORT") or DEFAULT_DB_PORT
+    if not db_port.isdigit() or int(db_port) <= 0:
+        raise RuntimeError(
+            "hashcrush.py setup --test requires HASHCRUSH_DB_PORT to be a positive integer."
+        )
+
+    db_name = os.getenv("HASHCRUSH_TEST_DB_NAME") or DEFAULT_DB_NAME
     db_username = os.getenv("HASHCRUSH_TEST_DB_USERNAME") or DEFAULT_DB_USERNAME
     db_password = os.getenv("HASHCRUSH_TEST_DB_PASSWORD") or DEFAULT_DB_PASSWORD
 
@@ -473,6 +526,8 @@ def _collect_test_install_config(existing_values: dict[str, str | None]) -> dict
 
     print("\nUsing disposable E2E setup defaults")
     print(f"- db_server={db_server}")
+    print(f"- db_port={db_port}")
+    print(f"- db_name={db_name}")
     print(f"- db_username={db_username}")
     print(f"- wordlists_path={wordlists_path}")
     print(f"- rules_path={rules_path}")
@@ -481,6 +536,8 @@ def _collect_test_install_config(existing_values: dict[str, str | None]) -> dict
 
     return {
         "db_server": db_server,
+        "db_port": db_port,
+        "db_name": db_name,
         "db_username": db_username,
         "db_password": db_password,
         "hashcat_bin": hashcat_bin,
@@ -799,16 +856,20 @@ def main(argv: list[str] | None = None) -> int:
     else:
         install_config = _collect_interactive_install_config(existing_values)
 
-    print("\nCreating local MySQL database")
-    _bootstrap_local_mysql(
+    print("\nCreating local PostgreSQL database")
+    _bootstrap_local_postgres(
+        install_config["db_name"],
         install_config["db_username"],
         install_config["db_password"],
+        install_config["db_port"],
     )
 
     secret_key = secrets.token_urlsafe(64)
     _write_config_atomic(
         CONFIG_PATH,
         install_config["db_server"],
+        install_config["db_port"],
+        install_config["db_name"],
         install_config["db_username"],
         install_config["db_password"],
         secret_key,
@@ -822,6 +883,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"Writing hashcrush config at: {CONFIG_PATH}")
     print("Generated a new app secret_key and stored it in config.")
+    print(f"Set db_host={install_config['db_server']}")
+    print(f"Set db_port={install_config['db_port']}")
+    print(f"Set db_name={install_config['db_name']}")
+    print(f"Set db_username={install_config['db_username']}")
     print(f"Set hashcat_bin={install_config['hashcat_bin']}")
     print(f"Set hashcat_status_timer={DEFAULT_HASHCAT_STATUS_TIMER}")
     print(f"Set wordlists_path={install_config['wordlists_path']}")

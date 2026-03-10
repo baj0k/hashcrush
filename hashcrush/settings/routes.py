@@ -28,24 +28,45 @@ settings = Blueprint("settings", __name__)
 HASHCRUSH_CONFIG_FIELDS = [
     {
         "section": "database",
+        "key": "uri",
+        "label": "Database URI",
+        "env_name": "HASHCRUSH_DATABASE_URI",
+        "default_display": "Preferred production path. Leave empty to use discrete PostgreSQL fields below.",
+    },
+    {
+        "section": "database",
         "key": "host",
         "label": "Database Host",
         "env_name": "HASHCRUSH_DB_HOST",
-        "default_display": "Required (no default).",
+        "default_display": "Required when database.uri is empty.",
+    },
+    {
+        "section": "database",
+        "key": "port",
+        "label": "Database Port",
+        "env_name": "HASHCRUSH_DB_PORT",
+        "default_display": "5432",
+    },
+    {
+        "section": "database",
+        "key": "name",
+        "label": "Database Name",
+        "env_name": "HASHCRUSH_DB_NAME",
+        "default_display": "hashcrush",
     },
     {
         "section": "database",
         "key": "username",
         "label": "Database Username",
         "env_name": "HASHCRUSH_DB_USERNAME",
-        "default_display": "Required (no default).",
+        "default_display": "Required when database.uri is empty.",
     },
     {
         "section": "database",
         "key": "password",
         "label": "Database Password",
         "env_name": "HASHCRUSH_DB_PASSWORD",
-        "default_display": "Required (no default).",
+        "default_display": "Required when database.uri is empty.",
     },
     {
         "section": "app",

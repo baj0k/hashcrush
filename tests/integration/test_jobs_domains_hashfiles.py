@@ -540,6 +540,87 @@ def test_non_admin_cannot_add_domains():
         assert b"Permission Denied" in response.data
         assert Domains.query.filter_by(name="Unauthorized Domain").count() == 0
 
+
+@pytest.mark.security
+def test_hashfiles_page_allows_admin_to_add_shared_hashfiles():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="Hashfile Upload Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        list_html = client.get("/hashfiles").get_data(as_text=True)
+        assert 'href="/hashfiles/add"' in list_html
+
+        response = client.post(
+            "/hashfiles/add",
+            data={
+                "domain_id": str(domain.id),
+                "file_type": "hash_only",
+                "hash_type": "0",
+                "hashfile": (io.BytesIO(b"5f4dcc3b5aa765d61d8327deb882cf99\n"), "shared-hashes.txt"),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+
+        assert response.status_code == 200
+        assert b"Hashfile created!" in response.data
+
+        hashfile = Hashfiles.query.filter_by(name="shared-hashes.txt").first()
+        assert hashfile is not None
+        assert hashfile.domain_id == domain.id
+        assert HashfileHashes.query.filter_by(hashfile_id=hashfile.id).count() == 1
+
+        entry = _latest_audit_entry()
+        assert entry is not None
+        assert entry.event_type == "hashfile.create"
+        assert entry.target_id == str(hashfile.id)
+        assert '"hashfile_name": "shared-hashes.txt"' in entry.details_json
+
+
+@pytest.mark.security
+def test_non_admin_cannot_add_hashfiles():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        viewer = _seed_user("hashfile-viewer", password="viewer-password", admin=False)
+        _seed_settings()
+
+        domain = Domains(name="Shared Hashfile Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, viewer)
+
+        list_response = client.get("/hashfiles")
+        assert list_response.status_code == 200
+        assert 'href="/hashfiles/add"' not in list_response.get_data(as_text=True)
+
+        response = client.post(
+            "/hashfiles/add",
+            data={
+                "domain_id": str(domain.id),
+                "file_type": "hash_only",
+                "hash_type": "0",
+                "hashfile": (io.BytesIO(b"5f4dcc3b5aa765d61d8327deb882cf99\n"), "blocked.txt"),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+
+        assert response.status_code == 200
+        assert b"Permission Denied" in response.data
+        assert Hashfiles.query.filter_by(name="blocked.txt").count() == 0
+
 @pytest.mark.security
 def test_job_task_move_routes_do_not_mutate_active_jobs():
     app = _build_app()
@@ -813,7 +894,7 @@ def test_jobs_assigned_hashfile_failed_import_rolls_back_hashfile_row(monkeypatc
         db.session.commit()
 
         monkeypatch.setattr(
-            "hashcrush.jobs.routes.import_hashfilehashes", lambda **_: False
+            "hashcrush.hashfiles.service.import_hashfilehashes", lambda **_: False
         )
 
         client = app.test_client()

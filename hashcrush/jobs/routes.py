@@ -1,13 +1,10 @@
 """Flask routes to handle Jobs"""
 import json
-import os
 import re
-import secrets
 from datetime import UTC, datetime
 
 from flask import (
     Blueprint,
-    current_app,
     flash,
     redirect,
     render_template,
@@ -20,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 
 from hashcrush.audit import record_audit_event
 from hashcrush.authz import PUBLIC_JOB_VIEW_STATUSES, visible_jobs_query
+from hashcrush.hashfiles.service import create_hashfile_from_form
 from hashcrush.jobs.forms import JobsForm, JobsNewHashFileForm, JobSummaryForm
 from hashcrush.models import (
     Domains,
@@ -35,15 +33,6 @@ from hashcrush.models import (
 )
 from hashcrush.utils.utils import (
     build_hashcat_command,
-    get_runtime_subdir,
-    import_hashfilehashes,
-    save_file,
-    validate_hash_only_hashfile,
-    validate_kerberos_hashfile,
-    validate_netntlm_hashfile,
-    validate_pwdump_hashfile,
-    validate_shadow_hashfile,
-    validate_user_hash_hashfile,
 )
 
 jobs = Blueprint('jobs', __name__)
@@ -320,79 +309,37 @@ def jobs_assigned_hashfile(job_id):
         hashfile_cracked_rate[hashfile.id] = "(" + str(cracked_cnt) + "/" + str(total) + ")"
 
     if jobs_new_hashfile_form.validate_on_submit():
+        creation_result, error_message = create_hashfile_from_form(
+            jobs_new_hashfile_form,
+            domain_id=job.domain_id,
+        )
+        if error_message:
+            flash(error_message, 'danger')
+            return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job_id))
 
-        runtime_tmp_dir = get_runtime_subdir('tmp')
-        os.makedirs(runtime_tmp_dir, exist_ok=True)
-
-        hashfile_path = ''
-        if jobs_new_hashfile_form.hashfile.data:
-            # User submitted a file upload.
-            hashfile_path = save_file(runtime_tmp_dir, jobs_new_hashfile_form.hashfile.data)
-        elif jobs_new_hashfile_form.hashfilehashes.data:
-            # User submitted copied/pasted hashes.
-            if len(jobs_new_hashfile_form.name.data) == 0:
-                flash('You must assign a name to the hashfile', 'danger')
-                return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job_id))
-
-            random_hex = secrets.token_hex(8)
-            hashfile_path = os.path.join(runtime_tmp_dir, random_hex)
-            with open(hashfile_path, 'w+', encoding='utf-8') as hashfilehashes_file:
-                hashfilehashes_file.write(jobs_new_hashfile_form.hashfilehashes.data)
-
-        if len(hashfile_path) > 0:
-            try:
-                if jobs_new_hashfile_form.file_type.data == 'pwdump':
-                    has_problem = validate_pwdump_hashfile(hashfile_path, jobs_new_hashfile_form.pwdump_hash_type.data)
-                    hash_type = jobs_new_hashfile_form.pwdump_hash_type.data
-                elif jobs_new_hashfile_form.file_type.data == 'NetNTLM':
-                    has_problem = validate_netntlm_hashfile(hashfile_path)
-                    hash_type = jobs_new_hashfile_form.netntlm_hash_type.data
-                elif jobs_new_hashfile_form.file_type.data == 'kerberos':
-                    has_problem = validate_kerberos_hashfile(hashfile_path, jobs_new_hashfile_form.kerberos_hash_type.data)
-                    hash_type = jobs_new_hashfile_form.kerberos_hash_type.data
-                elif jobs_new_hashfile_form.file_type.data == 'shadow':
-                    has_problem = validate_shadow_hashfile(hashfile_path, jobs_new_hashfile_form.shadow_hash_type.data)
-                    hash_type = jobs_new_hashfile_form.shadow_hash_type.data
-                elif jobs_new_hashfile_form.file_type.data == 'user_hash':
-                    has_problem = validate_user_hash_hashfile(hashfile_path)
-                    hash_type = jobs_new_hashfile_form.hash_type.data
-                elif jobs_new_hashfile_form.file_type.data == 'hash_only':
-                    has_problem = validate_hash_only_hashfile(hashfile_path, jobs_new_hashfile_form.hash_type.data)
-                    hash_type = jobs_new_hashfile_form.hash_type.data
-                else:
-                    has_problem = 'Invalid File Format'
-
-                if has_problem:
-                    flash(has_problem, 'danger')
-                    return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job_id))
-
-                hashfile_name = jobs_new_hashfile_form.name.data
-                if not hashfile_name and jobs_new_hashfile_form.hashfile.data:
-                    hashfile_name = jobs_new_hashfile_form.hashfile.data.filename
-                hashfile_name = hashfile_name or f'hashfile_{secrets.token_hex(4)}.txt'
-                hashfile = Hashfiles(name=hashfile_name, domain_id=job.domain_id)
-                db.session.add(hashfile)
-                db.session.flush()
-
-                if not import_hashfilehashes(
-                    hashfile_id=hashfile.id,
-                    hashfile_path=hashfile_path,
-                    file_type=jobs_new_hashfile_form.file_type.data,
-                    hash_type=hash_type,
-                ):
-                    db.session.rollback()
-                    flash('Failed importing hashfile. Check file format/hash type and retry.', 'danger')
-                    return redirect(url_for('jobs.jobs_assigned_hashfile', job_id=job_id))
-
-                job.hashfile_id = hashfile.id
-                db.session.commit()
-                return redirect(str(hashfile.id))
-            finally:
-                if os.path.isfile(hashfile_path):
-                    try:
-                        os.remove(hashfile_path)
-                    except OSError:
-                        current_app.logger.warning('Failed to remove temporary hash upload file: %s', hashfile_path)
+        hashfile = creation_result.hashfile
+        job.hashfile_id = hashfile.id
+        db.session.commit()
+        record_audit_event(
+            'hashfile.create',
+            'hashfile',
+            target_id=hashfile.id,
+            summary=f'Registered shared hashfile "{hashfile.name}" via job assignment.',
+            details={
+                'hashfile_name': hashfile.name,
+                'domain_id': job.domain_id,
+                'job_id': job.id,
+                'hash_type': creation_result.hash_type,
+                'imported_hash_links': creation_result.imported_hash_links,
+            },
+        )
+        return redirect(
+            url_for(
+                'jobs.jobs_assigned_hashfile_cracked',
+                job_id=job.id,
+                hashfile_id=hashfile.id,
+            )
+        )
 
     elif request.method == 'POST' and request.form.get('hashfile_id'):
         selected_hashfile = _get_assignable_hashfile(job, request.form.get('hashfile_id'))

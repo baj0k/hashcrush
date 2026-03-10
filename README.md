@@ -4,17 +4,16 @@
 
 ## Requirements
 1. Python 3.10+
-2. MySQL running locally
-3. Administrative privileges for local MySQL bootstrap
+2. PostgreSQL running locally
+3. Administrative privileges for local PostgreSQL bootstrap
 4. Hashcat configured with drivers required by your hardware
 
 ## Installation
-#### 1) Setup MySQL
+#### 1) Setup PostgreSQL
 ```
 sudo apt update -y
-sudo apt install mysql-server -y
-sudo service mysql start
-sudo mysql_secure_installation
+sudo apt install postgresql postgresql-contrib -y
+sudo service postgresql start
 ```
 
 #### 2) Install HashCrush
@@ -63,11 +62,19 @@ Recommended production environment overrides:
 
 ```bash
 export HASHCRUSH_SECRET_KEY='<strong-random-secret>'
-export HASHCRUSH_DB_HOST='127.0.0.1'
-export HASHCRUSH_DB_USERNAME='hashcrush'
-export HASHCRUSH_DB_PASSWORD='<strong-db-password>'
+export HASHCRUSH_DATABASE_URI='postgresql+psycopg2://hashcrush:<strong-db-password>@127.0.0.1:5432/hashcrush'
 export HASHCRUSH_SSL_CERT_PATH='/run/secrets/hashcrush-cert.pem'
 export HASHCRUSH_SSL_KEY_PATH='/run/secrets/hashcrush-key.pem'
+```
+
+If you do not want to use a full URI, HashCrush also supports:
+
+```bash
+export HASHCRUSH_DB_HOST='127.0.0.1'
+export HASHCRUSH_DB_PORT='5432'
+export HASHCRUSH_DB_NAME='hashcrush'
+export HASHCRUSH_DB_USERNAME='hashcrush'
+export HASHCRUSH_DB_PASSWORD='<strong-db-password>'
 ```
 
 Optional flags:

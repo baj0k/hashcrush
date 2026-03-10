@@ -230,7 +230,7 @@ class Hashes(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     sub_ciphertext = db.Column(db.String(32), nullable=False, index=True)
-    # TEXT avoids MySQL row-size limits while keeping large hash payload support.
+    # TEXT avoids row-size pressure while keeping large hash payload support.
     ciphertext = db.Column(db.Text, nullable=False)
     hash_type = db.Column(db.Integer, nullable=False, index=True)
     cracked = db.Column(db.Boolean, nullable=False)

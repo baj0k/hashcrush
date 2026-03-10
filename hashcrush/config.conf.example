@@ -1,7 +1,11 @@
 [database]
 # Do not commit your real config.conf with live credentials.
-# Prefer environment variables (HASHCRUSH_DATABASE_URI or HASHCRUSH_DB_*).
-host = localhost
+# Prefer HASHCRUSH_DATABASE_URI in production. If uri is empty, HashCrush falls
+# back to the discrete PostgreSQL fields below.
+uri =
+host = 127.0.0.1
+port = 5432
+name = hashcrush
 username = username
 password = password
 

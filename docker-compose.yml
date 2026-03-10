@@ -4,6 +4,9 @@ services:
     platform: ${DOCKER_PLATFORM:-linux/amd64}
     links:
       - db
+    environment:
+      HASHCRUSH_DATABASE_URI: postgresql+psycopg2://hashcrush:hashcrush@db:5432/hashcrush
+      HASHCRUSH_SECRET_KEY: change-me
     ports:
       - "8080:8080"
     depends_on:
@@ -11,22 +14,19 @@ services:
         condition: service_healthy
 
   db:
-    image: "mysql:8-debian"
+    image: "postgres:17-bookworm"
     platform: ${DOCKER_PLATFORM:-linux/amd64}
     restart: always
-    cap_add:
-      - SYS_NICE
     environment:
-      MYSQL_DATABASE: hashcrush
-      MYSQL_USER: hashcrush
-      MYSQL_PASSWORD: hashcrush
-      MYSQL_RANDOM_ROOT_PASSWORD: yes
+      POSTGRES_DB: hashcrush
+      POSTGRES_USER: hashcrush
+      POSTGRES_PASSWORD: hashcrush
     ports:
-      - '3306:3306'
+      - "5432:5432"
     volumes:
-      - db:/var/lib/mysql
+      - db:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost"]
+      test: ["CMD-SHELL", "pg_isready -U hashcrush -d hashcrush"]
       timeout: 20s
       retries: 10
 
