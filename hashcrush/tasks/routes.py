@@ -5,8 +5,8 @@ from flask import Blueprint, flash, redirect, render_template, url_for
 from flask_login import login_required
 from sqlalchemy.exc import IntegrityError
 
-from hashcrush.authz import admin_required_redirect
-from hashcrush.models import Jobs, JobTasks, Rules, TaskGroups, Tasks, Wordlists, db
+from hashcrush.authz import admin_required_redirect, visible_jobs_query
+from hashcrush.models import JobTasks, Rules, TaskGroups, Tasks, Wordlists, db
 from hashcrush.tasks.forms import TasksForm
 
 tasks = Blueprint('tasks', __name__)
@@ -62,7 +62,7 @@ def tasks_list():
     """Function to list tasks"""
 
     tasks = Tasks.query.all()
-    jobs = Jobs.query.all()
+    jobs = visible_jobs_query().all()
     visible_job_ids = [job.id for job in jobs]
     job_tasks = (
         JobTasks.query.filter(JobTasks.job_id.in_(visible_job_ids)).all()

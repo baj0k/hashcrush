@@ -68,6 +68,7 @@ def task_groups_list():
 
 @task_groups.route("/task_groups/export", methods=["GET"])
 @login_required
+@admin_required_redirect("task_groups.task_groups_list")
 def task_groups_export():
     """Export shared tasks/task-groups as JSON."""
     shared_tasks = Tasks.query.order_by(Tasks.id.asc()).all()

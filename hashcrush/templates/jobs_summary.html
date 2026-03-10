@@ -4,6 +4,9 @@
 <h1>Job Summary</h1>
 <br>
 If everything looks good, click complete below.
+{% if not can_manage_job %}
+<p class="text-muted mb-0">Read-only view. Only the job owner or an admin can finalize or edit this job.</p>
+{% endif %}
 <br>
 <br>
 <br>
@@ -11,8 +14,57 @@ If everything looks good, click complete below.
 {% block content %}
     <article class="media content-section">
         <div class="media-body">
-            <form method="POST" action="">
-                {{ form.hidden_tag() }}
+            {% if can_manage_job %}
+                <form method="POST" action="">
+                    {{ form.hidden_tag() }}
+                    <table class="table">
+                        <tbody>
+                                <tr>
+                                    <td>Job Name:</td>
+                                    <td>{{ job.name }}</td>
+                                </tr>
+                                <tr>
+                                    <td>Domain:</td>
+                                    <td>{{ domain.name }}</td>
+                                </tr>
+                                <tr>
+                                    <td>Job Priority:</td>
+                                    {% if job.priority == 5 %}
+                                        <td>{{ job.priority }} - highest</td>
+                                    {% elif job.priority == 4 %}
+                                        <td>{{ job.priority }} - higher</td>
+                                    {% elif job.priority == 3 %}
+                                        <td>{{ job.priority }} - normal</td>
+                                    {% elif job.priority == 2 %}
+                                        <td>{{ job.priority }} - lower</td>
+                                    {% elif job.priority == 1 %}
+                                        <td>{{ job.priority }} - lowest</td>
+                                    {% endif %}
+                                </tr>
+                                <tr>
+                                    <td>Hashfile:</td>
+                                    <td>{{ hashfile.name }} ({{ cracked_rate }})</td>
+                                </tr>
+                                <tr>
+                                    <td>Tasks:</td>
+                                    <td>
+                                        {% for job_task in job_tasks %}
+                                            {% for task in tasks %}
+                                                {% if task.id == job_task.task_id %}
+                                                    {{ task.name }} <br>
+                                                {% endif %}
+                                            {% endfor %}
+                                        {% endfor %}
+                                    </td>
+                                </tr>
+                        </tbody>
+                    </table>
+                    <div class="form-group">
+                        <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_list_tasks', job_id = job.id) }}">Back</a>
+                        {{ form.submit(class="btn btn-primary pull-right")}}
+                    </div>
+                </form>
+            {% else %}
                 <table class="table">
                     <tbody>
                             <tr>
@@ -57,9 +109,9 @@ If everything looks good, click complete below.
                 </table>
                 <div class="form-group">
                     <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_list_tasks', job_id = job.id) }}">Back</a>
-                    {{ form.submit(class="btn btn-primary pull-right")}}
+                    <a class="btn btn-primary pull-right" href="{{ url_for('jobs.jobs_list') }}" role="button">Back to Jobs</a>
                 </div>
-            </form>
+            {% endif %}
         </div>
     </article>
 {% endblock content %}

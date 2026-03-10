@@ -46,7 +46,7 @@ def _integrity_error():
 
 def _build_app(extra_overrides: dict | None = None):
     base_overrides = {
-        "SECRET_KEY": "phase1-test-secret",
+        "SECRET_KEY": "phase1-test-secret-key-for-hashcrush",
         "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
         "SQLALCHEMY_TRACK_MODIFICATIONS": False,
         "WTF_CSRF_ENABLED": False,
@@ -430,12 +430,44 @@ def test_hashfiles_delete_removes_orphan_hashes():
         client = app.test_client()
         _login_client_as_user(client, user)
 
-        response = client.post(f"/hashfiles/delete/{hashfile.id}")
+        response = client.post(
+            f"/hashfiles/delete/{hashfile.id}",
+            data={"confirm_name": hashfile.name},
+        )
         assert response.status_code == 302
 
         assert Hashfiles.query.filter_by(id=hashfile.id).count() == 0
         assert HashfileHashes.query.filter_by(hashfile_id=hashfile.id).count() == 0
         assert Hashes.query.filter_by(id=hash_row_id).count() == 0
+
+
+@pytest.mark.security
+def test_hashfiles_delete_requires_exact_name_confirmation():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="HashfileConfirmDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="confirm-me.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            f"/hashfiles/delete/{hashfile.id}",
+            data={"confirm_name": "wrong-name"},
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert b"Type the hashfile name exactly to confirm deletion." in response.data
+        assert Hashfiles.query.filter_by(id=hashfile.id).count() == 1
 
 
 @pytest.mark.security
@@ -1666,7 +1698,10 @@ def test_domains_delete_blocks_when_active_jobs_exist():
         client = app.test_client()
         _login_client_as_user(client, admin)
 
-        response = client.post(f"/domains/delete/{domain.id}")
+        response = client.post(
+            f"/domains/delete/{domain.id}",
+            data={"confirm_name": domain.name},
+        )
         assert response.status_code == 302
         assert Domains.query.get(domain.id) is not None
         assert Jobs.query.get(active_job.id) is not None
@@ -1738,7 +1773,10 @@ def test_domains_delete_removes_inactive_jobs_and_orphans():
         client = app.test_client()
         _login_client_as_user(client, admin)
 
-        response = client.post(f"/domains/delete/{domain_id}")
+        response = client.post(
+            f"/domains/delete/{domain_id}",
+            data={"confirm_name": domain.name},
+        )
         assert response.status_code == 302
 
         assert Domains.query.get(domain_id) is None
@@ -1746,6 +1784,93 @@ def test_domains_delete_removes_inactive_jobs_and_orphans():
         assert Hashfiles.query.get(hashfile_id) is None
         assert HashfileHashes.query.filter_by(hashfile_id=hashfile_id).count() == 0
         assert Hashes.query.get(orphan_hash_id) is None
+
+
+@pytest.mark.security
+def test_domains_delete_requires_exact_name_confirmation():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="Confirm Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            f"/domains/delete/{domain.id}",
+            data={"confirm_name": "wrong-name"},
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert b"Type the domain name exactly to confirm deletion." in response.data
+        assert Domains.query.get(domain.id) is not None
+
+
+@pytest.mark.security
+def test_domains_page_is_shared_read_and_admin_can_add_domains():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        viewer = _seed_user("domains-viewer", password="viewer-password", admin=False)
+        _seed_settings()
+
+        seed_domain = Domains(name="Existing Domain")
+        db.session.add(seed_domain)
+        db.session.commit()
+
+        admin_client = app.test_client()
+        _login_client_as_user(admin_client, admin)
+        admin_html = admin_client.get("/domains").get_data(as_text=True)
+        assert 'action="/domains/add"' in admin_html
+
+        response = admin_client.post(
+            "/domains/add",
+            data={"name": "New Shared Domain"},
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert b"Domain created!" in response.data
+        assert Domains.query.filter_by(name="New Shared Domain").count() == 1
+
+        viewer_client = app.test_client()
+        _login_client_as_user(viewer_client, viewer)
+        viewer_response = viewer_client.get("/domains")
+        viewer_html = viewer_response.get_data(as_text=True)
+        assert viewer_response.status_code == 200
+        assert "Existing Domain" in viewer_html
+        assert "New Shared Domain" in viewer_html
+        assert 'href="/domains"' in viewer_client.get("/jobs").get_data(as_text=True)
+
+
+@pytest.mark.security
+def test_non_admin_cannot_add_domains():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        viewer = _seed_user("domains-writer", password="viewer-password", admin=False)
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, viewer)
+
+        list_response = client.get("/domains")
+        assert list_response.status_code == 200
+        assert 'action="/domains/add"' not in list_response.get_data(as_text=True)
+
+        response = client.post(
+            "/domains/add",
+            data={"name": "Unauthorized Domain"},
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert b"Permission Denied" in response.data
+        assert Domains.query.filter_by(name="Unauthorized Domain").count() == 0
 
 
 @pytest.mark.security
@@ -2548,7 +2673,9 @@ def test_hashfiles_delete_handles_integrity_error_cleanly(monkeypatch):
         )
 
         response = client.post(
-            f"/hashfiles/delete/{hashfile.id}", follow_redirects=True
+            f"/hashfiles/delete/{hashfile.id}",
+            data={"confirm_name": hashfile.name},
+            follow_redirects=True,
         )
         assert response.status_code == 200
         assert (
@@ -2947,7 +3074,7 @@ def test_shared_resource_lists_hide_admin_controls_for_non_admin():
         assert "/task_groups/import" not in task_groups_html
         assert f"/task_groups/assigned_tasks/{task_group.id}" not in task_groups_html
         assert f"/task_groups/delete/{task_group.id}" not in task_groups_html
-        assert "/task_groups/export" in task_groups_html
+        assert "/task_groups/export" not in task_groups_html
 
         wordlists_html = client.get("/wordlists").get_data(as_text=True)
         assert "/wordlists/add" not in wordlists_html
@@ -2960,7 +3087,7 @@ def test_shared_resource_lists_hide_admin_controls_for_non_admin():
 
 
 @pytest.mark.security
-def test_analytics_download_is_global_for_shared_hashfiles():
+def test_analytics_page_is_global_but_downloads_require_admin():
     app = _build_app()
     with app.app_context():
         db.create_all()
@@ -3007,11 +3134,116 @@ def test_analytics_download_is_global_for_shared_hashfiles():
         client = app.test_client()
         _login_client_as_user(client, owner)
 
-        response = client.get("/analytics/download?type=found")
-        assert response.status_code == 200
-        content = response.data.decode("utf-8")
-        assert "owner-ciphertext" in content
-        assert "other-ciphertext" in content
+        analytics_response = client.get(f"/analytics?domain_id={domain.id}")
+        assert analytics_response.status_code == 200
+        analytics_html = analytics_response.get_data(as_text=True)
+        assert "General Stats" in analytics_html
+        assert "Total Accounts:" in analytics_html
+        assert "Download Charts" not in analytics_html
+        assert "/analytics/download?type=found" not in analytics_html
+        assert "/analytics/download?type=left" not in analytics_html
+
+        download_response = client.get("/analytics/download?type=found")
+        assert download_response.status_code == 302
+        assert download_response.headers["Location"].endswith("/analytics")
+
+
+@pytest.mark.security
+def test_shared_resource_pages_hide_private_incomplete_job_names_from_other_users():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        owner = _seed_user(
+            "shared-owner", password="owner-user-password", admin=False
+        )
+        viewer = _seed_user(
+            "shared-viewer", password="viewer-user-password", admin=False
+        )
+        _seed_settings()
+
+        domain = Domains(name="Shared Visibility Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="shared-visibility.txt", domain_id=domain.id)
+        task = Tasks(
+            name="shared-visibility-task",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a?a",
+        )
+        db.session.add_all([hashfile, task])
+        db.session.commit()
+
+        private_job = Jobs(
+            name="private-incomplete-job",
+            status="Incomplete",
+            domain_id=domain.id,
+            hashfile_id=hashfile.id,
+            owner_id=owner.id,
+        )
+        public_job = Jobs(
+            name="public-ready-job",
+            status="Ready",
+            domain_id=domain.id,
+            hashfile_id=hashfile.id,
+            owner_id=owner.id,
+        )
+        db.session.add_all([private_job, public_job])
+        db.session.commit()
+
+        db.session.add_all(
+            [
+                JobTasks(job_id=private_job.id, task_id=task.id, status="Queued"),
+                JobTasks(job_id=public_job.id, task_id=task.id, status="Queued"),
+            ]
+        )
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, viewer)
+
+        tasks_html = client.get("/tasks").get_data(as_text=True)
+        domains_html = client.get("/domains").get_data(as_text=True)
+        hashfiles_html = client.get("/hashfiles").get_data(as_text=True)
+
+        assert "public-ready-job" in tasks_html
+        assert "public-ready-job" in domains_html
+        assert "public-ready-job" in hashfiles_html
+
+        assert "private-incomplete-job" not in tasks_html
+        assert "private-incomplete-job" not in domains_html
+        assert "private-incomplete-job" not in hashfiles_html
+
+
+@pytest.mark.security
+def test_hashfiles_page_hides_download_controls_for_non_admin():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        _seed_admin_user()
+        user = _seed_user("hashfiles-viewer", password="viewer-password", admin=False)
+        _seed_settings()
+
+        domain = Domains(name="Hashfile Downloads Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="downloadable.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        user_client = app.test_client()
+        _login_client_as_user(user_client, user)
+        user_html = user_client.get("/hashfiles").get_data(as_text=True)
+        assert (
+            f"/analytics/download?type=found&domain_id={domain.id}&hashfile_id={hashfile.id}"
+            not in user_html
+        )
+        assert (
+            f"/analytics?domain_id={domain.id}&hashfile_id={hashfile.id}" in user_html
+        )
 
 
 @pytest.mark.security
@@ -3265,13 +3497,149 @@ def test_search_hash_id_lookup_accepts_trimmed_numeric_value():
 
 
 @pytest.mark.security
+def test_search_page_hides_export_controls_for_non_admin():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        user = _seed_user("search-viewer", password="viewer-password", admin=False)
+        _seed_settings()
+
+        domain = Domains(name="SearchExportDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="search-export.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = Hashes(
+            sub_ciphertext="f" * 32,
+            ciphertext="search-export-ciphertext",
+            hash_type=1000,
+            cracked=True,
+            plaintext=encode_plaintext_for_storage("ExportMe123!"),
+        )
+        db.session.add(hash_row)
+        db.session.commit()
+        db.session.add(HashfileHashes(hash_id=hash_row.id, hashfile_id=hashfile.id))
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, user)
+
+        response = client.post(
+            "/search",
+            data={
+                "search_type": "hash",
+                "query": "search-export-ciphertext",
+            },
+        )
+        html = response.get_data(as_text=True)
+        assert response.status_code == 200
+        assert "search-export-ciphertext" in html
+        assert 'value="Export"' not in html
+        assert "Search exports are restricted to admin accounts." in html
+
+
+@pytest.mark.security
+def test_search_export_requires_admin():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        user = _seed_user("search-exporter", password="viewer-password", admin=False)
+        _seed_settings()
+
+        domain = Domains(name="SearchExportDeniedDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="search-export-denied.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = Hashes(
+            sub_ciphertext="1" * 32,
+            ciphertext="search-export-denied-ciphertext",
+            hash_type=1000,
+            cracked=True,
+            plaintext=encode_plaintext_for_storage("DeniedExport123!"),
+        )
+        db.session.add(hash_row)
+        db.session.commit()
+        db.session.add(HashfileHashes(hash_id=hash_row.id, hashfile_id=hashfile.id))
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, user)
+
+        response = client.post(
+            "/search",
+            data={
+                "search_type": "hash",
+                "query": "search-export-denied-ciphertext",
+                "export": "Export",
+                "export_type": "Comma",
+            },
+        )
+        assert response.status_code == 200
+        assert b"Permission Denied" in response.data
+        assert b"search-export-denied-ciphertext" in response.data
+        assert response.headers.get("Content-Disposition") is None
+
+
+@pytest.mark.security
+def test_search_export_still_works_for_admin():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="SearchExportAdminDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="search-export-admin.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = Hashes(
+            sub_ciphertext="2" * 32,
+            ciphertext="search-export-admin-ciphertext",
+            hash_type=1000,
+            cracked=True,
+            plaintext=encode_plaintext_for_storage("AdminExport123!"),
+        )
+        db.session.add(hash_row)
+        db.session.commit()
+        db.session.add(HashfileHashes(hash_id=hash_row.id, hashfile_id=hashfile.id))
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/search",
+            data={
+                "search_type": "hash",
+                "query": "search-export-admin-ciphertext",
+                "export": "Export",
+                "export_type": "Comma",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers["Content-Disposition"].startswith(
+            'attachment; filename=search.txt'
+        )
+        assert b"search-export-admin-ciphertext" in response.data
+
+
+@pytest.mark.security
 def test_task_group_export_includes_shared_items():
     app = _build_app()
     with app.app_context():
         db.create_all()
-        owner = _seed_user(
-            "tg-export-owner", password="owner-user-password", admin=False
-        )
+        admin = _seed_admin_user()
         _seed_user("tg-export-other", password="other-user-password", admin=False)
         _seed_settings()
 
@@ -3298,7 +3666,7 @@ def test_task_group_export_includes_shared_items():
         db.session.commit()
 
         client = app.test_client()
-        _login_client_as_user(client, owner)
+        _login_client_as_user(client, admin)
 
         response = client.get("/task_groups/export")
         assert response.status_code == 200
@@ -3307,12 +3675,48 @@ def test_task_group_export_includes_shared_items():
         exported_task_names = [entry["name"] for entry in payload["tasks"]]
         exported_group_names = [entry["name"] for entry in payload["task_groups"]]
 
-        assert payload["exported_by"] == owner.username
+        assert payload["exported_by"] == admin.username
         assert "owner" not in payload
         assert "owner-mask" in exported_task_names
         assert "other-mask" in exported_task_names
         assert "owner-group" in exported_group_names
         assert "other-group" in exported_group_names
+
+
+@pytest.mark.security
+def test_task_group_export_requires_admin():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        user = _seed_user(
+            "tg-export-viewer", password="viewer-user-password", admin=False
+        )
+        _seed_settings()
+
+        task = Tasks(
+            name="tg-export-task",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a?a",
+        )
+        db.session.add(task)
+        db.session.commit()
+        task_group = TaskGroups(name="tg-export-group", tasks=json.dumps([task.id]))
+        db.session.add(task_group)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, user)
+
+        page_response = client.get("/task_groups")
+        assert page_response.status_code == 200
+        assert b"Export JSON" not in page_response.data
+
+        export_response = client.get("/task_groups/export", follow_redirects=True)
+        assert export_response.status_code == 200
+        assert b"Permission Denied" in export_response.data
+        assert export_response.headers.get("Content-Disposition") is None
 
 
 @pytest.mark.security
@@ -3349,7 +3753,14 @@ def test_non_owner_can_view_scheduled_jobs_but_cannot_stop_them():
             owner_id=owner.id,
             hashfile_id=hashfile.id,
         )
-        db.session.add(job)
+        draft_job = Jobs(
+            name="draft-hidden-job",
+            status="Incomplete",
+            domain_id=domain.id,
+            owner_id=owner.id,
+            hashfile_id=None,
+        )
+        db.session.add_all([job, draft_job])
         db.session.commit()
 
         job_task = JobTasks(job_id=job.id, task_id=task.id, status="Queued")
@@ -3366,6 +3777,41 @@ def test_non_owner_can_view_scheduled_jobs_but_cannot_stop_them():
         jobs_response = client.get("/jobs")
         assert jobs_response.status_code == 200
         assert b"queued-visible-job" in jobs_response.data
+        assert b"draft-hidden-job" not in jobs_response.data
+        assert (
+            f"/analytics?domain_id={job.domain_id}&hashfile_id={hashfile.id}".encode()
+            not in jobs_response.data
+        )
+
+        tasks_response = client.get(f"/jobs/{job.id}/tasks")
+        assert tasks_response.status_code == 200
+        assert b"visible-task" in tasks_response.data
+        assert b"Read-only view" in tasks_response.data
+        assert f"/jobs/{job.id}/assign_task/".encode() not in tasks_response.data
+        assert f"/jobs/{job.id}/remove_all_tasks".encode() not in tasks_response.data
+
+        summary_response = client.get(f"/jobs/{job.id}/summary")
+        assert summary_response.status_code == 200
+        assert b"queued-visible-job" in summary_response.data
+        assert b"Read-only view" in summary_response.data
+        assert b"Only the job owner or an admin can finalize or edit this job." in summary_response.data
+
+        draft_tasks_response = client.get(f"/jobs/{draft_job.id}/tasks")
+        assert draft_tasks_response.status_code == 302
+
+        draft_summary_response = client.get(f"/jobs/{draft_job.id}/summary")
+        assert draft_summary_response.status_code == 302
+
+        cracked_view_response = client.get(
+            f"/jobs/{job.id}/assigned_hashfile/{hashfile.id}"
+        )
+        assert cracked_view_response.status_code == 302
+
+        summary_post_response = client.post(
+            f"/jobs/{job.id}/summary",
+            data={"submit": "Complete"},
+        )
+        assert summary_post_response.status_code == 302
 
         stop_response = client.post(f"/jobs/stop/{job.id}")
         assert stop_response.status_code == 302

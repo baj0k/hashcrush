@@ -104,7 +104,10 @@ Jobs contain a series of tasks (hashcat commands). Jobs also have an associated 
                                     {% endif %}
                                 {% endif %}
                                 {% if job.status != 'Incomplete' %}
-                                    <a class="fa fa-pie-chart btn btn-warning" href="/analytics?domain_id={{job.domain_id}}&hashfile_id={{job.hashfile_id}}" role="button" title=Analytics></a>
+                                    <a class="fa fa-eye btn btn-outline-info" href="{{ url_for('jobs.jobs_summary', job_id=job.id) }}" role="button" title="View"></a>
+                                    {% if can_manage_job %}
+                                        <a class="fa fa-pie-chart btn btn-warning" href="/analytics?domain_id={{job.domain_id}}&hashfile_id={{job.hashfile_id}}" role="button" title=Analytics></a>
+                                    {% endif %}
                                     <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{job.id}}" title=Info></button>
                                 {% endif %}
                                 {% if can_manage_job and job.status != 'Running' and job.status != 'Queued' and job.status != 'Paused' %}
@@ -185,28 +188,30 @@ Jobs contain a series of tasks (hashcat commands). Jobs also have an associated 
     </div>
     {% endfor %}
     {% for job in jobs %}
-    <!-- DeleteModal -->
-    <div class="modal fade" id="deleteModal{{job.id}}" tabindex="-1" aria-labelledby="deleteModal{{job.id}}Label" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-header">
-            <h5 class="modal-title" id="deleteModal{{job.id}}Label">Delete: {{job.name}} ?</h5>
-            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                <span aria-hidden="true">&times;</span>
-            </button>
+        {% if current_user.admin or job.owner_id == current_user.id %}
+        <!-- DeleteModal -->
+        <div class="modal fade" id="deleteModal{{job.id}}" tabindex="-1" aria-labelledby="deleteModal{{job.id}}Label" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                <h5 class="modal-title" id="deleteModal{{job.id}}Label">Delete: {{job.name}} ?</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+                </div>
+                <div class="modal-body">
+                This will permanently delete the job. Are you sure you want to continue?
+                </div>
+                <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
+                <form action="{{ url_for('jobs.jobs_delete', job_id=job.id) }}" method="POST">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input class="btn btn-danger" type="submit" value="Delete">
+                </form>
+                </div>
             </div>
-            <div class="modal-body">
-            This will permanently delete the job. Are you sure you want to continue?
-            </div>
-            <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
-            <form action="{{ url_for('jobs.jobs_delete', job_id=job.id) }}" method="POST">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input class="btn btn-danger" type="submit" value="Delete">
-            </form>
             </div>
         </div>
-        </div>
-    </div>
+        {% endif %}
     {% endfor %}
 {% endblock content %}

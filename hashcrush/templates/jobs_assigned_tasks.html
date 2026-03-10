@@ -9,6 +9,9 @@
 <h1>Tasks</h1>
 <br>
 The following are tasks that are assigned to the job. Each task is run once.
+{% if not can_manage_job %}
+<p class="text-muted mb-0">Read-only view. Only the job owner or an admin can edit assigned tasks.</p>
+{% endif %}
 <br>
 <br>
 <br>
@@ -23,7 +26,7 @@ The following are tasks that are assigned to the job. Each task is run once.
                     <th scope="col">Type</th>
                     <th scope="col">Control
                         <!--Only show delete all if tasks have been added--> 
-                        {% if (job_tasks is defined) and job_tasks.count() > 0 %}   
+                        {% if can_manage_job and (job_tasks is defined) and job_tasks.count() > 0 %}   
                             <a id="remove_all" class="fa fa-trash btn btn-danger btn-sm" data-toggle="modal" data-target="#deleteModal" role="button" title="Remove all assigned tasks for this Job"></a>
                         {% endif %}
                     </th>
@@ -47,21 +50,26 @@ The following are tasks that are assigned to the job. Each task is run once.
                                 {% endfor %}
                             </td>
                             <td>
-                                <form action="{{ url_for('jobs.jobs_move_task_up', job_id=job.id, task_id=job_task.task_id) }}" method="POST" class="d-inline">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                    <button type="submit" class="fa fa-arrow-up btn btn-success btn-sm" title="Move Up"></button>
-                                </form>
-                                <form action="{{ url_for('jobs.jobs_move_task_down', job_id=job.id, task_id=job_task.task_id) }}" method="POST" class="d-inline">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                    <button type="submit" class="fa fa-arrow-down btn btn-success btn-sm" title="Move Down"></button>
-                                </form>
-                                <form action="{{ url_for('jobs.jobs_remove_task', job_id=job.id, task_id=job_task.task_id) }}" method="POST" class="d-inline">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                    <button type="submit" class="fa fa-trash btn btn-danger btn-sm" title="Delete"></button>
-                                </form>
+                                {% if can_manage_job %}
+                                    <form action="{{ url_for('jobs.jobs_move_task_up', job_id=job.id, task_id=job_task.task_id) }}" method="POST" class="d-inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="fa fa-arrow-up btn btn-success btn-sm" title="Move Up"></button>
+                                    </form>
+                                    <form action="{{ url_for('jobs.jobs_move_task_down', job_id=job.id, task_id=job_task.task_id) }}" method="POST" class="d-inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="fa fa-arrow-down btn btn-success btn-sm" title="Move Down"></button>
+                                    </form>
+                                    <form action="{{ url_for('jobs.jobs_remove_task', job_id=job.id, task_id=job_task.task_id) }}" method="POST" class="d-inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="fa fa-trash btn btn-danger btn-sm" title="Delete"></button>
+                                    </form>
+                                {% else %}
+                                    <span class="text-muted">Read-only</span>
+                                {% endif %}
                             </td>
                         </tr>
                     {% endfor %}
+                    {% if can_manage_job %}
                     <tr>
                         <td></td>
                         <td></td>
@@ -132,10 +140,16 @@ The following are tasks that are assigned to the job. Each task is run once.
                             </div>
                         </td>
                     </tr>
+                    {% endif %}
                 </tbody>
               </table>
         </div>
     </article>
-    <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_assigned_hashfile', job_id=job.id) }}">Back</a>
-    <a class="btn btn-primary pull-right" href="/jobs/{{job.id}}/summary" role="button">Next</a>
+    {% if can_manage_job %}
+        <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_assigned_hashfile', job_id=job.id) }}">Back</a>
+        <a class="btn btn-primary pull-right" href="/jobs/{{job.id}}/summary" role="button">Next</a>
+    {% else %}
+        <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_list') }}">Back to Jobs</a>
+        <a class="btn btn-primary pull-right" href="{{ url_for('jobs.jobs_summary', job_id=job.id) }}" role="button">View Summary</a>
+    {% endif %}
 {% endblock content %}

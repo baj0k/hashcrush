@@ -5,6 +5,16 @@
 <br>
 The following are domains currently configured in HashCrush. All jobs, passwords, and hashes are assigned to a single domain. Deleting a domain removes all associated data.
 <br>
+{% if current_user.admin %}
+<form action="{{ url_for('domains.domains_add') }}" method="POST" class="form-inline mt-2">
+    {{ domainsForm.hidden_tag() }}
+    <label class="sr-only" for="{{ domainsForm.name.id }}">Domain Name</label>
+    {{ domainsForm.name(class="form-control form-control-sm mr-2", placeholder="New domain name") }}
+    {{ domainsForm.submit(class="btn btn-success btn-sm") }}
+</form>
+{% else %}
+<p class="text-muted mb-0 mt-2">Shared domains are visible to all users. Admins manage additions and deletions.</p>
+{% endif %}
 <br>
 <br>
 {% endblock header %}
@@ -82,6 +92,7 @@ The following are domains currently configured in HashCrush. All jobs, passwords
     {% for domain in domains %}
     {% if current_user.admin %}
         <!-- DeleteModal -->
+        {% set delete_impact = domain_delete_impacts.get(domain.id, {}) %}
         <div class="modal fade" id="deleteModal{{domain.id}}" tabindex="-1" aria-labelledby="deleteModal{{domain.id}}Label" aria-hidden="true">
             <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
@@ -92,13 +103,34 @@ The following are domains currently configured in HashCrush. All jobs, passwords
                 </button>
                 </div>
                 <div class="modal-body">
-                This will permanently delete the domain and any associated hashfiles and hashes. Are you sure you want to continue?
+                <p>This will permanently delete the domain and any associated inactive shared data.</p>
+                <ul class="mb-3">
+                    <li>Active jobs blocking deletion: {{ delete_impact.get('active_jobs', 0) }}</li>
+                    <li>Inactive jobs to delete: {{ delete_impact.get('inactive_jobs', 0) }}</li>
+                    <li>Hashfiles to delete: {{ delete_impact.get('hashfiles', 0) }}</li>
+                    <li>Hash associations to remove: {{ delete_impact.get('hash_links', 0) }}</li>
+                    <li>Orphaned uncracked hashes to remove: {{ delete_impact.get('orphan_uncracked_hashes', 0) }}</li>
+                </ul>
+                <p class="mb-2">Type <strong>{{ domain.name }}</strong> to confirm deletion.</p>
                 </div>
                 <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
                 <form action="{{ url_for('domains.domains_delete', domain_id=domain.id) }}" method="POST">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <input class="btn btn-danger" type="submit" value="Delete">
+                    <input
+                        class="form-control form-control-sm mb-2"
+                        type="text"
+                        name="confirm_name"
+                        placeholder="{{ domain.name }}"
+                        autocomplete="off"
+                        required
+                    >
+                    <input
+                        class="btn btn-danger"
+                        type="submit"
+                        value="Delete"
+                        {% if delete_impact.get('active_jobs', 0) > 0 %}disabled{% endif %}
+                    >
                 </form>
                 </div>
             </div>

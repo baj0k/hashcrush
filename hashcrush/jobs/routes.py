@@ -18,6 +18,7 @@ from flask_login import current_user, login_required
 from sqlalchemy import case, func
 from sqlalchemy.exc import IntegrityError
 
+from hashcrush.authz import PUBLIC_JOB_VIEW_STATUSES, visible_jobs_query
 from hashcrush.jobs.forms import JobsForm, JobsNewHashFileForm, JobSummaryForm
 from hashcrush.models import (
     Domains,
@@ -55,6 +56,18 @@ def _utc_now_naive() -> datetime:
 
 def _can_manage_job(job: Jobs | None) -> bool:
     return bool(job and (current_user.admin or job.owner_id == current_user.id))
+
+
+def _job_is_publicly_viewable(job: Jobs | None) -> bool:
+    return bool(job and job.status in PUBLIC_JOB_VIEW_STATUSES)
+
+
+def _can_view_job(job: Jobs | None) -> bool:
+    return bool(job and (_can_manage_job(job) or _job_is_publicly_viewable(job)))
+
+
+def _visible_jobs_query():
+    return visible_jobs_query()
 
 
 def _job_allows_task_mutation(job: Jobs) -> bool:
@@ -138,7 +151,7 @@ def _parse_jobtask_progress(progress_payload: str | None) -> tuple[str | None, s
 @login_required
 def jobs_list():
     """Function to return list of Jobs"""
-    jobs = Jobs.query.order_by(Jobs.created_at.desc()).all()
+    jobs = _visible_jobs_query().order_by(Jobs.created_at.desc()).all()
     domains = _visible_domains_query().all()
     users = Users.query.all()
     hashfiles = Hashfiles.query.all()
@@ -446,7 +459,7 @@ def jobs_assigned_hashfile_cracked(job_id, hashfile_id):
 def jobs_list_tasks(job_id):
     """Function to list tasks for a given job"""    
     job = Jobs.query.get_or_404(job_id)
-    if not _can_manage_job(job):
+    if not _can_view_job(job):
         flash('You do not have rights to view this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
@@ -455,7 +468,15 @@ def jobs_list_tasks(job_id):
     task_groups = TaskGroups.query.all()
     # Right now we're doing nested loops in the template, this could probably be solved with a left/join select
 
-    return render_template('jobs_assigned_tasks.html', title='Jobs Assigned Tasks', job=job, tasks=tasks, job_tasks=job_tasks, task_groups=task_groups)
+    return render_template(
+        'jobs_assigned_tasks.html',
+        title='Jobs Assigned Tasks',
+        job=job,
+        tasks=tasks,
+        job_tasks=job_tasks,
+        task_groups=task_groups,
+        can_manage_job=_can_manage_job(job),
+    )
 
 @jobs.route("/jobs/<int:job_id>/assign_task/<int:task_id>", methods=['POST'])
 @login_required
@@ -733,7 +754,7 @@ def jobs_delete(job_id):
 def jobs_summary(job_id):
     """Function to present job summary"""    
     job = Jobs.query.get_or_404(job_id)
-    if not _can_manage_job(job):
+    if not _can_view_job(job):
         flash('You do not have rights to view this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
@@ -765,6 +786,11 @@ def jobs_summary(job_id):
     )
     cracked_rate = str(cracked_cnt) + '/' + str(hash_total)
 
+    can_manage_job = _can_manage_job(job)
+    if request.method == 'POST' and not can_manage_job:
+        flash('You do not have rights to modify this job!', 'danger')
+        return redirect(url_for('jobs.jobs_summary', job_id=job.id))
+
     if form.validate_on_submit():
         for job_task in job_tasks:
             job_task.status = 'Ready'
@@ -777,7 +803,18 @@ def jobs_summary(job_id):
 
         return redirect(url_for('jobs.jobs_list'))
 
-    return render_template('jobs_summary.html', title='Job Summary', job=job, form=form, cracked_rate=cracked_rate, job_tasks=job_tasks, domain=domain, hashfile=hashfile, tasks=tasks)
+    return render_template(
+        'jobs_summary.html',
+        title='Job Summary',
+        job=job,
+        form=form,
+        cracked_rate=cracked_rate,
+        job_tasks=job_tasks,
+        domain=domain,
+        hashfile=hashfile,
+        tasks=tasks,
+        can_manage_job=can_manage_job,
+    )
 
 @jobs.route("/jobs/start/<int:job_id>", methods=['POST'])
 @login_required
@@ -903,4 +940,3 @@ def jobs_resume(job_id):
     db.session.commit()
     flash('Job has been resumed!', 'success')
     return redirect(url_for('jobs.jobs_list'))
-

@@ -38,6 +38,7 @@
                                     Resources
                                 </a>
                                 <div class="dropdown-menu dropdown-menu-right hc-dropdown" aria-labelledby="resourcesMenu">
+                                    <a class="dropdown-item" href="{{ url_for('domains.domains_list') }}">Domains</a>
                                     <a class="dropdown-item" href="{{ url_for('wordlists.wordlists_list') }}">Wordlists</a>
                                     <a class="dropdown-item" href="{{ url_for('rules.rules_list') }}">Rules</a>
                                     <a class="dropdown-item" href="{{ url_for('hashfiles.hashfiles_list') }}">Hashfiles</a>
@@ -52,7 +53,6 @@
                                 </a>
                                 <div class="dropdown-menu dropdown-menu-right hc-dropdown" aria-labelledby="manageMenu">
                                     {% if current_user.admin %}
-                                    <a class="dropdown-item" href="{{ url_for('domains.domains_list') }}">Domains</a>
                                     <a class="dropdown-item" href="{{ url_for('settings.settings_list') }}">Settings</a>
                                     <a class="dropdown-item" href="{{ url_for('users.users_list') }}">User Accounts</a>
                                     <div class="dropdown-divider"></div>

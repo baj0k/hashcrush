@@ -6,7 +6,7 @@ from flask_login import login_required
 from sqlalchemy.exc import IntegrityError
 
 from hashcrush.authz import admin_required_redirect
-from hashcrush.models import Jobs, JobTasks, Rules, Tasks, db
+from hashcrush.models import Rules, Tasks, db
 from hashcrush.rules.forms import RulesForm
 from hashcrush.utils.utils import get_filehash, get_linecount
 
@@ -126,14 +126,13 @@ def rules_list():
     """Function to return list of rules"""
     rules = Rules.query.all()
     tasks = Tasks.query.all()
-    jobs = Jobs.query.all()
-    visible_job_ids = [job.id for job in jobs]
-    jobtasks = (
-        JobTasks.query.filter(JobTasks.job_id.in_(visible_job_ids)).all()
-        if visible_job_ids
-        else []
+    return render_template(
+        'rules.html',
+        title='Rules',
+        rules=rules,
+        tasks=tasks,
+        rules_root=_rules_root_path(),
     )
-    return render_template('rules.html', title='Rules', rules=rules, tasks=tasks, jobs=jobs, jobtasks=jobtasks, rules_root=_rules_root_path())
 
 
 @rules.route("/rules/add", methods=['GET', 'POST'])

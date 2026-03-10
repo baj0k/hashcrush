@@ -3,8 +3,16 @@ import io
 import operator
 import re
 
-from flask import Blueprint, redirect, render_template, request, send_file
-from flask_login import login_required
+from flask import (
+    Blueprint,
+    flash,
+    redirect,
+    render_template,
+    request,
+    send_file,
+    url_for,
+)
+from flask_login import current_user, login_required
 from sqlalchemy import func
 
 from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles, db
@@ -436,6 +444,10 @@ def get_analytics():
 @login_required
 def analytics_download_hashes():
     """Function to download hashes."""
+    if not current_user.admin:
+        flash('Permission Denied', 'danger')
+        return redirect(url_for('analytics.get_analytics'))
+
     export_type = (request.args.get('type') or '').strip().lower()
     if export_type == 'found':
         filename = 'found'

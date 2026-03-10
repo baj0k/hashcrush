@@ -11,7 +11,7 @@ from flask import (
     send_file,
     url_for,
 )
-from flask_login import login_required
+from flask_login import current_user, login_required
 from sqlalchemy import func, or_
 
 from hashcrush import jinja_hex_decode
@@ -125,7 +125,10 @@ def searches_list():
         flash('No results found', 'warning')
 
     if results and "export" in request.form: #Export Results
-        return export_results(domains, results, hashfiles, search_form.export_type.data)
+        if not current_user.admin:
+            flash('Permission Denied', 'danger')
+        else:
+            return export_results(domains, results, hashfiles, search_form.export_type.data)
 
     return render_template('search.html', title='Search', searchForm=search_form, domains=domains, results=results, hashfiles=hashfiles )
 

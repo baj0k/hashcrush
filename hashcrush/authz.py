@@ -4,6 +4,13 @@ from functools import wraps
 
 from flask import flash, redirect, url_for
 from flask_login import current_user
+from sqlalchemy import or_
+
+from hashcrush.models import Jobs
+
+PUBLIC_JOB_VIEW_STATUSES = frozenset(
+    {"Ready", "Queued", "Running", "Paused", "Completed", "Canceled"}
+)
 
 
 def admin_required_redirect(endpoint: str, message: str = "Permission Denied"):
@@ -20,3 +27,16 @@ def admin_required_redirect(endpoint: str, message: str = "Permission Denied"):
         return wrapped_view
 
     return decorator
+
+
+def visible_jobs_query():
+    """Return the job query filtered to what the current user may see."""
+
+    if getattr(current_user, "admin", False):
+        return Jobs.query
+    return Jobs.query.filter(
+        or_(
+            Jobs.owner_id == current_user.id,
+            Jobs.status.in_(PUBLIC_JOB_VIEW_STATUSES),
+        )
+    )
