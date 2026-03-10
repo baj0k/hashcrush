@@ -5,7 +5,7 @@
 ## Requirements
 1. Python 3.10+
 2. MySQL running locally
-3. Administrative privileges for local MySQL bootstrap during setup.py
+3. Administrative privileges for local MySQL bootstrap during `hashcrush.py setup`
 4. Hashcat configured with drivers required by your hardware
 
 ## Installation
@@ -22,14 +22,19 @@ sudo mysql_secure_installation
 git clone https://github.com/baj0k/hashcrush.git
 cd hashcrush
 sudo apt install python3 python3-pip python3-flask -y
-./setup.py # Follow prompts
+python3 ./hashcrush.py setup
 ```
+Disposable live-test environment bootstrap:
+```bash
+python3 ./hashcrush.py setup --test
+```
+`hashcrush.py setup --test` rebuilds the DB, creates dummy users/data, and writes `.env.test` for E2E runs.
 ##### Important Setup Warning
 
-`setup.py` is destructive.
+`hashcrush.py setup` is destructive.
 
 It rebuilds the `hashcrush` database from scratch and overwrites `hashcrush/config.conf`.
-Do not run setup.py on an instance where data must be preserved.
+Do not run it on an instance where data must be preserved.
 
 #### 3) It's alive
 ```
@@ -44,7 +49,7 @@ Production deployments should provide certificate paths via environment variable
 - `HASHCRUSH_TRUST_X_FORWARDED_FOR` (set only behind a trusted reverse proxy)
 
 If either TLS file is missing/unreadable, startup fails with an explicit error.
-`setup.py` now defaults to generating the certificate and key under `/etc/hashcrush/ssl`.
+`hashcrush.py setup` now defaults to generating the certificate and key under `/etc/hashcrush/ssl`.
 It applies restrictive permissions (`cert.pem` `0644`, `key.pem` `0600`) and prompts for another writable directory if `/etc/hashcrush/ssl` is not writable.
 
 
@@ -70,9 +75,11 @@ Optional flags:
 - --debug
 - --reset-admin-password
 - --reset-admin-password --admin-username <admin_username>
+- setup
+- setup --test
 
 ## External Wordlists and Rules
-`setup.py` prompts for paths and writes them to `hashcrush/config.conf`.
+`hashcrush.py setup` prompts for paths and writes them to `hashcrush/config.conf`.
 They should point to external repositories such as SecLists and hashcat rules:
 
 ```ini
@@ -99,6 +106,25 @@ python3 -m pip install -r requirements.txt -r requirements-test.txt
 python3 -m playwright install chromium
 ```
 
+Fastest disposable live-test path:
+```bash
+python3 ./hashcrush.py setup --test
+python3 ./hashcrush.py
+./scripts/test-all.sh
+```
+
+Create an E2E env file from the checked-in template:
+```bash
+cp .env.test.example .env.test
+```
+
+Print recommended IDs, usernames, and task names from the current database:
+```bash
+python3 ./scripts/print_e2e_context.py
+```
+
+Update `.env.test` with the real passwords and any IDs you want to override.
+
 Run non-E2E tests only (no live server required):
 ```bash
 PYTHONPATH=. pytest -q -m "not e2e" -rs
@@ -113,31 +139,35 @@ python3 ./hashcrush.py
 
 Terminal 2 (set E2E variables and run):
 ```bash
+./scripts/test-all.sh
+```
+
+`scripts/test-all.sh` auto-loads `.env.test`, runs non-E2E tests first, then runs E2E tests.
+
+Manual E2E environment example:
+```bash
 export HASHCRUSH_E2E_BASE_URL="https://127.0.0.1:8443"
 export HASHCRUSH_E2E_VERIFY_TLS=0
 export HASHCRUSH_E2E_USERNAME="admin"
 export HASHCRUSH_E2E_PASSWORD="<admin-password>"
-PYTHONPATH=. pytest -q -rs
-```
-
-Optional E2E variables to reduce skips:
-```bash
 export HASHCRUSH_E2E_DOMAIN_ID="1"
+export HASHCRUSH_E2E_DOMAIN_NAME="E2E Domain"
 export HASHCRUSH_E2E_HASHFILE_ID="1"
 export HASHCRUSH_E2E_TASK_ID="1"
 export HASHCRUSH_E2E_TASK_NAME="?a [1]"
 export HASHCRUSH_E2E_SECOND_USERNAME="user2"
 export HASHCRUSH_E2E_SECOND_PASSWORD="<user2-password>"
 export HASHCRUSH_E2E_SECOND_IS_ADMIN=0
+PYTHONPATH=. pytest -q -rs
 ```
 
-You can store these values in `.env.test` at repo root; tests auto-load it.
+You can store these values in `.env.test` at repo root; E2E tests auto-load it.
 
 Common skip/failure causes:
 - `External server not reachable`: app is not running or `HASHCRUSH_E2E_BASE_URL` is wrong.
 - Login-related skips: invalid E2E credentials or account throttled by login protection.
 - HTTP/CSRF issues: use HTTPS endpoint for E2E (`https://127.0.0.1:8443`).
-
+- Missing E2E IDs/names: run `python3 ./scripts/print_e2e_context.py` and copy the recommended exports into `.env.test`.
 ## Docker
 
-Currently completely unreliable. 
+Currently completely unreliable.

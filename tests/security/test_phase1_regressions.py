@@ -70,6 +70,16 @@ def _load_cli_module():
     return module
 
 
+def _load_bootstrap_module():
+    project_root = Path(__file__).resolve().parents[2]
+    script_path = project_root / "bootstrap_cli.py"
+    spec = importlib.util.spec_from_file_location("hashcrush_bootstrap_script", script_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
 def _seed_admin_user() -> Users:
     valid_password_hash = bcrypt.generate_password_hash("test-admin-password").decode(
         "utf-8"
@@ -161,6 +171,73 @@ def test_cli_resolve_ssl_context_rejects_missing_files(tmp_path):
 
     with pytest.raises(RuntimeError, match="SSL certificate file not found"):
         cli_module._resolve_ssl_context(_App())
+
+
+@pytest.mark.security
+def test_setup_parse_args_accepts_test_flag():
+    bootstrap_module = _load_bootstrap_module()
+    assert bootstrap_module.parse_args(["--test"]).test_mode is True
+
+
+@pytest.mark.security
+def test_hashcrush_cli_setup_subcommand_delegates_to_bootstrap(monkeypatch):
+    cli_module = _load_cli_module()
+    captured = {}
+
+    class _BootstrapModule:
+        @staticmethod
+        def main(argv=None):
+            captured["argv"] = argv
+            return 23
+
+    monkeypatch.setattr(cli_module, "_load_bootstrap_cli", lambda: _BootstrapModule())
+
+    result = cli_module.cli(["hashcrush.py", "setup", "--test"])
+
+    assert result == 23
+    assert captured["argv"] == ["--test"]
+
+
+@pytest.mark.security
+def test_hashcrush_cli_rejects_unknown_root_command():
+    cli_module = _load_cli_module()
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_module.cli(["hashcrush.py", "legacy-mode"])
+
+    assert exc_info.value.code == 2
+
+
+@pytest.mark.security
+def test_setup_seed_test_environment_creates_dummy_fixture_set(tmp_path, monkeypatch):
+    bootstrap_module = _load_bootstrap_module()
+    app = _build_app()
+    runtime_path = tmp_path / "runtime"
+    env_path = tmp_path / ".env.test"
+
+    with app.app_context():
+        db.create_all()
+
+    monkeypatch.setattr(bootstrap_module, "_build_seed_app", lambda: app)
+
+    values = bootstrap_module._seed_test_environment(str(runtime_path), str(env_path))
+
+    with app.app_context():
+        assert Users.query.filter_by(username=bootstrap_module.E2E_ADMIN_USERNAME).count() == 1
+        assert Users.query.filter_by(username=bootstrap_module.E2E_SECOND_USERNAME).count() == 1
+        assert Domains.query.filter_by(name=bootstrap_module.E2E_DOMAIN_NAME).count() == 1
+        assert Hashfiles.query.filter_by(name=bootstrap_module.E2E_SAMPLE_HASHFILE_NAME).count() == 1
+        assert Tasks.query.filter_by(name=bootstrap_module.E2E_DICTIONARY_TASK_NAME).count() == 1
+        assert Tasks.query.filter_by(name=bootstrap_module.E2E_DICTIONARY_RULE_TASK_NAME).count() == 1
+        assert Jobs.query.filter_by(name=bootstrap_module.E2E_SAMPLE_JOB_NAME).count() == 1
+        assert Wordlists.query.filter_by(name=bootstrap_module.E2E_WORDLIST_NAME).count() == 1
+        assert Rules.query.filter_by(name=bootstrap_module.E2E_RULE_NAME).count() == 1
+
+    env_text = env_path.read_text(encoding="utf-8")
+    assert "HASHCRUSH_E2E_USERNAME=\"admin\"" in env_text
+    assert bootstrap_module.E2E_ADMIN_PASSWORD in env_text
+    assert values["HASHCRUSH_E2E_DOMAIN_NAME"] == bootstrap_module.E2E_DOMAIN_NAME
+    assert values["HASHCRUSH_E2E_TASK_NAME"] == bootstrap_module.E2E_MASK_TASK_NAME
 
 
 @pytest.mark.security
