@@ -11,13 +11,13 @@ def test_ensure_settings_cli_adds_settings_only_when_missing():
     app = _build_app()
     with app.app_context():
         db.create_all()
-        assert Settings.query.count() == 0
+        assert _count_rows(Settings) == 0
 
         cli_module.ensure_settings_cli(db)
-        assert Settings.query.count() == 1
+        assert _count_rows(Settings) == 1
 
         cli_module.ensure_settings_cli(db)
-        assert Settings.query.count() == 1
+        assert _count_rows(Settings) == 1
 
 @pytest.mark.security
 def test_cli_resolve_ssl_context_uses_configured_paths(tmp_path):
@@ -135,15 +135,15 @@ def test_setup_seed_test_environment_creates_dummy_fixture_set(tmp_path, monkeyp
     values = bootstrap_module._seed_test_environment(str(runtime_path), str(env_path))
 
     with app.app_context():
-        assert Users.query.filter_by(username=bootstrap_module.E2E_ADMIN_USERNAME).count() == 1
-        assert Users.query.filter_by(username=bootstrap_module.E2E_SECOND_USERNAME).count() == 1
-        assert Domains.query.filter_by(name=bootstrap_module.E2E_DOMAIN_NAME).count() == 1
-        assert Hashfiles.query.filter_by(name=bootstrap_module.E2E_SAMPLE_HASHFILE_NAME).count() == 1
-        assert Tasks.query.filter_by(name=bootstrap_module.E2E_DICTIONARY_TASK_NAME).count() == 1
-        assert Tasks.query.filter_by(name=bootstrap_module.E2E_DICTIONARY_RULE_TASK_NAME).count() == 1
-        assert Jobs.query.filter_by(name=bootstrap_module.E2E_SAMPLE_JOB_NAME).count() == 1
-        assert Wordlists.query.filter_by(name=bootstrap_module.E2E_WORDLIST_NAME).count() == 1
-        assert Rules.query.filter_by(name=bootstrap_module.E2E_RULE_NAME).count() == 1
+        assert _count_rows(Users, username=bootstrap_module.E2E_ADMIN_USERNAME) == 1
+        assert _count_rows(Users, username=bootstrap_module.E2E_SECOND_USERNAME) == 1
+        assert _count_rows(Domains, name=bootstrap_module.E2E_DOMAIN_NAME) == 1
+        assert _count_rows(Hashfiles, name=bootstrap_module.E2E_SAMPLE_HASHFILE_NAME) == 1
+        assert _count_rows(Tasks, name=bootstrap_module.E2E_DICTIONARY_TASK_NAME) == 1
+        assert _count_rows(Tasks, name=bootstrap_module.E2E_DICTIONARY_RULE_TASK_NAME) == 1
+        assert _count_rows(Jobs, name=bootstrap_module.E2E_SAMPLE_JOB_NAME) == 1
+        assert _count_rows(Wordlists, name=bootstrap_module.E2E_WORDLIST_NAME) == 1
+        assert _count_rows(Rules, name=bootstrap_module.E2E_RULE_NAME) == 1
 
     env_text = env_path.read_text(encoding="utf-8")
     assert "HASHCRUSH_E2E_USERNAME=\"admin\"" in env_text
@@ -184,11 +184,11 @@ def test_upgrade_database_rejects_unversioned_non_empty_schema():
             upgrade_database()
 
         assert not inspect(db.engine).has_table(SchemaVersion.__tablename__)
-        assert Users.query.filter_by(id=user.id).count() == 1
-        assert Domains.query.filter_by(name="legacy-domain").count() == 1
+        assert _count_rows(Users, id=user.id) == 1
+        assert _count_rows(Domains, name="legacy-domain") == 1
 
 @pytest.mark.security
-def test_upgrade_database_migrates_v1_schema_to_v2_audit_log_table():
+def test_upgrade_database_migrates_v1_schema_forward_to_current_version():
     app = _build_app()
     with app.app_context():
         from hashcrush.db_upgrade import CURRENT_SCHEMA_VERSION, upgrade_database
@@ -202,11 +202,11 @@ def test_upgrade_database_migrates_v1_schema_to_v2_audit_log_table():
         result = upgrade_database()
 
         assert inspect(db.engine).has_table(AuditLog.__tablename__)
-        assert [step.version for step in result.applied_steps] == [2, 3]
+        assert [step.version for step in result.applied_steps] == [2, 3, 4]
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
-def test_upgrade_database_migrates_v2_schema_to_v3_settings_cleanup():
+def test_upgrade_database_migrates_v2_schema_forward_to_current_version():
     app = _build_app()
     with app.app_context():
         from hashcrush.db_upgrade import CURRENT_SCHEMA_VERSION, upgrade_database
@@ -232,7 +232,61 @@ def test_upgrade_database_migrates_v2_schema_to_v3_settings_cleanup():
         }
         assert "retention_period" not in settings_columns
         assert "enabled_job_weights" not in settings_columns
-        assert [step.version for step in result.applied_steps] == [3]
+        assert [step.version for step in result.applied_steps] == [3, 4]
+        assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
+
+@pytest.mark.security
+def test_upgrade_database_migrates_v3_schema_to_v4_job_task_positions():
+    app = _build_app()
+    with app.app_context():
+        from hashcrush.db_upgrade import CURRENT_SCHEMA_VERSION, upgrade_database
+
+        db.create_all()
+        _seed_settings()
+        admin = _seed_admin_user()
+        domain = Domains(name="upgrade-domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        task_a = Tasks(name="upgrade-task-a", hc_attackmode="maskmode", hc_mask="?a")
+        task_b = Tasks(name="upgrade-task-b", hc_attackmode="maskmode", hc_mask="?a?a")
+        db.session.add_all([task_a, task_b])
+        db.session.commit()
+
+        job = Jobs(
+            name="upgrade-job",
+            status="Incomplete",
+            domain_id=domain.id,
+            owner_id=admin.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        db.session.add_all(
+            [
+                JobTasks(job_id=job.id, task_id=task_a.id, status="Not Started"),
+                JobTasks(job_id=job.id, task_id=task_b.id, status="Not Started"),
+            ]
+        )
+        db.session.add(SchemaVersion(id=1, version=3, app_version="1.0"))
+        db.session.commit()
+        db.session.execute(text("UPDATE job_tasks SET position = 0"))
+        db.session.execute(text("DROP INDEX IF EXISTS ix_job_tasks_job_id_position"))
+        db.session.commit()
+
+        result = upgrade_database()
+
+        persisted = _all_rows(
+            JobTasks,
+            job_id=job.id,
+            order_by=(JobTasks.position.asc(), JobTasks.id.asc()),
+        )
+        index_names = {
+            index["name"] for index in inspect(db.engine).get_indexes("job_tasks")
+        }
+        assert [step.version for step in result.applied_steps] == [4]
+        assert [row.position for row in persisted] == [0, 1]
+        assert "ix_job_tasks_job_id_position" in index_names
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -261,7 +315,7 @@ def test_add_default_tasks_seeds_maskmode_mask_set_and_group():
 
         add_default_tasks(db)
 
-        seeded_tasks = Tasks.query.order_by(Tasks.id.asc()).all()
+        seeded_tasks = _all_rows(Tasks, order_by=Tasks.id.asc())
         assert len(seeded_tasks) == 10
         expected_masks = ["?a" * length for length in range(1, 11)]
         expected_names = [
@@ -271,7 +325,7 @@ def test_add_default_tasks_seeds_maskmode_mask_set_and_group():
         assert [task.name for task in seeded_tasks] == expected_names
         assert all(task.hc_attackmode == "maskmode" for task in seeded_tasks)
 
-        task_group = TaskGroups.query.filter_by(name="maskmode 1-10").first()
+        task_group = _first_row(TaskGroups, name="maskmode 1-10")
         assert task_group is not None
         assert json.loads(task_group.tasks) == [task.id for task in seeded_tasks]
 
@@ -290,9 +344,9 @@ def test_add_default_tasks_no_longer_depend_on_admin_id():
 
         add_default_tasks(db)
 
-        seeded_tasks = Tasks.query.order_by(Tasks.id.asc()).all()
+        seeded_tasks = _all_rows(Tasks, order_by=Tasks.id.asc())
         assert seeded_tasks
-        task_group = TaskGroups.query.filter_by(name="maskmode 1-10").first()
+        task_group = _first_row(TaskGroups, name="maskmode 1-10")
         assert task_group is not None
         assert json.loads(task_group.tasks) == [task.id for task in seeded_tasks]
 
@@ -307,7 +361,7 @@ def test_setup_admin_password_flow_uses_existing_admin_when_admin_is_not_id_one(
             "placeholder-user", password="placeholder-user-password", admin=False
         )
         add_admin_user(db, bcrypt)
-        admin = Users.query.filter_by(admin=True).first()
+        admin = _first_row(Users, admin=True)
         assert admin is not None
         assert admin.id != placeholder.id
 
@@ -344,7 +398,7 @@ def test_setup_admin_password_flow_trims_username_input():
     with app.app_context():
         db.create_all()
         add_admin_user(db, bcrypt)
-        admin = Users.query.filter_by(admin=True).first()
+        admin = _first_row(Users, admin=True)
         assert admin is not None
 
         client = app.test_client()
@@ -373,7 +427,7 @@ def test_setup_admin_password_flow_handles_duplicate_username_cleanly():
             "existing-user", password="existing-user-password", admin=False
         )
         add_admin_user(db, bcrypt)
-        admin = Users.query.filter_by(admin=True).first()
+        admin = _first_row(Users, admin=True)
         assert admin is not None
         assert admin.id != existing_user.id
 
@@ -686,8 +740,8 @@ def test_setup_defaults_no_longer_seeds_rules_or_wordlists():
 
         setup_defaults_if_needed()
 
-        assert Rules.query.count() == 0
-        assert Wordlists.query.count() == 0
+        assert _count_rows(Rules) == 0
+        assert _count_rows(Wordlists) == 0
 
 @pytest.mark.security
 def test_rules_selectable_files_support_nested_folders(tmp_path):
@@ -867,7 +921,7 @@ def test_config_prefers_database_uri_from_config(tmp_path, monkeypatch):
     config_path = tmp_path / "config.conf"
     config_path.write_text(
         "[database]\n"
-        "uri = postgresql+psycopg2://config-user:config-pass@db.example:5432/hashcrush\n\n"
+        "uri = postgresql+psycopg://config-user:config-pass@db.example:5432/hashcrush\n\n"
         "[app]\n"
         "secret_key = test-secret\n",
         encoding="utf-8",
@@ -887,7 +941,7 @@ def test_config_prefers_database_uri_from_config(tmp_path, monkeypatch):
 
     assert (
         config_module.Config.SQLALCHEMY_DATABASE_URI
-        == "postgresql+psycopg2://config-user:config-pass@db.example:5432/hashcrush"
+        == "postgresql+psycopg://config-user:config-pass@db.example:5432/hashcrush"
     )
 
 @pytest.mark.security
@@ -919,7 +973,7 @@ def test_config_builds_postgresql_uri_from_discrete_fields(tmp_path, monkeypatch
 
     assert (
         config_module.Config.SQLALCHEMY_DATABASE_URI
-        == "postgresql+psycopg2://app-user:app-pass@db.internal:5433/hashcrush_app"
+        == "postgresql+psycopg://app-user:app-pass@db.internal:5433/hashcrush_app"
     )
 
 @pytest.mark.security
@@ -1040,11 +1094,11 @@ def test_import_user_hash_dcc2_preserves_username_association(tmp_path):
             hash_type="2100",
         )
 
-        association = HashfileHashes.query.filter_by(hashfile_id=hashfile.id).first()
+        association = _first_row(HashfileHashes, hashfile_id=hashfile.id)
         assert association is not None
         assert bytes.fromhex(association.username).decode("latin-1") == "alice"
 
-        imported_hash = Hashes.query.get(association.hash_id)
+        imported_hash = db.session.get(Hashes, association.hash_id)
         assert imported_hash is not None
         assert imported_hash.ciphertext.startswith("$DCC2$10240#alice#")
 

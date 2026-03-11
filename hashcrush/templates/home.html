@@ -17,39 +17,19 @@
                     <div class="card-header">
                         <h5 class="mb-0">
                             <button class="btn btn-link" data-toggle="collapse" data-target="#collapse{{job.id}}" aria-expanded="true" aria-controls="collapse{{job.id}}">
-                                {% for domain in domains %}
-                                    {% if domain.id == job.domain_id %}
-                                        {{ domain.name }}:
-                                    {% endif %}
-                                {% endfor %}
+                                {{ domain_names.get(job.domain_id, '') }}:
                                 {{ job.name }}
-                                {% for user in users %}
-                                    {% if user.id == job.owner_id %}
-                                        ({{ user.username }})
-                                    {% endif %}
-                                {% endfor %}
+                                ({{ owner_names.get(job.owner_id, '') }})
                             </button>
                         </h5>
                     </div>
                     <div id="collapse{{job.id}}" class="collapse multi-collapse show" data-parent="#accordion">
                         <div class="card-body">
-                            {% set total = namespace(value=0) %}
-                            {% set tasks_completed = namespace(value=0) %}
-                            {% set tasks_running = namespace(value=0) %}
-                            {% for job_task in job_tasks %}
-                                {% if job_task.job_id == job.id %}
-                                    {% set total.value = total.value + 1 %}
-                                    {% if job_task.status == 'Completed' %}
-                                        {% set tasks_completed.value = tasks_completed.value + 1 %}
-                                    {% elif job_task.status in ('Running', 'Importing') %}
-                                        {% set tasks_running.value = tasks_running.value + 1 %}
-                                    {% endif %}
-                                {% endif %}
-                            {% endfor %}
-                            {% if total.value > 0 %}
+                            {% set progress = job_progress_summary.get(job.id, {'total': 0, 'completed': 0, 'running': 0}) %}
+                            {% if progress.total > 0 %}
                             <div class="progress">
-                                <div class="progress-bar" role="progressbar" style="width: {{ (tasks_completed.value / total.value) * 100 }}%">Completed</div>
-                                <div class="progress-bar progress-bar-striped progress-bar-animated bg-success" role="progressbar" style="width: {{ (tasks_running.value / total.value) * 100 }}%">In Progress</div>
+                                <div class="progress-bar" role="progressbar" style="width: {{ (progress.completed / progress.total) * 100 }}%">Completed</div>
+                                <div class="progress-bar progress-bar-striped progress-bar-animated bg-success" role="progressbar" style="width: {{ (progress.running / progress.total) * 100 }}%">In Progress</div>
                             </div>
                             {% endif %}
                             <br>
@@ -66,17 +46,11 @@
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {% for job_task in job_tasks %}
-                                        {% if job_task.job_id == job.id %}
+                                    {% for job_task_row in job_task_rows_by_job_id.get(job.id, []) %}
+                                            {% set job_task = job_task_row.job_task %}
                                             {% set runtime = job_task_runtime_progress.get(job_task.id) %}
                                             <tr>
-                                                <td>
-                                                    {% for task in tasks %}
-                                                        {% if task.id == job_task.task_id %}
-                                                            {{ task.name }}
-                                                        {% endif %}
-                                                    {% endfor %}
-                                                </td>
+                                                <td>{{ job_task_row.task_name }}</td>
                                                 <td>{{ job_task.status }}</td>
                                                 <td>{{ job_recovered.get(job.id, '0/0') }}</td>
                                                 <td>{{ job_task.benchmark or '' }}</td>
@@ -103,7 +77,6 @@
                                                     {% endif %}
                                                 </td>
                                             </tr>
-                                        {% endif %}
                                     {% endfor %}
                                 </tbody>
                             </table>
@@ -123,17 +96,9 @@
                     <div class="card-header">
                         <h5 class="mb-0">
                             <button class="btn btn-link" data-toggle="collapse" data-target="#collapse{{job.id}}" aria-expanded="false" aria-controls="collapse{{job.id}}">
-                                {% for domain in domains %}
-                                    {% if domain.id == job.domain_id %}
-                                        {{ domain.name }}:
-                                    {% endif %}
-                                {% endfor %}
+                                {{ domain_names.get(job.domain_id, '') }}:
                                 {{ job.name }}
-                                {% for user in users %}
-                                    {% if user.id == job.owner_id %}
-                                        ({{ user.username }})
-                                    {% endif %}
-                                {% endfor %}
+                                ({{ owner_names.get(job.owner_id, '') }})
                             </button>
                         </h5>
                     </div>
@@ -150,17 +115,11 @@
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {% for job_task in job_tasks %}
-                                        {% if job_task.job_id == job.id %}
+                                    {% for job_task_row in job_task_rows_by_job_id.get(job.id, []) %}
+                                            {% set job_task = job_task_row.job_task %}
                                             {% set runtime = job_task_runtime_progress.get(job_task.id) %}
                                             <tr>
-                                                <td>
-                                                    {% for task in tasks %}
-                                                        {% if task.id == job_task.task_id %}
-                                                            {{ task.name }}
-                                                        {% endif %}
-                                                    {% endfor %}
-                                                </td>
+                                                <td>{{ job_task_row.task_name }}</td>
                                                 <td>{{ job_task.status }}</td>
                                                 <td>{{ job_recovered.get(job.id, '0/0') }}</td>
                                                 <td>
@@ -178,7 +137,6 @@
                                                     {% endif %}
                                                 </td>
                                             </tr>
-                                        {% endif %}
                                     {% endfor %}
                                 </tbody>
                             </table>

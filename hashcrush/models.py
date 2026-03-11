@@ -1,9 +1,13 @@
-"""Class file to manage loading of database"""
+"""Class file to manage loading of database."""
+
+from __future__ import annotations
 
 from datetime import UTC, datetime
 
 from flask_login import UserMixin
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 db = SQLAlchemy()
 
@@ -16,18 +20,22 @@ def utc_now_naive() -> datetime:
 class Users(db.Model, UserMixin):
     """Class object to represent Users"""
 
-    id = db.Column(db.Integer, nullable=False, primary_key=True)
-    username = db.Column(db.String(50), nullable=False, unique=True)
-    password = db.Column(db.String(60), nullable=False)
-    admin = db.Column(db.Boolean, nullable=False, default=False)
-    last_login_utc = db.Column(db.DateTime, nullable=True, default=utc_now_naive)
-    jobs = db.relationship("Jobs", backref="owner", lazy=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
+    password: Mapped[str] = mapped_column(String(60), nullable=False)
+    admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_login_utc: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+        default=utc_now_naive,
+    )
+    jobs: Mapped[list[Jobs]] = relationship("Jobs", backref="owner", lazy=True)
 
 
 class Settings(db.Model):
     """Class object to represent Settings"""
 
-    id = db.Column(db.Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
 
 class Jobs(db.Model):
@@ -43,29 +51,41 @@ class Jobs(db.Model):
         db.Index("ix_jobs_hashfile_id", "hashfile_id"),
     )
 
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(50), nullable=False)
-    priority = db.Column(
-        db.Integer, nullable=False, default=3
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(50), nullable=False)
+    priority: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3
     )  # 5 = highest priority. 1 = lowest priority
-    created_at = db.Column(db.DateTime, nullable=False, default=utc_now_naive)
-    updated_at = db.Column(db.DateTime, nullable=False, default=utc_now_naive)
-    queued_at = db.Column(db.DateTime, nullable=True)
-    status = db.Column(
-        db.String(20), nullable=False
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utc_now_naive
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utc_now_naive
+    )
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False
     )  # Running, Paused, Completed, Queued, Canceled, Ready, Incomplete
-    started_at = db.Column(
-        db.DateTime, nullable=True
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
     )  # These defaults should be changed
-    ended_at = db.Column(db.DateTime, nullable=True)  # These defaults should be changed
-    hashfile_id = db.Column(
-        db.Integer, db.ForeignKey("hashfiles.id", ondelete="RESTRICT"), nullable=True
+    ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )  # These defaults should be changed
+    hashfile_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("hashfiles.id", ondelete="RESTRICT"),
+        nullable=True,
     )
-    domain_id = db.Column(
-        db.Integer, db.ForeignKey("domains.id", ondelete="RESTRICT"), nullable=False
+    domain_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("domains.id", ondelete="RESTRICT"),
+        nullable=False,
     )
-    owner_id = db.Column(
-        db.Integer, db.ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    owner_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
     )
 
 
@@ -75,28 +95,34 @@ class JobTasks(db.Model):
     __table_args__ = (
         db.Index("ix_job_tasks_status_priority_id", "status", "priority", "id"),
         db.Index("ix_job_tasks_job_id_status", "job_id", "status"),
+        db.Index("ix_job_tasks_job_id_position", "job_id", "position"),
         db.Index("ix_job_tasks_task_id", "task_id"),
         db.UniqueConstraint("job_id", "task_id", name="uq_job_tasks_job_id_task_id"),
     )
 
-    id = db.Column(db.Integer, primary_key=True)
-    job_id = db.Column(
-        db.Integer, db.ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=False
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("jobs.id", ondelete="RESTRICT"),
+        nullable=False,
     )
-    task_id = db.Column(
-        db.Integer, db.ForeignKey("tasks.id", ondelete="RESTRICT"), nullable=False
+    task_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("tasks.id", ondelete="RESTRICT"),
+        nullable=False,
     )
-    priority = db.Column(db.Integer, nullable=False, default=3)
-    command = db.Column(db.String(1024))
-    status = db.Column(
-        db.String(50), nullable=False
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    command: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(50), nullable=False
     )  # Running, Paused, Not Started, Completed, Queued, Canceled, Importing
-    started_at = db.Column(
-        db.DateTime, nullable=True
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
     )  # These defaults should be changed
-    progress = db.Column(db.String(6000))
-    benchmark = db.Column(db.String(20))
-    worker_pid = db.Column(db.Integer)
+    progress: Mapped[str | None] = mapped_column(String(6000), nullable=True)
+    benchmark: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    worker_pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class Domains(db.Model):
@@ -104,8 +130,8 @@ class Domains(db.Model):
 
     __table_args__ = (db.UniqueConstraint("name", name="uq_domains_name"),)
 
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(40), nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(40), nullable=False)
 
 
 class Hashfiles(db.Model):
@@ -116,12 +142,18 @@ class Hashfiles(db.Model):
         db.Index("ix_hashfiles_domain_id_uploaded_at", "domain_id", "uploaded_at"),
     )
 
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(256), nullable=False)  # can probably be reduced
-    uploaded_at = db.Column(db.DateTime, nullable=False, default=utc_now_naive)
-    runtime = db.Column(db.Integer, default=0)
-    domain_id = db.Column(
-        db.Integer, db.ForeignKey("domains.id", ondelete="RESTRICT"), nullable=False
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)  # can probably be reduced
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=utc_now_naive,
+    )
+    runtime: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    domain_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("domains.id", ondelete="RESTRICT"),
+        nullable=False,
     )
 
 
@@ -137,17 +169,19 @@ class HashfileHashes(db.Model):
         ),
     )
 
-    id = db.Column(db.Integer, primary_key=True)
-    hash_id = db.Column(
-        db.Integer,
-        db.ForeignKey("hashes.id", ondelete="CASCADE"),
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    hash_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("hashes.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    username = db.Column(db.String(256), nullable=False, default="", index=True)
-    hashfile_id = db.Column(
-        db.Integer,
-        db.ForeignKey("hashfiles.id", ondelete="RESTRICT"),
+    username: Mapped[str] = mapped_column(
+        String(256), nullable=False, default="", index=True
+    )
+    hashfile_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("hashfiles.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
@@ -159,12 +193,14 @@ class Rules(db.Model):
         db.UniqueConstraint("path", name="uq_rules_path"),
     )
 
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(50), nullable=False)
-    last_updated = db.Column(db.DateTime, nullable=False, default=utc_now_naive)
-    path = db.Column(db.String(256), nullable=False)
-    size = db.Column(db.Integer, nullable=False, default=0)
-    checksum = db.Column(db.String(64), nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(50), nullable=False)
+    last_updated: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utc_now_naive
+    )
+    path: Mapped[str] = mapped_column(String(256), nullable=False)
+    size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
 class Wordlists(db.Model):
@@ -176,13 +212,15 @@ class Wordlists(db.Model):
         db.Index("ix_wordlists_type_last_updated", "type", "last_updated"),
     )
 
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(256), nullable=False)
-    last_updated = db.Column(db.DateTime, nullable=False, default=utc_now_naive)
-    type = db.Column(db.String(7))  # Dynamic or Static
-    path = db.Column(db.String(245), nullable=False)
-    size = db.Column(db.BigInteger, nullable=False)
-    checksum = db.Column(db.String(64), nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    last_updated: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utc_now_naive
+    )
+    type: Mapped[str | None] = mapped_column(String(7), nullable=True)  # Dynamic or Static
+    path: Mapped[str] = mapped_column(String(245), nullable=False)
+    size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
 class Tasks(db.Model):
@@ -194,16 +232,22 @@ class Tasks(db.Model):
         db.Index("ix_tasks_rule_id", "rule_id"),
     )
 
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    hc_attackmode = db.Column(db.String(25), nullable=False)  # dictionary, maskmode
-    wl_id = db.Column(
-        db.Integer, db.ForeignKey("wordlists.id", ondelete="RESTRICT"), nullable=True
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    hc_attackmode: Mapped[str] = mapped_column(
+        String(25), nullable=False
+    )  # dictionary, maskmode
+    wl_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("wordlists.id", ondelete="RESTRICT"),
+        nullable=True,
     )
-    rule_id = db.Column(
-        db.Integer, db.ForeignKey("rules.id", ondelete="RESTRICT"), nullable=True
+    rule_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("rules.id", ondelete="RESTRICT"),
+        nullable=True,
     )
-    hc_mask = db.Column(db.String(50))
+    hc_mask: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
 
 class TaskGroups(db.Model):
@@ -211,9 +255,9 @@ class TaskGroups(db.Model):
 
     __table_args__ = (db.UniqueConstraint("name", name="uq_task_groups_name"),)
 
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(50), nullable=False)
-    tasks = db.Column(db.Text, nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(50), nullable=False)
+    tasks: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class Hashes(db.Model):
@@ -226,22 +270,26 @@ class Hashes(db.Model):
         db.Index("ix_hashes_cracked_hash_type", "cracked", "hash_type"),
     )
 
-    id = db.Column(db.Integer, primary_key=True)
-    sub_ciphertext = db.Column(db.String(32), nullable=False, index=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sub_ciphertext: Mapped[str] = mapped_column(
+        String(32), nullable=False, index=True
+    )
     # TEXT avoids row-size pressure while keeping large hash payload support.
-    ciphertext = db.Column(db.Text, nullable=False)
-    hash_type = db.Column(db.Integer, nullable=False, index=True)
-    cracked = db.Column(db.Boolean, nullable=False)
-    plaintext = db.Column(db.String(256), index=True)
+    ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    hash_type: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    cracked: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    plaintext: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
 
 
 class AuthThrottle(db.Model):
     """Persistent auth throttle state shared by all web worker processes."""
 
-    key = db.Column(db.String(255), primary_key=True)
-    count = db.Column(db.Integer, nullable=False, default=0)
-    window_start = db.Column(db.Integer, nullable=False, default=0)
-    locked_until = db.Column(db.Integer, nullable=False, default=0, index=True)
+    key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    window_start: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    locked_until: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, index=True
+    )
 
 
 class SchemaVersion(db.Model):
@@ -249,10 +297,12 @@ class SchemaVersion(db.Model):
 
     __tablename__ = "schema_version"
 
-    id = db.Column(db.Integer, primary_key=True, default=1)
-    version = db.Column(db.Integer, nullable=False)
-    app_version = db.Column(db.String(32), nullable=False)
-    updated_at = db.Column(db.DateTime, nullable=False, default=utc_now_naive)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    app_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utc_now_naive
+    )
 
 
 class AuditLog(db.Model):
@@ -264,14 +314,18 @@ class AuditLog(db.Model):
         db.Index("ix_audit_logs_event_type_created_at", "event_type", "created_at"),
     )
 
-    id = db.Column(db.Integer, primary_key=True)
-    created_at = db.Column(db.DateTime, nullable=False, default=utc_now_naive)
-    actor_user_id = db.Column(db.Integer, nullable=True)
-    actor_username = db.Column(db.String(64), nullable=False, default="<unknown>")
-    actor_admin = db.Column(db.Boolean, nullable=False, default=False)
-    actor_ip = db.Column(db.String(64), nullable=True)
-    event_type = db.Column(db.String(64), nullable=False)
-    target_type = db.Column(db.String(64), nullable=False)
-    target_id = db.Column(db.String(64), nullable=True)
-    summary = db.Column(db.String(255), nullable=False)
-    details_json = db.Column(db.Text, nullable=False, default="{}")
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utc_now_naive
+    )
+    actor_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    actor_username: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="<unknown>"
+    )
+    actor_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    actor_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    summary: Mapped[str] = mapped_column(String(255), nullable=False)
+    details_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")

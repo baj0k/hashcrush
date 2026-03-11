@@ -36,8 +36,8 @@ def test_plaintext_storage_migration_normalizes_legacy_rows():
         migrated_rows = migrate_plaintext_storage_rows()
         assert migrated_rows == 1
 
-        legacy_row = Hashes.query.get(legacy.id)
-        canonical_row = Hashes.query.get(canonical.id)
+        legacy_row = db.session.get(Hashes, legacy.id)
+        canonical_row = db.session.get(Hashes, canonical.id)
 
         assert legacy_row.plaintext == encode_plaintext_for_storage("PASSWORD")
         assert decode_plaintext_from_storage(legacy_row.plaintext) == "PASSWORD"
@@ -107,7 +107,7 @@ def test_executor_import_stores_plaintext_in_hex_format(tmp_path):
         imported_count = service._import_crack_file_for_task(job_task, str(crack_path))
         assert imported_count == 1
 
-        imported_hash = Hashes.query.get(hash_row.id)
+        imported_hash = db.session.get(Hashes, hash_row.id)
         assert imported_hash.cracked is True
         assert imported_hash.plaintext == encode_plaintext_for_storage("Pa$$w0rd")
 
@@ -201,7 +201,7 @@ def test_executor_canceled_flow_imports_recovered_hashes(tmp_path, monkeypatch):
 
         service._monitor_active_task()
 
-        imported_hash = Hashes.query.get(hash_row.id)
+        imported_hash = db.session.get(Hashes, hash_row.id)
         assert imported_hash.cracked is True
         assert imported_hash.plaintext == encode_plaintext_for_storage(
             "RecoveredDuringCancel"
@@ -272,7 +272,7 @@ def test_recover_orphaned_tasks_imports_crackfile_before_requeue(tmp_path):
 
         db.session.refresh(orphan)
         db.session.refresh(job)
-        imported_hash = Hashes.query.get(hash_row.id)
+        imported_hash = db.session.get(Hashes, hash_row.id)
         assert orphan.status == "Queued"
         assert job.status == "Queued"
         assert imported_hash.cracked is True
@@ -377,7 +377,7 @@ def test_executor_running_checkpoint_imports_cracks(tmp_path):
 
         service._monitor_active_task()
 
-        imported_hash = Hashes.query.get(hash_row.id)
+        imported_hash = db.session.get(Hashes, hash_row.id)
         assert imported_hash.cracked is True
         assert imported_hash.plaintext == encode_plaintext_for_storage(
             "RecoveredDuringRun"
@@ -477,7 +477,7 @@ def test_recover_orphaned_paused_task_cleans_stale_pid_and_keeps_status(tmp_path
         service._recover_orphaned_tasks()
 
         db.session.refresh(orphan)
-        imported_hash = Hashes.query.get(hash_row.id)
+        imported_hash = db.session.get(Hashes, hash_row.id)
         assert orphan.status == "Paused"
         assert orphan.worker_pid is None
         assert imported_hash.cracked is True

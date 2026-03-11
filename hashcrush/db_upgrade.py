@@ -9,7 +9,7 @@ from sqlalchemy import inspect, text
 import hashcrush
 from hashcrush.models import AuditLog, SchemaVersion, db, utc_now_naive
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -58,10 +58,74 @@ def _drop_column_if_exists(table_name: str, column_name: str) -> None:
     db.session.commit()
 
 
+def _index_names(table_name: str) -> set[str]:
+    inspector = inspect(db.engine)
+    if table_name not in inspector.get_table_names():
+        return set()
+    return {index["name"] for index in inspector.get_indexes(table_name)}
+
+
 def _migration_003_remove_obsolete_settings_fields() -> None:
     """Drop obsolete retention/job-weight settings columns."""
     _drop_column_if_exists("settings", "retention_period")
     _drop_column_if_exists("settings", "enabled_job_weights")
+
+
+def _migration_004_add_job_task_position() -> None:
+    """Persist job task ordering without delete-and-recreate writes."""
+    inspector = inspect(db.engine)
+    if "job_tasks" not in inspector.get_table_names():
+        return
+
+    column_names = {column["name"] for column in inspector.get_columns("job_tasks")}
+    column_added = False
+    if "position" not in column_names:
+        db.session.execute(
+            text(
+                "ALTER TABLE job_tasks "
+                "ADD COLUMN position INTEGER NOT NULL DEFAULT 0"
+            )
+        )
+        db.session.commit()
+        column_added = True
+
+    has_nonzero_positions = bool(
+        db.session.scalar(
+            text("SELECT 1 FROM job_tasks WHERE position <> 0 LIMIT 1")
+        )
+    )
+    if column_added or not has_nonzero_positions:
+        job_ids = db.session.scalars(
+            text("SELECT DISTINCT job_id FROM job_tasks ORDER BY job_id ASC")
+        ).all()
+        for job_id in job_ids:
+            row_ids = db.session.scalars(
+                text(
+                    "SELECT id FROM job_tasks "
+                    "WHERE job_id = :job_id "
+                    "ORDER BY id ASC"
+                ),
+                {"job_id": job_id},
+            ).all()
+            for position, row_id in enumerate(row_ids):
+                db.session.execute(
+                    text(
+                        "UPDATE job_tasks "
+                        "SET position = :position "
+                        "WHERE id = :row_id"
+                    ),
+                    {"position": position, "row_id": row_id},
+                )
+        db.session.commit()
+
+    if "ix_job_tasks_job_id_position" not in _index_names("job_tasks"):
+        db.session.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_job_tasks_job_id_position "
+                "ON job_tasks (job_id, position)"
+            )
+        )
+        db.session.commit()
 
 
 MIGRATIONS: tuple[MigrationStep, ...] = (
@@ -82,6 +146,12 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
         name="remove_obsolete_settings_fields",
         summary="Remove obsolete retention and job-weight settings fields.",
         upgrade=_migration_003_remove_obsolete_settings_fields,
+    ),
+    MigrationStep(
+        version=4,
+        name="add_job_task_position",
+        summary="Persist job task ordering without recreating rows on reorder.",
+        upgrade=_migration_004_add_job_task_position,
     ),
 )
 

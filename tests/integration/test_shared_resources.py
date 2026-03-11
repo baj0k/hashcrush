@@ -26,7 +26,7 @@ def test_tasks_add_rejects_bruteforce_attackmode():
         )
         assert response.status_code == 200
 
-        task = Tasks.query.filter_by(name="bruteforce-task").first()
+        task = _first_row(Tasks, name="bruteforce-task")
         assert task is None
 
 @pytest.mark.security
@@ -67,7 +67,7 @@ def test_tasks_add_handles_integrity_error_cleanly(monkeypatch):
         )
         assert response.status_code == 200
         assert b"Task could not be saved" in response.data
-        assert Tasks.query.count() == 0
+        assert _count_rows(Tasks) == 0
 
 @pytest.mark.security
 def test_task_groups_add_handles_integrity_error_cleanly(monkeypatch):
@@ -93,7 +93,7 @@ def test_task_groups_add_handles_integrity_error_cleanly(monkeypatch):
         )
         assert response.status_code == 200
         assert b"Task group could not be created" in response.data
-        assert TaskGroups.query.count() == 0
+        assert _count_rows(TaskGroups) == 0
 
 @pytest.mark.security
 def test_wordlists_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
@@ -123,7 +123,7 @@ def test_wordlists_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
         )
         assert response.status_code == 200
         assert b"Wordlist could not be registered" in response.data
-        assert Wordlists.query.count() == 0
+        assert _count_rows(Wordlists) == 0
 
 @pytest.mark.security
 def test_rules_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
@@ -153,7 +153,7 @@ def test_rules_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
         )
         assert response.status_code == 200
         assert b"Rule file could not be registered" in response.data
-        assert Rules.query.count() == 0
+        assert _count_rows(Rules) == 0
 
 @pytest.mark.security
 def test_dynamic_wordlist_update_uses_all_cracked_data_for_shared_wordlists(tmp_path):
@@ -370,9 +370,9 @@ def test_task_group_import_creates_tasks_and_groups():
         )
         assert response.status_code == 302
 
-        imported_dict_task = Tasks.query.filter_by(name="import-dict").first()
-        imported_mask_task = Tasks.query.filter_by(name="import-mask").first()
-        imported_group = TaskGroups.query.filter_by(name="import-group").first()
+        imported_dict_task = _first_row(Tasks, name="import-dict")
+        imported_mask_task = _first_row(Tasks, name="import-mask")
+        imported_group = _first_row(TaskGroups, name="import-group")
 
         assert imported_dict_task is not None
         assert imported_dict_task.wl_id == wordlist.id
@@ -428,7 +428,7 @@ def test_tasks_add_maskmode_requires_non_empty_mask():
             },
         )
         assert response.status_code == 200
-        assert Tasks.query.filter_by(name="mask-empty-task").first() is None
+        assert _first_row(Tasks, name="mask-empty-task") is None
 
 @pytest.mark.security
 def test_task_edit_allows_same_name_and_clears_mask_when_switching_to_dictionary():
@@ -518,7 +518,7 @@ def test_tasks_add_allows_admin_to_use_shared_wordlists_and_rules():
         )
         assert response.status_code == 302
 
-        task = Tasks.query.filter_by(name="shared-dictionary-task").first()
+        task = _first_row(Tasks, name="shared-dictionary-task")
         assert task is not None
         assert task.wl_id == wordlist.id
         assert task.rule_id == rule.id

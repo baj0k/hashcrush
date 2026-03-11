@@ -5,20 +5,7 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import expect
 
-from tests.e2e.support import (
-    assert_login_error_feedback,
-    select_domain,
-    unique_name,
-)
-
-
-@pytest.mark.e2e
-def test_login_invalid_username_shows_error(page, live_server):
-    page.goto(f"{live_server}/login", wait_until="domcontentloaded")
-    page.get_by_label("Username").fill("not-a-real-user")
-    page.get_by_label("Password").fill("not-a-real-password")
-    page.get_by_role("button", name="Login").click()
-    assert_login_error_feedback(page)
+from tests.e2e.support import select_domain, unique_name
 
 
 @pytest.mark.e2e

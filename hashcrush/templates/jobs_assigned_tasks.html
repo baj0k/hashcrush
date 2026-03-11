@@ -26,7 +26,7 @@ The following are tasks that are assigned to the job. Each task is run once.
                     <th scope="col">Type</th>
                     <th scope="col">Control
                         <!--Only show delete all if tasks have been added--> 
-                        {% if can_manage_job and (job_tasks is defined) and job_tasks.count() > 0 %}   
+                        {% if can_manage_job and (job_tasks is defined) and (job_tasks|length) > 0 %}
                             <a id="remove_all" class="fa fa-trash btn btn-danger btn-sm" data-toggle="modal" data-target="#deleteModal" role="button" title="Remove all assigned tasks for this Job"></a>
                         {% endif %}
                     </th>
@@ -34,20 +34,13 @@ The following are tasks that are assigned to the job. Each task is run once.
                 </thead>
                 <tbody>
                     {% for job_task in job_tasks %}
+                        {% set task = task_by_id.get(job_task.task_id) %}
                         <tr>
                             <td>
-                                {% for task in tasks %}
-                                    {% if task.id == job_task.task_id %}
-                                        {{task.name}}
-                                    {% endif %}
-                                {% endfor %}
+                                {{ task.name if task else '' }}
                             </td>
                             <td>
-                                {% for task in tasks %}
-                                    {% if task.id == job_task.task_id %}
-                                        {{task.hc_attackmode}}
-                                    {% endif %}
-                                {% endfor %}
+                                {{ task.hc_attackmode if task else '' }}
                             </td>
                             <td>
                                 {% if can_manage_job %}
@@ -81,19 +74,11 @@ The following are tasks that are assigned to the job. Each task is run once.
                                     </a>
 
                                     <div class="dropdown-menu" aria-labelledby="dropdownMenuLink" style="max-height: 300px; overflow-y:auto;">
-                                        {% for task in tasks %}
-                                            {% set already_assigned = namespace(value=0) %}
-                                            {% for job_task in job_tasks %}
-                                                {% if job_task.task_id == task.id %}
-                                                    {% set already_assigned.value = 1 %}
-                                                {% endif %}
-                                            {% endfor %}
-                                            {% if already_assigned.value == 0 %}
-                                                <form action="{{ url_for('jobs.jobs_assigned_task', job_id=job.id, task_id=task.id) }}" method="POST" class="m-0">
-                                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                                    <button type="submit" class="dropdown-item btn btn-link text-left">{{ task.name }}</button>
-                                                </form>
-                                            {% endif %}
+                                        {% for task in available_tasks %}
+                                            <form action="{{ url_for('jobs.jobs_assigned_task', job_id=job.id, task_id=task.id) }}" method="POST" class="m-0">
+                                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                <button type="submit" class="dropdown-item btn btn-link text-left">{{ task.name }}</button>
+                                            </form>
                                         {% endfor %}
                                     </div>
                                 </div>

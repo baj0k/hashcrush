@@ -10,6 +10,8 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
+from sqlalchemy import select
+
 
 class AppState:
     debug = False
@@ -188,11 +190,11 @@ def reset_admin_password_cli(db, bcrypt, admin_username: str | None = None) -> i
         )
         return 1
 
-    admin_query = db.session.query(Users).filter_by(admin=True)
+    admin_stmt = select(Users).filter_by(admin=True)
     if admin_username:
-        admin_query = admin_query.filter_by(username=admin_username)
+        admin_stmt = admin_stmt.filter_by(username=admin_username)
 
-    admins = admin_query.order_by(Users.id.asc()).all()
+    admins = db.session.execute(admin_stmt.order_by(Users.id.asc())).scalars().all()
     if not admins:
         print("Error: no matching admin account found.", file=sys.stderr)
         return 1

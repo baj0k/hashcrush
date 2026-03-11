@@ -22,6 +22,7 @@ from flask_login import (
     login_user,
     logout_user,
 )
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
 from hashcrush.audit import record_audit_event
@@ -41,7 +42,7 @@ def load_user(user_id):
         parsed_user_id = int(user_id)
     except (TypeError, ValueError):
         return None
-    return Users.query.get(parsed_user_id)
+    return db.session.get(Users, parsed_user_id)
 
 
 users = Blueprint('users', __name__)
@@ -49,12 +50,20 @@ users = Blueprint('users', __name__)
 
 def _admin_count() -> int:
     """Return number of admin accounts currently present."""
-    return Users.query.filter_by(admin=True).count()
+    return int(
+        db.session.scalar(select(func.count()).select_from(Users).filter_by(admin=True))
+        or 0
+    )
 
 
 def _owned_asset_counts(user_id: int) -> dict[str, int]:
     return {
-        'jobs': Jobs.query.filter_by(owner_id=user_id).count(),
+        'jobs': int(
+            db.session.scalar(
+                select(func.count()).select_from(Jobs).filter_by(owner_id=user_id)
+            )
+            or 0
+        ),
     }
 
 
@@ -89,10 +98,12 @@ def _cleanup_auth_throttle_store(now_epoch: float) -> None:
     lockout_seconds = int(current_app.config.get('AUTH_THROTTLE_LOCKOUT_SECONDS', 900))
     stale_before = int(now_epoch - max(window_seconds, lockout_seconds) - 60)
     try:
-        AuthThrottle.query.filter(
-            AuthThrottle.locked_until <= int(now_epoch),
-            AuthThrottle.window_start <= stale_before,
-        ).delete(synchronize_session=False)
+        db.session.execute(
+            delete(AuthThrottle).where(
+                AuthThrottle.locked_until <= int(now_epoch),
+                AuthThrottle.window_start <= stale_before,
+            )
+        )
         db.session.commit()
     except Exception:
         db.session.rollback()
@@ -102,7 +113,7 @@ def _cleanup_auth_throttle_store(now_epoch: float) -> None:
 def _is_auth_throttled(throttle_key: str, now_epoch: float) -> tuple[bool, int]:
     if not current_app.config.get('AUTH_THROTTLE_ENABLED', True):
         return False, 0
-    entry = AuthThrottle.query.get(throttle_key)
+    entry = db.session.get(AuthThrottle, throttle_key)
     if not entry:
         return False, 0
     locked_until = int(entry.locked_until or 0)
@@ -120,7 +131,7 @@ def _record_failed_login(throttle_key: str, now_epoch: float) -> None:
     window_seconds = int(current_app.config.get('AUTH_THROTTLE_WINDOW_SECONDS', 300))
     lockout_seconds = int(current_app.config.get('AUTH_THROTTLE_LOCKOUT_SECONDS', 900))
     try:
-        entry = AuthThrottle.query.get(throttle_key)
+        entry = db.session.get(AuthThrottle, throttle_key)
         if entry is None:
             entry = AuthThrottle(
                 key=throttle_key,
@@ -157,7 +168,7 @@ def _record_failed_login(throttle_key: str, now_epoch: float) -> None:
 
 def _reset_failed_login_counter(throttle_key: str) -> None:
     try:
-        AuthThrottle.query.filter_by(key=throttle_key).delete(synchronize_session=False)
+        db.session.execute(delete(AuthThrottle).filter_by(key=throttle_key))
         db.session.commit()
     except Exception:
         db.session.rollback()
@@ -204,7 +215,9 @@ def login_post():
         current_app.logger.info('Login failed: form validation.')
         return failed()
 
-    user = Users.query.filter_by(username=form.username.data).first()
+    user = db.session.execute(
+        select(Users).filter_by(username=form.username.data)
+    ).scalars().first()
     if not user:
         _record_failed_login(throttle_key, now_epoch)
         current_app.logger.info('Login failed: unknown user for username=%s.', form.username.data)
@@ -243,8 +256,8 @@ def users_list():
     if not current_user.admin:
         abort(403)
 
-    users = Users.query.all()
-    jobs = Jobs.query.all()
+    users = db.session.execute(select(Users)).scalars().all()
+    jobs = db.session.execute(select(Jobs)).scalars().all()
     return render_template('users.html', title='Users', users=users, jobs=jobs)
 
 @users.route("/users/add", methods=['GET', 'POST'])
@@ -288,7 +301,7 @@ def users_delete(user_id):
     if not current_user.admin:
         abort(403)
 
-    user = Users.query.get_or_404(user_id)
+    user = db.get_or_404(Users, user_id)
 
     if user.id == current_user.id:
         flash('You cannot delete your own account while logged in. Use another admin account.', 'warning')
@@ -377,7 +390,7 @@ def admin_reset(user_id):
         flash('Unauthorized to reset users account.', 'danger')
         return redirect(url_for('users.users_list'))
 
-    user = Users.query.get(user_id)
+    user = db.session.get(Users, user_id)
     if not user:
         flash('User not found.', 'warning')
         return redirect(url_for('users.users_list'))

@@ -62,21 +62,27 @@ The following are domains currently configured in HashCrush. All jobs, passwords
                           <tr>
                             <th scope="row">Associated Jobs</th>
                             <td>
-                                {% for job in jobs %}
-                                    {% if job.domain_id == domain.id %}
+                                {% set associated_jobs = jobs_by_domain.get(domain.id, []) %}
+                                {% if associated_jobs %}
+                                    {% for job in associated_jobs %}
                                         {{ job.name }} <br>
-                                    {% endif %}
-                                {% endfor %}
+                                    {% endfor %}
+                                {% else %}
+                                    <i>none</i>
+                                {% endif %}
                             </td>
                           </tr>
                           <tr>
                             <th scope="row">Associated Hashfiles</th>
                             <td>
-                                {% for hashfile in hashfiles %}
-                                    {% if hashfile.domain_id == domain.id %}
+                                {% set associated_hashfiles = hashfiles_by_domain.get(domain.id, []) %}
+                                {% if associated_hashfiles %}
+                                    {% for hashfile in associated_hashfiles %}
                                         {{ hashfile.name }} <br>
-                                    {% endif %}
-                                {% endfor %}
+                                    {% endfor %}
+                                {% else %}
+                                    <i>none</i>
+                                {% endif %}
                             </td>
                           </tr>
                       </tbody>

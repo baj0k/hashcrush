@@ -1,4 +1,6 @@
 """Flask routes to handle Hashfiles"""
+from collections import defaultdict
+
 from flask import (
     Blueprint,
     current_app,
@@ -9,7 +11,7 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required
-from sqlalchemy import case, func
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql import exists
 
@@ -26,33 +28,110 @@ def _count_orphan_uncracked_hashes_for_hashfiles(hashfile_ids: list[int]) -> int
     if not hashfile_ids:
         return 0
 
-    return (
-        db.session.query(Hashes.id)
-        .filter(Hashes.cracked.is_(False))
-        .filter(
-            exists()
-            .where(HashfileHashes.hash_id == Hashes.id)
-            .where(HashfileHashes.hashfile_id.in_(hashfile_ids))
+    return int(
+        db.session.scalar(
+            select(func.count())
+            .select_from(Hashes)
+            .where(Hashes.cracked.is_(False))
+            .where(
+                exists()
+                .where(HashfileHashes.hash_id == Hashes.id)
+                .where(HashfileHashes.hashfile_id.in_(hashfile_ids))
+            )
+            .where(
+                ~exists()
+                .where(HashfileHashes.hash_id == Hashes.id)
+                .where(~HashfileHashes.hashfile_id.in_(hashfile_ids))
+            )
         )
-        .filter(
-            ~exists()
-            .where(HashfileHashes.hash_id == Hashes.id)
-            .where(~HashfileHashes.hashfile_id.in_(hashfile_ids))
-        )
-        .count()
+        or 0
     )
 
 
 def _hashfile_delete_impact(hashfile_id: int) -> dict[str, int]:
     return {
-        'associated_jobs': Jobs.query.filter_by(hashfile_id=hashfile_id).count(),
-        'hash_links': HashfileHashes.query.filter_by(hashfile_id=hashfile_id).count(),
+        'associated_jobs': int(
+            db.session.scalar(
+                select(func.count()).select_from(Jobs).filter_by(hashfile_id=hashfile_id)
+            )
+            or 0
+        ),
+        'hash_links': int(
+            db.session.scalar(
+                select(func.count()).select_from(HashfileHashes).filter_by(hashfile_id=hashfile_id)
+            )
+            or 0
+        ),
         'orphan_uncracked_hashes': _count_orphan_uncracked_hashes_for_hashfiles([hashfile_id]),
     }
 
 
+def _hashfile_delete_impact_previews(hashfile_ids: list[int]) -> dict[int, dict[str, int]]:
+    if not hashfile_ids:
+        return {}
+
+    job_counts = {
+        row.hashfile_id: int(row.associated_jobs or 0)
+        for row in db.session.execute(
+            select(
+                Jobs.hashfile_id,
+                func.count(Jobs.id).label('associated_jobs'),
+            )
+            .where(Jobs.hashfile_id.in_(hashfile_ids))
+            .group_by(Jobs.hashfile_id)
+        ).all()
+    }
+
+    hash_link_counts = {
+        row.hashfile_id: int(row.hash_links or 0)
+        for row in db.session.execute(
+            select(
+                HashfileHashes.hashfile_id,
+                func.count(HashfileHashes.id).label('hash_links'),
+            )
+            .where(HashfileHashes.hashfile_id.in_(hashfile_ids))
+            .group_by(HashfileHashes.hashfile_id)
+        ).all()
+    }
+
+    orphan_hashes_subquery = (
+        select(
+            func.min(HashfileHashes.hashfile_id).label('hashfile_id'),
+            Hashes.id.label('hash_id'),
+        )
+        .select_from(Hashes)
+        .join(HashfileHashes, HashfileHashes.hash_id == Hashes.id)
+        .where(Hashes.cracked.is_(False))
+        .where(HashfileHashes.hashfile_id.in_(hashfile_ids))
+        .group_by(Hashes.id)
+        .having(func.count(func.distinct(HashfileHashes.hashfile_id)) == 1)
+        .subquery()
+    )
+    orphan_hash_counts = {
+        row.hashfile_id: int(row.orphan_hashes or 0)
+        for row in db.session.execute(
+            select(
+                orphan_hashes_subquery.c.hashfile_id,
+                func.count(orphan_hashes_subquery.c.hash_id).label('orphan_hashes'),
+            )
+            .group_by(orphan_hashes_subquery.c.hashfile_id)
+        ).all()
+    }
+
+    return {
+        hashfile_id: {
+            'associated_jobs': job_counts.get(hashfile_id, 0),
+            'hash_links': hash_link_counts.get(hashfile_id, 0),
+            'orphan_uncracked_hashes': orphan_hash_counts.get(hashfile_id, 0),
+        }
+        for hashfile_id in hashfile_ids
+    }
+
+
 def _shared_domains() -> list[Domains]:
-    return Domains.query.order_by(Domains.name.asc()).all()
+    return db.session.execute(
+        select(Domains).order_by(Domains.name.asc())
+    ).scalars().all()
 
 
 def _render_hashfiles_add_form(form, domains):
@@ -69,31 +148,53 @@ def _render_hashfiles_add_form(form, domains):
 
 def hashfiles_list():
     """Function to return list of hashfiles"""
-    hashfiles = Hashfiles.query.order_by(Hashfiles.uploaded_at.desc()).all()
+    hashfiles = db.session.execute(
+        select(Hashfiles).order_by(Hashfiles.uploaded_at.desc())
+    ).scalars().all()
     domain_ids = sorted({hashfile.domain_id for hashfile in hashfiles})
     domains = (
-        Domains.query.filter(Domains.id.in_(domain_ids)).all()
+        db.session.execute(
+            select(Domains)
+            .where(Domains.id.in_(domain_ids))
+            .order_by(Domains.name.asc())
+        ).scalars().all()
         if domain_ids
         else []
     )
-    jobs = visible_jobs_query().all()
+    hashfile_ids = [hashfile.id for hashfile in hashfiles]
+    jobs = (
+        db.session.execute(
+            visible_jobs_query().where(Jobs.hashfile_id.in_(hashfile_ids))
+        ).scalars().all()
+        if hashfile_ids
+        else []
+    )
+    jobs_by_hashfile: dict[int, list[Jobs]] = defaultdict(list)
+    for job in jobs:
+        if job.hashfile_id is not None:
+            jobs_by_hashfile[job.hashfile_id].append(job)
+    hashfiles_by_domain: dict[int, list[Hashfiles]] = defaultdict(list)
+    for hashfile in hashfiles:
+        hashfiles_by_domain[hashfile.domain_id].append(hashfile)
 
     cracked_rate = {}
     hash_type_dict = {}
 
-    hashfile_ids = [hashfile.id for hashfile in hashfiles]
     stats_by_hashfile_id = {}
     types_by_hashfile_id = {}
     if hashfile_ids:
         stats_rows = (
-            db.session.query(
-                HashfileHashes.hashfile_id,
-                func.count(Hashes.id).label('total_count'),
-                func.sum(case((Hashes.cracked.is_(True), 1), else_=0)).label('cracked_count'),
+            db.session.execute(
+                select(
+                    HashfileHashes.hashfile_id,
+                    func.count(Hashes.id).label('total_count'),
+                    func.sum(case((Hashes.cracked.is_(True), 1), else_=0)).label('cracked_count'),
+                )
+                .select_from(HashfileHashes)
+                .join(Hashes, Hashes.id == HashfileHashes.hash_id)
+                .where(HashfileHashes.hashfile_id.in_(hashfile_ids))
+                .group_by(HashfileHashes.hashfile_id)
             )
-            .join(Hashes, Hashes.id == HashfileHashes.hash_id)
-            .filter(HashfileHashes.hashfile_id.in_(hashfile_ids))
-            .group_by(HashfileHashes.hashfile_id)
             .all()
         )
         stats_by_hashfile_id = {
@@ -105,13 +206,16 @@ def hashfiles_list():
         }
 
         type_rows = (
-            db.session.query(
-                HashfileHashes.hashfile_id,
-                func.min(Hashes.hash_type).label('hash_type'),
+            db.session.execute(
+                select(
+                    HashfileHashes.hashfile_id,
+                    func.min(Hashes.hash_type).label('hash_type'),
+                )
+                .select_from(HashfileHashes)
+                .join(Hashes, Hashes.id == HashfileHashes.hash_id)
+                .where(HashfileHashes.hashfile_id.in_(hashfile_ids))
+                .group_by(HashfileHashes.hashfile_id)
             )
-            .join(Hashes, Hashes.id == HashfileHashes.hash_id)
-            .filter(HashfileHashes.hashfile_id.in_(hashfile_ids))
-            .group_by(HashfileHashes.hashfile_id)
             .all()
         )
         types_by_hashfile_id = {
@@ -125,7 +229,7 @@ def hashfiles_list():
         hash_type_dict[hashfile.id] = types_by_hashfile_id.get(hashfile.id, 'UNKNOWN')
 
     hashfile_delete_impacts = (
-        {hashfile.id: _hashfile_delete_impact(hashfile.id) for hashfile in hashfiles}
+        _hashfile_delete_impact_previews(hashfile_ids)
         if current_user.admin
         else {}
     )
@@ -134,8 +238,9 @@ def hashfiles_list():
         title='Hashfiles',
         hashfiles=hashfiles,
         domains=domains,
+        hashfiles_by_domain=hashfiles_by_domain,
         cracked_rate=cracked_rate,
-        jobs=jobs,
+        jobs_by_hashfile=jobs_by_hashfile,
         hash_type_dict=hash_type_dict,
         hashfile_delete_impacts=hashfile_delete_impacts,
     )
@@ -154,7 +259,7 @@ def hashfiles_add():
     ]
 
     if request.method == 'POST' and form.validate_on_submit():
-        domain = Domains.query.get(form.domain_id.data)
+        domain = db.session.get(Domains, form.domain_id.data)
         if not domain:
             flash('Selected domain is invalid or no longer available.', 'danger')
             return _render_hashfiles_add_form(form, domains)
@@ -191,7 +296,7 @@ def hashfiles_add():
 @login_required
 def hashfiles_delete(hashfile_id):
     """Function to delete hashfile by id"""
-    hashfile = Hashfiles.query.get_or_404(hashfile_id)
+    hashfile = db.get_or_404(Hashfiles, hashfile_id)
     impact = _hashfile_delete_impact(hashfile_id)
     hashfile_name = hashfile.name
 
@@ -210,9 +315,13 @@ def hashfiles_delete(hashfile_id):
             flash('Type the hashfile name exactly to confirm deletion.', 'danger')
             return redirect(url_for('hashfiles.hashfiles_list'))
         try:
-            HashfileHashes.query.filter_by(hashfile_id = hashfile_id).delete()
-            Hashfiles.query.filter_by(id = hashfile_id).delete()
-            Hashes.query.filter().where(~exists().where(Hashes.id == HashfileHashes.hash_id)).where(Hashes.cracked.is_(False)).delete(synchronize_session='fetch')
+            db.session.execute(delete(HashfileHashes).filter_by(hashfile_id=hashfile_id))
+            db.session.execute(delete(Hashfiles).filter_by(id=hashfile_id))
+            db.session.execute(
+                delete(Hashes)
+                .where(~exists().where(Hashes.id == HashfileHashes.hash_id))
+                .where(Hashes.cracked.is_(False))
+            )
             db.session.commit()
             current_app.logger.info(
                 'Deleted hashfile id=%s name=%s impact hash_links=%s orphan_uncracked=%s',

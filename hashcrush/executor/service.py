@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import TextIO
 
 from flask import current_app
+from sqlalchemy import and_, or_, select, update
 
 from hashcrush.models import (
     Hashes,
@@ -185,7 +186,7 @@ class LocalExecutorService:
 
     @staticmethod
     def _crack_file_path_for_job_task(job_task: JobTasks) -> str | None:
-        job = Jobs.query.get(job_task.job_id)
+        job = db.session.get(Jobs, job_task.job_id)
         if not job:
             return None
         outfiles_dir = get_runtime_subdir("outfiles")
@@ -199,13 +200,17 @@ class LocalExecutorService:
         worker PID are cleaned up in-place so an orphaned hashcat process cannot
         continue after restart.
         """
-        orphaned = JobTasks.query.filter(
-            (JobTasks.status.in_(("Running", "Importing")))
-            | (
-                (JobTasks.status.in_(("Paused", "Canceled")))
-                & (JobTasks.worker_pid.isnot(None))
+        orphaned = db.session.execute(
+            select(JobTasks).where(
+                or_(
+                    JobTasks.status.in_(("Running", "Importing")),
+                    and_(
+                        JobTasks.status.in_(("Paused", "Canceled")),
+                        JobTasks.worker_pid.isnot(None),
+                    ),
+                )
             )
-        ).all()
+        ).scalars().all()
         if not orphaned:
             return
 
@@ -229,17 +234,25 @@ class LocalExecutorService:
         db.session.commit()
 
         for job_id in touched_job_ids:
-            job = Jobs.query.get(job_id)
+            job = db.session.get(Jobs, job_id)
             if not job:
                 continue
-            has_running = JobTasks.query.filter(
-                JobTasks.job_id == job.id,
-                JobTasks.status.in_(("Running", "Importing")),
-            ).count() > 0
-            has_queued = JobTasks.query.filter(
-                JobTasks.job_id == job.id,
-                JobTasks.status == "Queued",
-            ).count() > 0
+            has_running = bool(
+                db.session.scalar(
+                    select(JobTasks.id)
+                    .where(JobTasks.job_id == job.id)
+                    .where(JobTasks.status.in_(("Running", "Importing")))
+                    .limit(1)
+                )
+            )
+            has_queued = bool(
+                db.session.scalar(
+                    select(JobTasks.id)
+                    .where(JobTasks.job_id == job.id)
+                    .where(JobTasks.status == "Queued")
+                    .limit(1)
+                )
+            )
             if not has_running and has_queued:
                 job.status = "Queued"
         db.session.commit()
@@ -320,35 +333,40 @@ class LocalExecutorService:
             return
 
     def _claim_and_start_next(self) -> None:
-        next_task = (
-            JobTasks.query.filter(JobTasks.status == "Queued")
-            .order_by(JobTasks.priority.desc(), JobTasks.id.asc())
-            .first()
+        next_task = db.session.scalar(
+            select(JobTasks)
+            .join(Jobs, Jobs.id == JobTasks.job_id)
+            .where(JobTasks.status == "Queued")
+            .order_by(
+                JobTasks.priority.desc(),
+                Jobs.queued_at.asc(),
+                JobTasks.position.asc(),
+                JobTasks.id.asc(),
+            )
+            .limit(1)
         )
         if not next_task:
             return
 
         now_dt = datetime.now().replace(microsecond=0)
-        claimed = (
-            JobTasks.query.filter(JobTasks.id == next_task.id, JobTasks.status == "Queued")
-            .update(
-                {
-                    "status": "Running",
-                    "started_at": now_dt,
-                },
-                synchronize_session=False,
+        claimed = db.session.execute(
+            update(JobTasks)
+            .where(JobTasks.id == next_task.id, JobTasks.status == "Queued")
+            .values(
+                status="Running",
+                started_at=now_dt,
             )
-        )
+        ).rowcount
         if claimed != 1:
             db.session.rollback()
             return
         db.session.commit()
 
-        job_task = JobTasks.query.get(next_task.id)
+        job_task = db.session.get(JobTasks, next_task.id)
         if not job_task:
             return
         update_job_task_status(job_task.id, "Running")
-        job_task = JobTasks.query.get(next_task.id)
+        job_task = db.session.get(JobTasks, next_task.id)
         if not job_task:
             return
 
@@ -386,8 +404,8 @@ class LocalExecutorService:
         current_app.logger.info("Started local job_task id=%s pid=%s", job_task.id, process.pid)
 
     def _prepare_execution(self, job_task: JobTasks) -> tuple[list[str], str, str, str]:
-        job = Jobs.query.get(job_task.job_id)
-        task = Tasks.query.get(job_task.task_id)
+        job = db.session.get(Jobs, job_task.job_id)
+        task = db.session.get(Tasks, job_task.task_id)
         if not job:
             raise RuntimeError(f"job_task={job_task.id} has missing job={job_task.job_id}")
         if not task:
@@ -396,7 +414,7 @@ class LocalExecutorService:
             raise RuntimeError(f"job_task={job_task.id} has no hashfile context")
 
         if task.wl_id:
-            wordlist = Wordlists.query.get(task.wl_id)
+            wordlist = db.session.get(Wordlists, task.wl_id)
             if wordlist and str(wordlist.type).lower() == "dynamic":
                 update_dynamic_wordlist(wordlist.id)
 
@@ -414,16 +432,15 @@ class LocalExecutorService:
 
     def _write_hashfile(self, job_id: int, task_id: int, hashfile_id: int, hashes_dir: str) -> str:
         target = os.path.join(hashes_dir, f"hashfile_{job_id}_{task_id}.txt")
-        rows = (
-            db.session.query(Hashes.ciphertext)
+        rows = db.session.execute(
+            select(Hashes.ciphertext)
             .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
-            .filter(Hashes.cracked.is_(False))
-            .filter(HashfileHashes.hashfile_id == hashfile_id)
-            .all()
+            .where(Hashes.cracked.is_(False))
+            .where(HashfileHashes.hashfile_id == hashfile_id)
         )
         with open(target, "w", encoding="utf-8", errors="ignore") as file_object:
-            for row in rows:
-                file_object.write(f"{row.ciphertext}\n")
+            for ciphertext in rows.scalars():
+                file_object.write(f"{ciphertext}\n")
         return target
 
     def _monitor_active_task(self) -> None:
@@ -431,7 +448,7 @@ class LocalExecutorService:
         if active is None:
             return
 
-        job_task = JobTasks.query.get(active.job_task_id)
+        job_task = db.session.get(JobTasks, active.job_task_id)
         if not job_task:
             self._terminate_process(active.process)
             self._finalize_active_task(final_status="Canceled")
@@ -537,7 +554,7 @@ class LocalExecutorService:
         except Exception:
             current_app.logger.exception("Failed closing output file for job_task id=%s", active.job_task_id)
 
-        job_task = JobTasks.query.get(active.job_task_id)
+        job_task = db.session.get(JobTasks, active.job_task_id)
         if not job_task:
             self._remove_files(active.output_path, active.crack_path, active.hash_path)
             return
@@ -564,15 +581,17 @@ class LocalExecutorService:
         if not os.path.exists(crack_path):
             return 0
 
-        job = Jobs.query.get(job_task.job_id)
+        job = db.session.get(Jobs, job_task.job_id)
         if not job or not job.hashfile_id:
             return 0
 
-        hashfile_hash = HashfileHashes.query.filter_by(hashfile_id=job.hashfile_id).first()
+        hashfile_hash = db.session.scalar(
+            select(HashfileHashes).filter_by(hashfile_id=job.hashfile_id)
+        )
         if not hashfile_hash:
             return 0
 
-        expected_hash = Hashes.query.get(hashfile_hash.hash_id)
+        expected_hash = db.session.get(Hashes, hashfile_hash.hash_id)
         if not expected_hash:
             return 0
 
@@ -592,12 +611,12 @@ class LocalExecutorService:
             return 0
 
         sub_ciphertexts = {sub_ciphertext for sub_ciphertext, _ in parsed_entries}
-        candidate_rows = (
-            Hashes.query.filter(Hashes.hash_type == expected_hash.hash_type)
-            .filter(Hashes.cracked.is_(False))
-            .filter(Hashes.sub_ciphertext.in_(sub_ciphertexts))
-            .all()
-        )
+        candidate_rows = db.session.execute(
+            select(Hashes)
+            .where(Hashes.hash_type == expected_hash.hash_type)
+            .where(Hashes.cracked.is_(False))
+            .where(Hashes.sub_ciphertext.in_(sub_ciphertexts))
+        ).scalars().all()
         records_by_sub_ciphertext: dict[str, Hashes] = {}
         for row in candidate_rows:
             records_by_sub_ciphertext.setdefault(row.sub_ciphertext, row)

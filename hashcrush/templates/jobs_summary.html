@@ -48,12 +48,8 @@ If everything looks good, click complete below.
                                 <tr>
                                     <td>Tasks:</td>
                                     <td>
-                                        {% for job_task in job_tasks %}
-                                            {% for task in tasks %}
-                                                {% if task.id == job_task.task_id %}
-                                                    {{ task.name }} <br>
-                                                {% endif %}
-                                            {% endfor %}
+                                        {% for task_name in ordered_task_names %}
+                                            {{ task_name }} <br>
                                         {% endfor %}
                                     </td>
                                 </tr>
@@ -96,12 +92,8 @@ If everything looks good, click complete below.
                             <tr>
                                 <td>Tasks:</td>
                                 <td>
-                                    {% for job_task in job_tasks %}
-                                        {% for task in tasks %}
-                                            {% if task.id == job_task.task_id %}
-                                                {{ task.name }} <br>
-                                            {% endif %}
-                                        {% endfor %}
+                                    {% for task_name in ordered_task_names %}
+                                        {{ task_name }} <br>
                                     {% endfor %}
                                 </td>
                             </tr>

@@ -5,10 +5,19 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 if [[ -f .env.test ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  . ./.env.test
-  set +a
+  while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+    line="${raw_line#"${raw_line%%[![:space:]]*}"}"
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    key="${line%%=*}"
+    value="${line#*=}"
+    [[ -z "$key" || "$key" == "$line" ]] && continue
+    if [[ "$value" =~ ^\".*\"$ ]] || [[ "$value" =~ ^\'.*\'$ ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+    if [[ -z "${!key+x}" ]]; then
+      export "$key=$value"
+    fi
+  done < .env.test
 fi
 
 export PYTHONPATH="${PYTHONPATH:-.}"
@@ -36,8 +45,8 @@ if (( pytest_status != 0 )); then
   exit "$pytest_status"
 fi
 
-if [[ "${HASHCRUSH_ALLOW_E2E_SKIPS:-0}" != "1" ]] && grep -q '^SKIPPED ' "$e2e_log"; then
+if grep -q '^SKIPPED ' "$e2e_log"; then
   echo >&2
-  echo "E2E suite reported skipped tests. Fix the live credentials/fixtures or set HASHCRUSH_ALLOW_E2E_SKIPS=1 to allow skips." >&2
+  echo "E2E suite reported skipped tests. Fix the live credentials, fixtures, or host availability before treating the run as successful." >&2
   exit 1
 fi

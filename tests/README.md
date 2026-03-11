@@ -120,13 +120,6 @@ Reason:
 - skipped browser tests should not count as a successful full validation run
 - stale credentials, missing fixtures, or an unreachable external host must fail loudly
 
-Override only when intentionally doing a permissive smoke run:
-
-```bash
-export HASHCRUSH_ALLOW_E2E_SKIPS=1
-./tests/test-all.sh
-```
-
 ## Marks
 
 Configured in [pytest.ini](/home/bajok/hashcrush/pytest.ini):

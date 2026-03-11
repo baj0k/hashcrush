@@ -1,11 +1,12 @@
 """Forms Page to manage Tasks"""
 
 from flask_wtf import FlaskForm
+from sqlalchemy import select
 from wtforms import SelectField, StringField, SubmitField
 from wtforms.validators import DataRequired, ValidationError
 
 from hashcrush.forms_utils import normalize_text_input
-from hashcrush.models import Tasks
+from hashcrush.models import Tasks, db
 
 
 class TasksForm(FlaskForm):
@@ -29,6 +30,6 @@ class TasksForm(FlaskForm):
     def validate_name(self, name):
         """Function to validate Task name group"""
 
-        task = Tasks.query.filter_by(name=name.data).first()
+        task = db.session.execute(select(Tasks).filter_by(name=name.data)).scalars().first()
         if task and task.id != self.current_task_id:
             raise ValidationError('That task name is taken. Please choose a different one.')

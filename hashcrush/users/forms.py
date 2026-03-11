@@ -1,5 +1,6 @@
 """Forms Page to manage Users"""
 from flask_wtf import FlaskForm
+from sqlalchemy import select
 from wtforms import (
     BooleanField,
     PasswordField,
@@ -10,7 +11,7 @@ from wtforms import (
 from wtforms.validators import DataRequired, EqualTo, Length, Optional
 
 from hashcrush.forms_utils import normalize_text_input
-from hashcrush.models import Users
+from hashcrush.models import Users, db
 
 
 class UsersForm(FlaskForm):
@@ -24,7 +25,7 @@ class UsersForm(FlaskForm):
 
     def validate_username(self, username):
         """Function to validate username uniqueness."""
-        user = Users.query.filter_by(username=username.data).first()
+        user = db.session.execute(select(Users).filter_by(username=username.data)).scalars().first()
         if user:
             raise ValidationError('That username is taken. Please choose a different one.')
 

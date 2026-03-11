@@ -14,6 +14,7 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from hashcrush.audit import record_audit_event
@@ -43,7 +44,7 @@ def _parse_task_group_tasks(payload: str | None) -> list[int]:
 
 
 def _task_name(task_id: int) -> str | None:
-    task = Tasks.query.filter(Tasks.id == task_id).first()
+    task = db.session.scalar(select(Tasks).where(Tasks.id == task_id))
     return task.name if task else None
 
 
@@ -51,8 +52,8 @@ def _task_name(task_id: int) -> str | None:
 @login_required
 def task_groups_list():
     """Function to list task groups."""
-    task_group_rows = TaskGroups.query.all()
-    task_rows = Tasks.query.all()
+    task_group_rows = db.session.execute(select(TaskGroups)).scalars().all()
+    task_rows = db.session.execute(select(Tasks)).scalars().all()
     task_name_by_id = {task.id: task.name for task in task_rows}
     task_group_task_names = {
         task_group.id: [
@@ -77,11 +78,21 @@ def task_groups_list():
 @admin_required_redirect("task_groups.task_groups_list")
 def task_groups_export():
     """Export shared tasks/task-groups as JSON."""
-    shared_tasks = Tasks.query.order_by(Tasks.id.asc()).all()
-    shared_task_groups = TaskGroups.query.order_by(TaskGroups.id.asc()).all()
+    shared_tasks = db.session.execute(
+        select(Tasks).order_by(Tasks.id.asc())
+    ).scalars().all()
+    shared_task_groups = db.session.execute(
+        select(TaskGroups).order_by(TaskGroups.id.asc())
+    ).scalars().all()
 
-    visible_wordlists = {row.id: row.name for row in Wordlists.query.all()}
-    visible_rules = {row.id: row.name for row in Rules.query.all()}
+    visible_wordlists = {
+        row.id: row.name
+        for row in db.session.execute(select(Wordlists)).scalars().all()
+    }
+    visible_rules = {
+        row.id: row.name
+        for row in db.session.execute(select(Rules)).scalars().all()
+    }
     shared_task_name_by_id = {task.id: task.name for task in shared_tasks}
 
     export_tasks = []
@@ -166,11 +177,23 @@ def task_groups_import():
         flash("Invalid import payload format.", "danger")
         return redirect(url_for("task_groups.task_groups_list"))
 
-    wordlists_by_name = {row.name: row.id for row in Wordlists.query.all()}
-    rules_by_name = {row.name: row.id for row in Rules.query.all()}
+    wordlists_by_name = {
+        row.name: row.id
+        for row in db.session.execute(select(Wordlists)).scalars().all()
+    }
+    rules_by_name = {
+        row.name: row.id
+        for row in db.session.execute(select(Rules)).scalars().all()
+    }
 
-    shared_tasks = {row.name: row for row in Tasks.query.all()}
-    shared_task_groups = {row.name: row for row in TaskGroups.query.all()}
+    shared_tasks = {
+        row.name: row
+        for row in db.session.execute(select(Tasks)).scalars().all()
+    }
+    shared_task_groups = {
+        row.name: row
+        for row in db.session.execute(select(TaskGroups)).scalars().all()
+    }
 
     created_tasks = 0
     updated_tasks = 0
@@ -321,7 +344,7 @@ def task_groups_import():
 def task_groups_add():
     """Function to add task group."""
     task_group_form = TaskGroupsForm()
-    task_rows = Tasks.query.all()
+    task_rows = db.session.execute(select(Tasks)).scalars().all()
     if task_group_form.validate_on_submit():
         task_group = TaskGroups(
             name=task_group_form.name.data,
@@ -367,8 +390,8 @@ def task_groups_add():
 @admin_required_redirect("task_groups.task_groups_list")
 def task_groups_assigned_tasks(task_group_id):
     """Function to list assigned tasks for task group."""
-    task_group = TaskGroups.query.get_or_404(task_group_id)
-    task_rows = Tasks.query.all()
+    task_group = db.get_or_404(TaskGroups, task_group_id)
+    task_rows = db.session.execute(select(Tasks)).scalars().all()
     task_group_tasks = _parse_task_group_tasks(task_group.tasks)
     return render_template(
         "task_groups_assigntask.html",
@@ -387,8 +410,8 @@ def task_groups_assigned_tasks(task_group_id):
 @admin_required_redirect("task_groups.task_groups_list")
 def task_groups_assigned_tasks_add_task(task_group_id, task_id):
     """Function to assign task to task group."""
-    task_group = TaskGroups.query.get_or_404(task_group_id)
-    task = Tasks.query.filter(Tasks.id == task_id).first_or_404()
+    task_group = db.get_or_404(TaskGroups, task_group_id)
+    task = db.get_or_404(Tasks, task_id)
     task_group_tasks = _parse_task_group_tasks(task_group.tasks)
     was_added = task.id not in task_group_tasks
     if was_added:
@@ -419,7 +442,7 @@ def task_groups_assigned_tasks_add_task(task_group_id, task_id):
 @admin_required_redirect("task_groups.task_groups_list")
 def task_groups_assigned_tasks_remove_task(task_group_id, task_id):
     """Function to remove task from task group."""
-    task_group = TaskGroups.query.get_or_404(task_group_id)
+    task_group = db.get_or_404(TaskGroups, task_group_id)
     task_group_tasks = _parse_task_group_tasks(task_group.tasks)
     if task_id not in task_group_tasks:
         flash("Task is not assigned to this group.", "warning")
@@ -452,7 +475,7 @@ def task_groups_assigned_tasks_remove_task(task_group_id, task_id):
 @admin_required_redirect("task_groups.task_groups_list")
 def task_groups_assigned_tasks_promote_task(task_group_id, task_id):
     """Function to move assigned task up higher in queue on task group."""
-    task_group = TaskGroups.query.get_or_404(task_group_id)
+    task_group = db.get_or_404(TaskGroups, task_group_id)
     task_group_tasks = _parse_task_group_tasks(task_group.tasks)
     if not task_group_tasks or task_id not in task_group_tasks:
         flash("Task is not assigned to this group.", "warning")
@@ -501,7 +524,7 @@ def task_groups_assigned_tasks_promote_task(task_group_id, task_id):
 @admin_required_redirect("task_groups.task_groups_list")
 def task_groups_assigned_tasks_demote_task(task_group_id, task_id):
     """Function to move assigned task lower in queue on task group."""
-    task_group = TaskGroups.query.get_or_404(task_group_id)
+    task_group = db.get_or_404(TaskGroups, task_group_id)
     task_group_tasks = _parse_task_group_tasks(task_group.tasks)
     if not task_group_tasks or task_id not in task_group_tasks:
         flash("Task is not assigned to this group.", "warning")
@@ -547,7 +570,7 @@ def task_groups_assigned_tasks_demote_task(task_group_id, task_id):
 @admin_required_redirect("task_groups.task_groups_list")
 def task_groups_delete(task_group_id):
     """Function to delete task group."""
-    task_group = TaskGroups.query.get_or_404(task_group_id)
+    task_group = db.get_or_404(TaskGroups, task_group_id)
     deleted_group_name = task_group.name
     deleted_task_ids = _parse_task_group_tasks(task_group.tasks)
     db.session.delete(task_group)

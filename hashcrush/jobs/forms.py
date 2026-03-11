@@ -1,11 +1,12 @@
 """Forms to manage jobs."""
 
 from flask_wtf import FlaskForm
+from sqlalchemy import select
 from wtforms import FileField, SelectField, StringField, SubmitField, TextAreaField
 from wtforms.validators import DataRequired, ValidationError
 
 from hashcrush.forms_utils import normalize_text_input
-from hashcrush.models import Jobs
+from hashcrush.models import Jobs, db
 
 
 class JobsForm(FlaskForm):
@@ -35,7 +36,7 @@ class JobsForm(FlaskForm):
     submit = SubmitField("Next")
 
     def validate_name(self, name):
-        job = Jobs.query.filter_by(name=name.data).first()
+        job = db.session.execute(select(Jobs).filter_by(name=name.data)).scalars().first()
         if job:
             raise ValidationError(
                 "That job name is taken. Please choose a different one."

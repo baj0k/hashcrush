@@ -27,13 +27,13 @@ Disposable live-test environment bootstrap:
 ```bash
 python3 ./hashcrush.py setup --test
 ```
-`hashcrush.py setup --test` rebuilds the DB, creates dummy users/data, and writes `.env.test` for E2E runs.
+`hashcrush.py setup --test` rebuilds the DB, creates dummy users/data, and writes `.env.test` for E2E tests.
 ##### Important Setup Warning
 
 `hashcrush.py setup` is destructive.
 
-It rebuilds the `hashcrush` database from scratch and overwrites `hashcrush/config.conf`.
-Do not run it on an instance where data must be preserved.
+It rebuilds the `hashcrush` database from scratch.
+Do not run it on a production instance.
 
 #### 3) It's alive
 ```
@@ -48,7 +48,7 @@ Production deployments should provide certificate paths via environment variable
 - `HASHCRUSH_TRUST_X_FORWARDED_FOR` (set only behind a trusted reverse proxy)
 
 If either TLS file is missing/unreadable, startup fails with an explicit error.
-`hashcrush.py setup` now defaults to generating the certificate and key under `/etc/hashcrush/ssl`.
+Initial bootstrap defaults to generating the certificate and key under `/etc/hashcrush/ssl`.
 It applies restrictive permissions (`cert.pem` `0644`, `key.pem` `0600`) and prompts for another writable directory if `/etc/hashcrush/ssl` is not writable.
 
 
@@ -62,7 +62,7 @@ Recommended production environment overrides:
 
 ```bash
 export HASHCRUSH_SECRET_KEY='<strong-random-secret>'
-export HASHCRUSH_DATABASE_URI='postgresql+psycopg2://hashcrush:<strong-db-password>@127.0.0.1:5432/hashcrush'
+export HASHCRUSH_DATABASE_URI='postgresql+psycopg://hashcrush:<strong-db-password>@127.0.0.1:5432/hashcrush'
 export HASHCRUSH_SSL_CERT_PATH='/run/secrets/hashcrush-cert.pem'
 export HASHCRUSH_SSL_KEY_PATH='/run/secrets/hashcrush-key.pem'
 ```
@@ -102,13 +102,10 @@ python3 ./hashcrush.py
 ```
 
 `hashcrush.py upgrade` is non-destructive. It applies tracked schema/data migrations in place and preserves existing data.
-If the database schema is older than the code expects, app startup now stops with an explicit error until `hashcrush.py upgrade` is run.
-Tracked in-place upgrades are supported only for schema-versioned deployments created from this release onward.
-Non-empty unversioned legacy databases are not auto-adopted; rebuild them with `hashcrush.py setup` or migrate them manually before using `hashcrush.py upgrade`.
+If the database schema is older than the code expects, app startup shows an explicit error until an upgrade is performed.
 
 ## External Wordlists and Rules
-`hashcrush.py setup` prompts for paths and writes them to `hashcrush/config.conf`.
-They should point to external repositories such as SecLists and hashcat rules:
+`hashcrush.py setup` prompts for paths and writes them to `hashcrush/config.conf`. Example:
 
 ```ini
 [app]
@@ -116,13 +113,9 @@ wordlists_path = /path/to/SecLists/Passwords
 rules_path = /path/to/hashcat/rules
 ```
 
-## Security Notes
-- `hashcrush/config.conf` must stay local and never be distributed.
-- Rotate `SECRET_KEY`, DB credentials, and TLS cert/key on deployment.
-
 ## Account and Password Management
-- Admins can set a temporary password for users from the Users page.
-- Users can change their own password in Profile after login.
+- Admins can reset a password of any user.
+- Users can change their own password after login.
 - Local break-glass admin password reset is available via CLI:
   - `python3 ./hashcrush.py --reset-admin-password`
 
@@ -134,32 +127,13 @@ python3 -m pip install -r requirements.txt -r requirements-test.txt
 python3 -m playwright install chromium
 ```
 
-Default fully automated test path:
+Supported test entrypoint:
 ```bash
 ./tests/test-all.sh
 ```
 
-`tests/test-all.sh` is the supported test entrypoint.
-It runs:
-- non-E2E tests first
-- then a self-bootstrapped local browser suite by default
-
-The local browser path:
-- starts a temporary app instance automatically
-- uses a temporary SQLite database
-- seeds its own users, domain, hashfile, wordlist, and task
-- does not require `hashcrush.py setup --test`
-- is the authoritative CI path
-
-GitHub Actions runs the same wrapper from [.github/workflows/tests.yml](/home/bajok/hashcrush/.github/workflows/tests.yml).
-
-Direct pytest entrypoints:
-```bash
-PYTHONPATH=. pytest -q -m "not e2e and not e2e_external" -rs
-PYTHONPATH=. pytest -q -m e2e -rs
-```
-
-Optional external-host smoke path:
+Local automated browser tests are the default.
+Optional live-instance smoke:
 ```bash
 python3 ./hashcrush.py setup --test
 python3 ./hashcrush.py
@@ -167,31 +141,6 @@ export HASHCRUSH_E2E_MODE=external
 ./tests/test-all.sh
 ```
 
-When `HASHCRUSH_E2E_MODE=external` is set, `tests/test-all.sh` switches to the smaller `e2e_external` smoke suite against the already running host from `.env.test` / `HASHCRUSH_E2E_BASE_URL`.
+GitHub Actions runs the same wrapper from [.github/workflows/tests.yml](/home/bajok/hashcrush/.github/workflows/tests.yml).
 
-Use external mode for:
-- post-deploy smoke checks
-- validating the real PostgreSQL/TLS/config deployment shape
-- checking the actual running instance rather than the temporary local harness
-
-Direct external smoke entrypoint:
-```bash
-PYTHONPATH=. pytest -q -m e2e_external -rs
-```
-
-Recommended post-deploy smoke checklist:
-1. deploy the new code
-2. run `python3 ./hashcrush.py upgrade --dry-run`
-3. run `python3 ./hashcrush.py upgrade`
-4. restart the app
-5. confirm the target URL responds over HTTPS
-6. run:
-```bash
-export HASHCRUSH_E2E_MODE=external
-./tests/test-all.sh
-```
-
-By default the wrapper treats any E2E skip as a failure, so stale credentials, missing fixtures, or an unreachable host do not produce a false-green run.
-Set `HASHCRUSH_ALLOW_E2E_SKIPS=1` only if you intentionally want a permissive external smoke run.
-
-Detailed testing documentation is in [tests/README.md](/home/bajok/hashcrush/tests/README.md).
+Detailed testing documentation, direct pytest commands, CI behavior, and the post-deploy live smoke checklist are in [tests/README.md](/home/bajok/hashcrush/tests/README.md).

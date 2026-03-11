@@ -3,6 +3,7 @@ import os
 
 from flask import Blueprint, current_app, flash, redirect, render_template, url_for
 from flask_login import login_required
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from hashcrush.audit import record_audit_event
@@ -122,11 +123,10 @@ def _resolve_selected_file(selected_relative_path: str, base_dir: str) -> str | 
 def wordlists_list():
     """Function to present list of wordlists"""
 
-    visible_wordlists = Wordlists.query
-    static_wordlists = visible_wordlists.filter_by(type='static').all()
-    dynamic_wordlists = visible_wordlists.filter_by(type='dynamic').all()
-    wordlists = visible_wordlists.all()
-    tasks = Tasks.query.all()
+    wordlists = db.session.execute(select(Wordlists)).scalars().all()
+    static_wordlists = [wordlist for wordlist in wordlists if wordlist.type == 'static']
+    dynamic_wordlists = [wordlist for wordlist in wordlists if wordlist.type == 'dynamic']
+    tasks = db.session.execute(select(Tasks)).scalars().all()
     return render_template(
         'wordlists.html',
         title='Wordlists',
@@ -177,10 +177,10 @@ def wordlists_add():
             )
 
         wordlist_path = os.path.abspath(wordlist_path)
-        if Wordlists.query.filter_by(path=wordlist_path).first():
+        if db.session.scalar(select(Wordlists).filter_by(path=wordlist_path)):
             flash('Wordlist is already registered.', 'warning')
             return redirect(url_for('wordlists.wordlists_list'))
-        if Wordlists.query.filter_by(name=form.name.data).first():
+        if db.session.scalar(select(Wordlists).filter_by(name=form.name.data)):
             flash('Wordlist name is already registered.', 'warning')
             return redirect(url_for('wordlists.wordlists_list'))
 
@@ -236,14 +236,14 @@ def wordlists_add():
 def wordlists_delete(wordlist_id):
     """Function to delete wordlist record"""
 
-    wordlist = Wordlists.query.get_or_404(wordlist_id)
+    wordlist = db.get_or_404(Wordlists, wordlist_id)
     # prevent deletion of dynamic list
     if wordlist.type == 'dynamic':
         flash('Dynamic Wordlists can not be deleted.', 'danger')
         return redirect(url_for('wordlists.wordlists_list'))
 
     # Check if associated with a Task
-    task = Tasks.query.filter_by(wl_id=wordlist_id).first()
+    task = db.session.scalar(select(Tasks).filter_by(wl_id=wordlist_id))
     if task:
         flash('Failed. Wordlist is associated to one or more tasks', 'danger')
         return redirect(url_for('wordlists.wordlists_list'))
@@ -277,7 +277,7 @@ def wordlists_delete(wordlist_id):
 def dynamicwordlist_update(wordlist_id):
     """Function to update dynamic wordlist"""
 
-    wordlist = Wordlists.query.get_or_404(wordlist_id)
+    wordlist = db.get_or_404(Wordlists, wordlist_id)
     if wordlist.type != 'dynamic':
         flash('Invalid wordlist', 'danger')
         return redirect(url_for('wordlists.wordlists_list'))

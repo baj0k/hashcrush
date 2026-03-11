@@ -44,9 +44,9 @@ def test_hashfiles_delete_removes_orphan_hashes():
         )
         assert response.status_code == 302
 
-        assert Hashfiles.query.filter_by(id=hashfile.id).count() == 0
-        assert HashfileHashes.query.filter_by(hashfile_id=hashfile.id).count() == 0
-        assert Hashes.query.filter_by(id=hash_row_id).count() == 0
+        assert _count_rows(Hashfiles, id=hashfile.id) == 0
+        assert _count_rows(HashfileHashes, hashfile_id=hashfile.id) == 0
+        assert _count_rows(Hashes, id=hash_row_id) == 0
 
 @pytest.mark.security
 def test_hashfiles_delete_requires_exact_name_confirmation():
@@ -74,7 +74,7 @@ def test_hashfiles_delete_requires_exact_name_confirmation():
         )
         assert response.status_code == 200
         assert b"Type the hashfile name exactly to confirm deletion." in response.data
-        assert Hashfiles.query.filter_by(id=hashfile.id).count() == 1
+        assert _count_rows(Hashfiles, id=hashfile.id) == 1
 
 @pytest.mark.security
 def test_jobs_list_displays_eta_and_percent_done_for_active_job():
@@ -299,21 +299,21 @@ def test_jobs_assigned_hashfile_validates_domain_but_allows_shared_hashfiles():
             data={"hashfile_id": str(wrong_owner_hashfile.id)},
         )
         assert response_shared_hashfile.status_code == 302
-        assert Jobs.query.get(job.id).hashfile_id == wrong_owner_hashfile.id
+        assert db.session.get(Jobs, job.id).hashfile_id == wrong_owner_hashfile.id
 
         response_wrong_domain = client.post(
             f"/jobs/{job.id}/assigned_hashfile/",
             data={"hashfile_id": str(wrong_domain_hashfile.id)},
         )
         assert response_wrong_domain.status_code == 302
-        assert Jobs.query.get(job.id).hashfile_id == wrong_owner_hashfile.id
+        assert db.session.get(Jobs, job.id).hashfile_id == wrong_owner_hashfile.id
 
         response_valid = client.post(
             f"/jobs/{job.id}/assigned_hashfile/",
             data={"hashfile_id": str(valid_hashfile.id)},
         )
         assert response_valid.status_code == 302
-        assert Jobs.query.get(job.id).hashfile_id == valid_hashfile.id
+        assert db.session.get(Jobs, job.id).hashfile_id == valid_hashfile.id
 
 @pytest.mark.security
 def test_jobs_assigned_hashfile_existing_hashfile_form_includes_csrf_token():
@@ -375,8 +375,8 @@ def test_domains_delete_blocks_when_active_jobs_exist():
             data={"confirm_name": domain.name},
         )
         assert response.status_code == 302
-        assert Domains.query.get(domain.id) is not None
-        assert Jobs.query.get(active_job.id) is not None
+        assert db.session.get(Domains, domain.id) is not None
+        assert db.session.get(Jobs, active_job.id) is not None
 
 @pytest.mark.security
 def test_domains_delete_removes_inactive_jobs_and_orphans():
@@ -450,11 +450,11 @@ def test_domains_delete_removes_inactive_jobs_and_orphans():
         )
         assert response.status_code == 302
 
-        assert Domains.query.get(domain_id) is None
-        assert Jobs.query.get(inactive_job_id) is None
-        assert Hashfiles.query.get(hashfile_id) is None
-        assert HashfileHashes.query.filter_by(hashfile_id=hashfile_id).count() == 0
-        assert Hashes.query.get(orphan_hash_id) is None
+        assert db.session.get(Domains, domain_id) is None
+        assert db.session.get(Jobs, inactive_job_id) is None
+        assert db.session.get(Hashfiles, hashfile_id) is None
+        assert _count_rows(HashfileHashes, hashfile_id=hashfile_id) == 0
+        assert db.session.get(Hashes, orphan_hash_id) is None
 
 @pytest.mark.security
 def test_domains_delete_requires_exact_name_confirmation():
@@ -478,7 +478,7 @@ def test_domains_delete_requires_exact_name_confirmation():
         )
         assert response.status_code == 200
         assert b"Type the domain name exactly to confirm deletion." in response.data
-        assert Domains.query.get(domain.id) is not None
+        assert db.session.get(Domains, domain.id) is not None
 
 @pytest.mark.security
 def test_domains_page_is_shared_read_and_admin_can_add_domains():
@@ -505,7 +505,7 @@ def test_domains_page_is_shared_read_and_admin_can_add_domains():
         )
         assert response.status_code == 200
         assert b"Domain created!" in response.data
-        assert Domains.query.filter_by(name="New Shared Domain").count() == 1
+        assert _count_rows(Domains, name="New Shared Domain") == 1
 
         viewer_client = app.test_client()
         _login_client_as_user(viewer_client, viewer)
@@ -538,7 +538,7 @@ def test_non_admin_cannot_add_domains():
         )
         assert response.status_code == 200
         assert b"Permission Denied" in response.data
-        assert Domains.query.filter_by(name="Unauthorized Domain").count() == 0
+        assert _count_rows(Domains, name="Unauthorized Domain") == 0
 
 
 @pytest.mark.security
@@ -574,10 +574,10 @@ def test_hashfiles_page_allows_admin_to_add_shared_hashfiles():
         assert response.status_code == 200
         assert b"Hashfile created!" in response.data
 
-        hashfile = Hashfiles.query.filter_by(name="shared-hashes.txt").first()
+        hashfile = _first_row(Hashfiles, name="shared-hashes.txt")
         assert hashfile is not None
         assert hashfile.domain_id == domain.id
-        assert HashfileHashes.query.filter_by(hashfile_id=hashfile.id).count() == 1
+        assert _count_rows(HashfileHashes, hashfile_id=hashfile.id) == 1
 
         entry = _latest_audit_entry()
         assert entry is not None
@@ -619,7 +619,7 @@ def test_non_admin_cannot_add_hashfiles():
 
         assert response.status_code == 200
         assert b"Permission Denied" in response.data
-        assert Hashfiles.query.filter_by(name="blocked.txt").count() == 0
+        assert _count_rows(Hashfiles, name="blocked.txt") == 0
 
 @pytest.mark.security
 def test_job_task_move_routes_do_not_mutate_active_jobs():
@@ -671,10 +671,64 @@ def test_job_task_move_routes_do_not_mutate_active_jobs():
         assert response.status_code == 302
 
         persisted = (
-            JobTasks.query.filter_by(job_id=job.id).order_by(JobTasks.id.asc()).all()
+            _all_rows(
+                JobTasks,
+                job_id=job.id,
+                order_by=(JobTasks.position.asc(), JobTasks.id.asc()),
+            )
         )
         assert [row.task_id for row in persisted] == [task_a.id, task_b.id]
         assert [row.status for row in persisted] == ["Running", "Queued"]
+
+@pytest.mark.security
+def test_job_task_move_routes_swap_positions_without_recreating_rows():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="Move Order Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        task_a = Tasks(name="move-a", hc_attackmode="maskmode", hc_mask="?a")
+        task_b = Tasks(name="move-b", hc_attackmode="maskmode", hc_mask="?a?a")
+        db.session.add_all([task_a, task_b])
+        db.session.commit()
+
+        job = Jobs(
+            name="move-job",
+            status="Incomplete",
+            domain_id=domain.id,
+            owner_id=admin.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        first = JobTasks(job_id=job.id, task_id=task_a.id, status="Not Started", position=0)
+        second = JobTasks(job_id=job.id, task_id=task_b.id, status="Not Started", position=1)
+        db.session.add_all([first, second])
+        db.session.commit()
+        original_ids = {first.task_id: first.id, second.task_id: second.id}
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(f"/jobs/{job.id}/move_task_down/{task_a.id}")
+        assert response.status_code == 302
+
+        persisted = _all_rows(
+            JobTasks,
+            job_id=job.id,
+            order_by=(JobTasks.position.asc(), JobTasks.id.asc()),
+        )
+        assert [row.task_id for row in persisted] == [task_b.id, task_a.id]
+        assert [row.id for row in persisted] == [
+            original_ids[task_b.id],
+            original_ids[task_a.id],
+        ]
+        assert [row.position for row in persisted] == [0, 1]
 
 @pytest.mark.security
 def test_jobs_assign_task_group_normalizes_string_ids_and_skips_duplicates():
@@ -742,9 +796,11 @@ def test_jobs_assign_task_group_normalizes_string_ids_and_skips_duplicates():
 
         assigned_task_ids = [
             row.task_id
-            for row in JobTasks.query.filter_by(job_id=job.id)
-            .order_by(JobTasks.id.asc())
-            .all()
+            for row in _all_rows(
+                JobTasks,
+                job_id=job.id,
+                order_by=(JobTasks.position.asc(), JobTasks.id.asc()),
+            )
         ]
         assert assigned_task_ids.count(task_a.id) == 1
         assert assigned_task_ids.count(task_b.id) == 1
@@ -774,8 +830,8 @@ def test_jobs_add_rejects_invalid_domain_selection():
         )
         assert response.status_code == 200
         assert b"Not a valid choice." in response.data
-        assert Domains.query.count() == 0
-        assert Jobs.query.count() == 0
+        assert _count_rows(Domains) == 0
+        assert _count_rows(Jobs) == 0
 
 @pytest.mark.security
 def test_jobs_add_uses_existing_selected_domain():
@@ -802,10 +858,10 @@ def test_jobs_add_uses_existing_selected_domain():
         )
         assert response.status_code == 302
 
-        job = Jobs.query.filter_by(name="selected-domain-job").first()
+        job = _first_row(Jobs, name="selected-domain-job")
         assert job is not None
         assert job.domain_id == existing_domain.id
-        assert Domains.query.count() == 1
+        assert _count_rows(Domains) == 1
 
 @pytest.mark.security
 def test_jobs_add_rejects_whitespace_only_name():
@@ -831,7 +887,7 @@ def test_jobs_add_rejects_whitespace_only_name():
             },
         )
         assert response.status_code == 200
-        assert Jobs.query.count() == 0
+        assert _count_rows(Jobs) == 0
 
 @pytest.mark.security
 def test_jobs_add_handles_job_commit_conflict_without_mutating_domains(monkeypatch):
@@ -862,8 +918,8 @@ def test_jobs_add_handles_job_commit_conflict_without_mutating_domains(monkeypat
         )
         assert response.status_code == 200
         assert b"Job could not be created" in response.data
-        assert Jobs.query.count() == 0
-        assert Domains.query.count() == 1
+        assert _count_rows(Jobs) == 0
+        assert _count_rows(Domains) == 1
 
 @pytest.mark.security
 def test_jobs_assigned_hashfile_failed_import_rolls_back_hashfile_row(monkeypatch):
@@ -911,8 +967,8 @@ def test_jobs_assigned_hashfile_failed_import_rolls_back_hashfile_row(monkeypatc
 
         db.session.refresh(job)
         assert job.hashfile_id is None
-        assert Hashfiles.query.count() == 0
-        assert HashfileHashes.query.count() == 0
+        assert _count_rows(Hashfiles) == 0
+        assert _count_rows(HashfileHashes) == 0
 
 @pytest.mark.security
 def test_hashfiles_delete_handles_integrity_error_cleanly(monkeypatch):
@@ -948,7 +1004,7 @@ def test_hashfiles_delete_handles_integrity_error_cleanly(monkeypatch):
             b"Error: Hashfile is associated with a job or changed concurrently."
             in response.data
         )
-        assert Hashfiles.query.filter_by(id=hashfile.id).count() == 1
+        assert _count_rows(Hashfiles, id=hashfile.id) == 1
 
 @pytest.mark.security
 def test_non_owner_can_view_scheduled_jobs_but_cannot_stop_them():

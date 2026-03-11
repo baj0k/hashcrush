@@ -3,6 +3,7 @@ import os
 
 from flask_bcrypt import Bcrypt
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import func, select
 
 from hashcrush.models import Settings, TaskGroups, Tasks, Users
 
@@ -10,13 +11,13 @@ DEFAULT_PASSWORD = os.getenv("HASHCRUSH_DEFAULT_ADMIN_PASSWORD", "hashcrush")
 
 
 def get_primary_admin_user(db: SQLAlchemy) -> Users | None:
-    return (
-        db.session.query(Users).filter_by(admin=True).order_by(Users.id.asc()).first()
-    )
+    return db.session.execute(
+        select(Users).filter_by(admin=True).order_by(Users.id.asc())
+    ).scalars().first()
 
 
 def default_tasks_need_added(db: SQLAlchemy) -> bool:
-    return db.session.query(Tasks).count() == 0
+    return (db.session.scalar(select(func.count()).select_from(Tasks)) or 0) == 0
 
 
 def add_default_tasks(db: SQLAlchemy):
@@ -36,7 +37,9 @@ def add_default_tasks(db: SQLAlchemy):
         task_ids.append(task.id)
 
     default_group_name = "maskmode 1-10"
-    if not db.session.query(TaskGroups).filter_by(name=default_group_name).first():
+    if not db.session.execute(
+        select(TaskGroups).filter_by(name=default_group_name)
+    ).scalars().first():
         task_group = TaskGroups(
             name=default_group_name,
             tasks=json.dumps(task_ids),
@@ -47,7 +50,10 @@ def add_default_tasks(db: SQLAlchemy):
 
 
 def admin_user_needs_added(db: SQLAlchemy) -> bool:
-    return db.session.query(Users).filter_by(admin=True).count() <= 0
+    return (
+        db.session.scalar(select(func.count()).select_from(Users).filter_by(admin=True))
+        or 0
+    ) <= 0
 
 
 def add_admin_user(db: SQLAlchemy, bcrypt: Bcrypt):
@@ -72,5 +78,5 @@ def admin_pass_needs_changed(db: SQLAlchemy, bcrypt: Bcrypt) -> bool:
 
 
 def settings_needs_added(db: SQLAlchemy) -> bool:
-    settings = db.session.query(Settings).first()
+    settings = db.session.execute(select(Settings)).scalars().first()
     return settings is None

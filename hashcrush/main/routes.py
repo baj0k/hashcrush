@@ -2,10 +2,11 @@
 
 import json
 import re
+from collections import defaultdict
 
 from flask import Blueprint, flash, redirect, render_template
 from flask_login import current_user, login_required
-from sqlalchemy import case, func
+from sqlalchemy import case, func, select
 
 from hashcrush.audit import record_audit_event
 from hashcrush.models import (
@@ -52,49 +53,76 @@ def _parse_jobtask_progress(progress_payload: str | None) -> tuple[str | None, s
 def home():
     """Function to return the home page"""
     running_jobs = (
-        Jobs.query
-        .filter_by(status='Running')
-        .order_by(Jobs.priority.desc(), Jobs.queued_at.asc())
+        db.session.execute(
+            select(Jobs)
+            .filter_by(status='Running')
+            .order_by(Jobs.priority.desc(), Jobs.queued_at.asc())
+        )
+        .scalars()
         .all()
     )
     queued_jobs = (
-        Jobs.query
-        .filter_by(status='Queued')
-        .order_by(Jobs.priority.desc(), Jobs.queued_at.asc())
+        db.session.execute(
+            select(Jobs)
+            .filter_by(status='Queued')
+            .order_by(Jobs.priority.desc(), Jobs.queued_at.asc())
+        )
+        .scalars()
         .all()
     )
     jobs = running_jobs + queued_jobs
-    users = Users.query.all()
+    owner_ids = sorted({job.owner_id for job in jobs})
+    users = (
+        db.session.execute(
+            select(Users).where(Users.id.in_(owner_ids))
+        ).scalars().all()
+        if owner_ids
+        else []
+    )
+    owner_names = {user.id: user.username for user in users}
     domain_ids = sorted({job.domain_id for job in jobs})
     domains = (
-        Domains.query.filter(Domains.id.in_(domain_ids)).all()
+        db.session.execute(
+            select(Domains).where(Domains.id.in_(domain_ids))
+        ).scalars().all()
         if domain_ids
         else []
     )
     visible_job_ids = [job.id for job in jobs]
     job_tasks = (
-        JobTasks.query.filter(JobTasks.job_id.in_(visible_job_ids)).all()
+        db.session.execute(
+            select(JobTasks)
+            .where(JobTasks.job_id.in_(visible_job_ids))
+            .order_by(JobTasks.job_id.asc(), JobTasks.position.asc(), JobTasks.id.asc())
+        ).scalars().all()
         if visible_job_ids
         else []
     )
     visible_task_ids = sorted({job_task.task_id for job_task in job_tasks})
-    tasks = (
-        Tasks.query.filter(Tasks.id.in_(visible_task_ids)).all()
+    task_rows = (
+        db.session.execute(
+            select(Tasks.id, Tasks.name).where(Tasks.id.in_(visible_task_ids))
+        ).all()
         if visible_task_ids
         else []
     )
+    domain_names = {domain.id: domain.name for domain in domains}
+    task_names = {row.id: row.name for row in task_rows}
     hashfile_ids = [job.hashfile_id for job in jobs if job.hashfile_id]
     hashfile_stats = {}
     if hashfile_ids:
         stats_rows = (
-            db.session.query(
-                HashfileHashes.hashfile_id,
-                func.count(Hashes.id).label('total_count'),
-                func.sum(case((Hashes.cracked.is_(True), 1), else_=0)).label('cracked_count'),
+            db.session.execute(
+                select(
+                    HashfileHashes.hashfile_id,
+                    func.count(Hashes.id).label('total_count'),
+                    func.sum(case((Hashes.cracked.is_(True), 1), else_=0)).label('cracked_count'),
+                )
+                .select_from(HashfileHashes)
+                .join(Hashes, Hashes.id == HashfileHashes.hash_id)
+                .where(HashfileHashes.hashfile_id.in_(hashfile_ids))
+                .group_by(HashfileHashes.hashfile_id)
             )
-            .join(Hashes, Hashes.id == HashfileHashes.hash_id)
-            .filter(HashfileHashes.hashfile_id.in_(hashfile_ids))
-            .group_by(HashfileHashes.hashfile_id)
             .all()
         )
         hashfile_stats = {
@@ -107,12 +135,27 @@ def home():
         job_recovered[job.id] = f'{cracked}/{total}'
 
     job_task_runtime_progress: dict[int, dict[str, str]] = {}
+    job_task_rows_by_job_id: dict[int, list[dict[str, object]]] = defaultdict(list)
+    job_progress_summary: dict[int, dict[str, int]] = defaultdict(
+        lambda: {'total': 0, 'completed': 0, 'running': 0}
+    )
     for job_task in job_tasks:
         percent_done, eta = _parse_jobtask_progress(job_task.progress)
         job_task_runtime_progress[job_task.id] = {
             'percent_done': percent_done or 'N/A',
             'eta': eta or 'N/A',
         }
+        job_task_rows_by_job_id[job_task.job_id].append(
+            {
+                'job_task': job_task,
+                'task_name': task_names.get(job_task.task_id, ''),
+            }
+        )
+        job_progress_summary[job_task.job_id]['total'] += 1
+        if job_task.status == 'Completed':
+            job_progress_summary[job_task.job_id]['completed'] += 1
+        elif job_task.status in ('Running', 'Importing'):
+            job_progress_summary[job_task.job_id]['running'] += 1
 
     collapse_all = ""
     for job in jobs:
@@ -123,10 +166,10 @@ def home():
         jobs=jobs,
         running_jobs=running_jobs,
         queued_jobs=queued_jobs,
-        users=users,
-        domains=domains,
-        job_tasks=job_tasks,
-        tasks=tasks,
+        owner_names=owner_names,
+        domain_names=domain_names,
+        job_task_rows_by_job_id=job_task_rows_by_job_id,
+        job_progress_summary=job_progress_summary,
         collapse_all=collapse_all,
         job_task_runtime_progress=job_task_runtime_progress,
         job_recovered=job_recovered,
@@ -137,10 +180,10 @@ def home():
 def stop_job_task(job_task_id):
     """Function to stop specific task on a running job"""
 
-    job_task = JobTasks.query.get(job_task_id)
+    job_task = db.session.get(JobTasks, job_task_id)
     if not job_task:
         return redirect("/")
-    job = Jobs.query.get(job_task.job_id)
+    job = db.session.get(Jobs, job_task.job_id)
 
     if job_task and job:
         if current_user.admin or job.owner_id == current_user.id:

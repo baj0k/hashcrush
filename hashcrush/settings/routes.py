@@ -15,6 +15,7 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required
+from sqlalchemy import select
 
 import hashcrush
 from hashcrush.audit import record_audit_event
@@ -296,7 +297,7 @@ def settings_list():
     """Function to return list of Settings"""
 
     if current_user.admin:
-        settings = Settings.query.first()
+        settings = db.session.execute(select(Settings)).scalars().first()
         if not settings:
             settings = Settings()
             db.session.add(settings)

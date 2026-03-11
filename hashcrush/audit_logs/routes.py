@@ -6,8 +6,9 @@ import json
 
 from flask import Blueprint, abort, render_template
 from flask_login import current_user, login_required
+from sqlalchemy import select
 
-from hashcrush.models import AuditLog
+from hashcrush.models import AuditLog, db
 
 audit_logs = Blueprint("audit_logs", __name__)
 
@@ -27,11 +28,11 @@ def audit_logs_list():
     if not current_user.admin:
         abort(403)
 
-    entries = (
-        AuditLog.query.order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+    entries = db.session.execute(
+        select(AuditLog)
+        .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
         .limit(200)
-        .all()
-    )
+    ).scalars().all()
     entry_details = {entry.id: _pretty_details(entry.details_json) for entry in entries}
     return render_template(
         "audit_logs.html",

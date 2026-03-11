@@ -30,21 +30,9 @@ Jobs contain a series of tasks (hashcat commands). Jobs also have an associated 
                     {% for job in jobs%}
                         {% set runtime = job_runtime_progress.get(job.id) %}
                         <tr>
-                            <td>
-                                {% for domain in domains %}
-                                    {% if domain.id == job.domain_id %}
-                                        {{ domain.name }}
-                                    {% endif %}
-                                {% endfor %}
-                            </td>
+                            <td>{{ domain_names.get(job.domain_id, '') }}</td>
                             <td>{{ job.name }}</td>
-                            <td>
-                                {% for hashfile in hashfiles %}
-                                    {% if hashfile.id == job.hashfile_id %}
-                                        {{ hashfile.name }}
-                                    {% endif %}
-                                {% endfor %}
-                            </td>
+                            <td>{{ hashfile_names.get(job.hashfile_id, '') }}</td>
                             <td>{{ job.status }}</td>
                             <td>{{ job_recovered.get(job.id, '0/0') }}</td>
                             <td>
@@ -61,13 +49,7 @@ Jobs contain a series of tasks (hashcat commands). Jobs also have an associated 
                                     N/A
                                 {% endif %}
                             </td>
-                            <td>
-                                {% for user in users %}
-                                    {% if user.id == job.owner_id %}
-                                        {{ user.username }}
-                                    {% endif %}
-                                {% endfor %}
-                            </td>
+                            <td>{{ owner_names.get(job.owner_id, '') }}</td>
                             <td>
                                 {% set can_manage_job = current_user.admin or job.owner_id == current_user.id %}
                                 {% if can_manage_job %}
@@ -141,14 +123,10 @@ Jobs contain a series of tasks (hashcat commands). Jobs also have an associated 
                           <tr>
                             <th scope="row">Associated Tasks</th>
                             <td>
-                                {% for job_task in job_tasks %}
-                                    {% if job_task.job_id == job.id %}
-                                        {% for task in tasks %}
-                                            {% if task.id == job_task.task_id%}
-                                                {{ task.name }} <br>
-                                            {% endif %}
-                                        {% endfor %}
-                                    {% endif %}
+                                {% for task_name in task_names_by_job_id.get(job.id, []) %}
+                                    {{ task_name }} <br>
+                                {% else %}
+                                    <i>none</i>
                                 {% endfor %}
                             </td>
                           </tr>

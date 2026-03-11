@@ -1,9 +1,9 @@
-SQLAlchemy==1.4.27
+SQLAlchemy==2.0.46
 Flask==3.0.2
 Flask-WTF==1.2.2
 email-validator==2.3.0
-Flask-SQLAlchemy==3.0.5
-psycopg2-binary==2.9.11
+Flask-SQLAlchemy==3.1.1
+psycopg[binary]==3.3.3
 bcrypt-flask==1.0.2
 Flask-Login==0.6.3
 WTForms-SQLAlchemy==0.4.2

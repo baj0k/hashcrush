@@ -123,7 +123,7 @@ class Config:
             ) from exc
 
         SQLALCHEMY_DATABASE_URI = URL.create(
-                "postgresql+psycopg2",
+                "postgresql+psycopg",
                 username=_db_username,
                 password=_db_password,
                 host=_db_host,

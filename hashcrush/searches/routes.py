@@ -12,7 +12,7 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, select
 
 from hashcrush import jinja_hex_decode
 from hashcrush.audit import record_audit_event
@@ -27,11 +27,15 @@ def _visible_domains_for_hashfiles(hashfile_rows: list[Hashfiles]) -> list[Domai
     domain_ids = sorted({hashfile.domain_id for hashfile in hashfile_rows})
     if not domain_ids:
         return []
-    return Domains.query.filter(Domains.id.in_(domain_ids)).all()
+    return db.session.execute(
+        select(Domains).where(Domains.id.in_(domain_ids))
+    ).scalars().all()
 
 
-def _scoped_search_query():
-    return db.session.query(Hashes, HashfileHashes).join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+def _scoped_search_stmt():
+    return select(Hashes, HashfileHashes).join(
+        HashfileHashes, Hashes.id == HashfileHashes.hash_id
+    )
 
 
 def _normalized_query_text(raw_value: str | None) -> str:
@@ -81,7 +85,7 @@ def _password_search_filters(query_text: str):
 def searches_list():
     """Function to return list of search results"""
 
-    hashfiles = Hashfiles.query.all()
+    hashfiles = db.session.execute(select(Hashfiles)).scalars().all()
     domains = _visible_domains_for_hashfiles(hashfiles)
     search_form = SearchForm()
     # Domain and hashfile labels are resolved at render/export time.
@@ -93,7 +97,9 @@ def searches_list():
             return redirect(url_for('searches.searches_list'))
 
         if search_form.search_type.data == 'hash':
-            results = _scoped_search_query().filter(_hash_search_filters(query_text)).all()
+            results = db.session.execute(
+                _scoped_search_stmt().where(_hash_search_filters(query_text))
+            ).tuples().all()
         elif search_form.search_type.data == 'user':
             user_filters = [HashfileHashes.username == query_text]
             try:
@@ -102,9 +108,13 @@ def searches_list():
                 encoded_username = None
             if encoded_username:
                 user_filters.append(HashfileHashes.username.like('%' + encoded_username + '%'))
-            results = _scoped_search_query().filter(or_(*user_filters)).all()
+            results = db.session.execute(
+                _scoped_search_stmt().where(or_(*user_filters))
+            ).tuples().all()
         elif search_form.search_type.data == 'password':
-            results = _scoped_search_query().filter(_password_search_filters(query_text)).all()
+            results = db.session.execute(
+                _scoped_search_stmt().where(_password_search_filters(query_text))
+            ).tuples().all()
         else:
             flash('No results found', 'warning')
             return redirect(url_for('searches.searches_list'))
@@ -114,7 +124,9 @@ def searches_list():
         if raw_hash_id and hash_id is None:
             return redirect(url_for('searches.searches_list'))
         if hash_id is not None:
-            results = _scoped_search_query().filter(Hashes.id == hash_id).all()
+            results = db.session.execute(
+                _scoped_search_stmt().where(Hashes.id == hash_id)
+            ).tuples().all()
             first_result = results[0] if results else None
             if first_result: #Without a value in the search input the export button will not pass the form validation
                 search_form.query.data = first_result[0].ciphertext #All hashs should be the same, so set the search input as the first rows hash value

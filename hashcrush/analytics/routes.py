@@ -13,7 +13,7 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required
-from sqlalchemy import func
+from sqlalchemy import func, select
 
 from hashcrush.audit import record_audit_event
 from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles, db
@@ -38,7 +38,9 @@ def _parse_positive_int(value):
 
 
 def _resolve_scope(domain_id: int | None, hashfile_id: int | None):
-    visible_hashfiles = Hashfiles.query.order_by(Hashfiles.name.asc()).all()
+    visible_hashfiles = db.session.execute(
+        select(Hashfiles).order_by(Hashfiles.name.asc())
+    ).scalars().all()
     visible_hashfiles_by_id = {hashfile.id: hashfile for hashfile in visible_hashfiles}
     visible_domain_ids = sorted({hashfile.domain_id for hashfile in visible_hashfiles})
 
@@ -73,11 +75,11 @@ def _resolve_scope(domain_id: int | None, hashfile_id: int | None):
     }
 
 
-def _scoped_hash_rows_query(scoped_hashfile_ids: list[int]):
+def _scoped_hash_rows_stmt(scoped_hashfile_ids: list[int]):
     return (
-        db.session.query(Hashes, HashfileHashes)
+        select(Hashes, HashfileHashes)
         .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
-        .filter(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
+        .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
     )
 
 
@@ -99,7 +101,11 @@ def get_analytics():
         return redirect('/analytics')
 
     domain_rows = (
-        Domains.query.filter(Domains.id.in_(scope['visible_domain_ids'])).order_by(Domains.name.asc()).all()
+        db.session.execute(
+            select(Domains)
+            .where(Domains.id.in_(scope['visible_domain_ids']))
+            .order_by(Domains.name.asc())
+        ).scalars().all()
         if scope['visible_domain_ids']
         else []
     )
@@ -138,13 +144,14 @@ def get_analytics():
             total_unique_hashes=format_display(0),
         )
 
-    scoped_hash_rows = _scoped_hash_rows_query(scoped_hashfile_ids)
     status_counts = dict(
-        db.session.query(Hashes.cracked, func.count(Hashes.id))
-        .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
-        .filter(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
-        .group_by(Hashes.cracked)
-        .all()
+        db.session.execute(
+            select(Hashes.cracked, func.count(Hashes.id))
+            .select_from(Hashes)
+            .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+            .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
+            .group_by(Hashes.cracked)
+        ).all()
     )
 
     # Figure 1 (Recovered vs unrecovered account rows)
@@ -160,15 +167,19 @@ def get_analytics():
     fig1_percent = 0 if fig1_total == 0 else [str(round((fig1_cracked_cnt / fig1_total) * 100, 1)) + '%']
 
     # Figure 2 (Password complexity)
-    fig2_cracked_hashes = (
-        scoped_hash_rows.filter(Hashes.cracked.is_(True)).with_entities(Hashes.plaintext).all()
+    fig2_cracked_hashes = db.session.scalars(
+        select(Hashes.plaintext)
+        .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+        .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
+        .where(Hashes.cracked.is_(True))
     )
+    fig2_cracked_hashes = fig2_cracked_hashes.all()
     fig2_uncracked_cnt = fig1_uncracked_cnt
     fig2_fails_complexity_cnt = 0
     fig2_meets_complexity_cnt = 0
-    for entry in fig2_cracked_hashes:
+    for plaintext in fig2_cracked_hashes:
         flags = 0
-        decoded_plaintext = _decoded_plaintext(entry[0])
+        decoded_plaintext = _decoded_plaintext(plaintext)
         if len(decoded_plaintext) < 8:
             flags = -3
         if re.search(r"[a-z]", decoded_plaintext):
@@ -194,19 +205,25 @@ def get_analytics():
     fig2_values = [row[1] for row in fig2_data]
 
     # Figure 3 (Recovered Hashes)
-    fig3_cracked_cnt = (
-        scoped_hash_rows
-        .filter(Hashes.cracked.is_(True))
-        .with_entities(Hashes.plaintext)
-        .distinct()
-        .count()
+    fig3_cracked_cnt = int(
+        db.session.scalar(
+            select(func.count(func.distinct(Hashes.plaintext)))
+            .select_from(Hashes)
+            .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+            .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
+            .where(Hashes.cracked.is_(True))
+        )
+        or 0
     )
-    fig3_uncracked_cnt = (
-        scoped_hash_rows
-        .filter(Hashes.cracked.is_(False))
-        .with_entities(Hashes.ciphertext)
-        .distinct()
-        .count()
+    fig3_uncracked_cnt = int(
+        db.session.scalar(
+            select(func.count(func.distinct(Hashes.ciphertext)))
+            .select_from(Hashes)
+            .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+            .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
+            .where(Hashes.cracked.is_(False))
+        )
+        or 0
     )
     fig3_data = [
         ("Recovered: " + str(format_display(fig3_cracked_cnt)), fig3_cracked_cnt),
@@ -220,8 +237,14 @@ def get_analytics():
     # General Stats Table
     total_runtime = sum(hashfile.runtime or 0 for hashfile in scope['scoped_hashfiles'])
     total_accounts = fig1_total
-    total_unique_hashes = (
-        scoped_hash_rows.with_entities(Hashes.ciphertext).distinct().count()
+    total_unique_hashes = int(
+        db.session.scalar(
+            select(func.count(func.distinct(Hashes.ciphertext)))
+            .select_from(Hashes)
+            .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+            .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
+        )
+        or 0
     )
     total_accounts = format_display(total_accounts)
     total_unique_hashes = format_display(total_unique_hashes)
@@ -245,8 +268,8 @@ def get_analytics():
     mixedalphaspecialnum = 0
     other = 0
 
-    for entry in fig2_cracked_hashes:
-        tmp_plaintext = _decoded_plaintext(entry[0])
+    for plaintext in fig2_cracked_hashes:
+        tmp_plaintext = _decoded_plaintext(plaintext)
         tmp_plaintext = re.sub(r"[A-Z]", 'U', tmp_plaintext)
         tmp_plaintext = re.sub(r"[a-z]", 'L', tmp_plaintext)
         tmp_plaintext = re.sub(r"[0-9]", 'D', tmp_plaintext)
@@ -323,8 +346,8 @@ def get_analytics():
     # Figure 5 (Passwords by Length)
     fig5_cracked_hashes = fig2_cracked_hashes
     fig5_data = {}
-    for entry in fig5_cracked_hashes:
-        password_length = len(_decoded_plaintext(entry[0]))
+    for plaintext in fig5_cracked_hashes:
+        password_length = len(_decoded_plaintext(plaintext))
         if password_length in fig5_data:
             fig5_data[password_length] += 1
         else:
@@ -342,8 +365,8 @@ def get_analytics():
     fig6_cracked_hashes = fig2_cracked_hashes
     fig6_data = {}
     blank_label = 'Blank (unset)'
-    for entry in fig6_cracked_hashes:
-        decoded_plaintext = _decoded_plaintext(entry[0])
+    for plaintext in fig6_cracked_hashes:
+        decoded_plaintext = _decoded_plaintext(plaintext)
         if len(decoded_plaintext) > 0:
             if decoded_plaintext in fig6_data:
                 fig6_data[decoded_plaintext] += 1
@@ -367,8 +390,8 @@ def get_analytics():
     fig7_values = {}
     fig7_data = {}
     fig7_total = 0
-    for entry in fig6_cracked_hashes:
-        tmp_plaintext = _decoded_plaintext(entry[0])
+    for plaintext in fig6_cracked_hashes:
+        tmp_plaintext = _decoded_plaintext(plaintext)
         tmp_plaintext = re.sub(r"[A-Z]", 'U', tmp_plaintext)
         tmp_plaintext = re.sub(r"[a-z]", 'L', tmp_plaintext)
         tmp_plaintext = re.sub(r"[0-9]", 'D', tmp_plaintext)
@@ -389,12 +412,14 @@ def get_analytics():
             break
 
     # Figure 8 (Users where password == username)
-    fig8_cracked_hashes = (
-        scoped_hash_rows
-        .filter(Hashes.cracked.is_(True))
-        .with_entities(Hashes.plaintext, HashfileHashes.username)
-        .all()
+    fig8_cracked_hashes = db.session.execute(
+        select(Hashes.plaintext, HashfileHashes.username)
+        .select_from(Hashes)
+        .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+        .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
+        .where(Hashes.cracked.is_(True))
     )
+    fig8_cracked_hashes = fig8_cracked_hashes.all()
     fig8_table = []
     for entry in fig8_cracked_hashes:
         if entry[1] and entry[0]:
@@ -483,9 +508,12 @@ def analytics_download_hashes():
         cracked_hashes = []
         uncracked_hashes = []
     else:
-        scoped_query = _scoped_hash_rows_query(scoped_hashfile_ids)
-        cracked_hashes = scoped_query.filter(Hashes.cracked.is_(True)).all()
-        uncracked_hashes = scoped_query.filter(Hashes.cracked.is_(False)).all()
+        cracked_hashes = db.session.execute(
+            _scoped_hash_rows_stmt(scoped_hashfile_ids).where(Hashes.cracked.is_(True))
+        ).tuples().all()
+        uncracked_hashes = db.session.execute(
+            _scoped_hash_rows_stmt(scoped_hashfile_ids).where(Hashes.cracked.is_(False))
+        ).tuples().all()
 
     output = io.StringIO()
     if export_type == 'found':

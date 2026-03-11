@@ -1,11 +1,12 @@
 """Forms to manage domains."""
 
 from flask_wtf import FlaskForm
+from sqlalchemy import select
 from wtforms import StringField, SubmitField
 from wtforms.validators import DataRequired, Length, ValidationError
 
 from hashcrush.forms_utils import normalize_text_input
-from hashcrush.models import Domains
+from hashcrush.models import Domains, db
 
 
 class DomainsForm(FlaskForm):
@@ -21,7 +22,7 @@ class DomainsForm(FlaskForm):
     def validate_name(self, name):
         """Require globally unique domain names."""
 
-        if Domains.query.filter_by(name=name.data).first():
+        if db.session.execute(select(Domains).filter_by(name=name.data)).scalars().first():
             raise ValidationError(
                 "That domain name is taken. Please choose a different one."
             )

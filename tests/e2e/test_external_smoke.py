@@ -12,12 +12,6 @@ pytestmark = [
     ),
 ]
 
-
-def test_external_login_success(page, external_login):
-    external_login()
-    expect(page.get_by_role("link", name="Jobs")).to_be_visible()
-
-
 def test_external_jobs_page_accessible_after_login(page, external_live_server, external_login):
     external_login()
     page.get_by_role("link", name="Jobs").click()

@@ -148,7 +148,7 @@ def test_rules_add_records_audit_event(tmp_path):
         )
 
         assert response.status_code == 302
-        rule = Rules.query.filter_by(name="audit-rule").first()
+        rule = _first_row(Rules, name="audit-rule")
         assert rule is not None
         entry = _latest_audit_entry()
         assert entry is not None

@@ -7,6 +7,7 @@ import secrets
 from dataclasses import dataclass
 
 from flask import current_app
+from sqlalchemy import func, select
 
 from hashcrush.models import HashfileHashes, Hashfiles, db
 from hashcrush.utils.utils import (
@@ -113,8 +114,13 @@ def create_hashfile_from_form(
                 "Failed importing hashfile. Check file format/hash type and retry.",
             )
 
-        imported_hash_links = (
-            HashfileHashes.query.filter_by(hashfile_id=hashfile.id).count()
+        imported_hash_links = int(
+            db.session.scalar(
+                select(func.count())
+                .select_from(HashfileHashes)
+                .filter_by(hashfile_id=hashfile.id)
+            )
+            or 0
         )
         return (
             HashfileCreationResult(

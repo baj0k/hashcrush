@@ -8,6 +8,8 @@ import tempfile
 from configparser import ConfigParser
 from getpass import getpass
 
+from sqlalchemy import select
+
 CONFIG_PATH = os.path.join("hashcrush", "config.conf")
 ENV_TEST_PATH = ".env.test"
 LOCAL_POSTGRES_HOST_ALIASES = {"localhost", "127.0.0.1", "::1"}
@@ -644,13 +646,15 @@ def _seed_test_environment(runtime_path: str, env_path: str) -> dict[str, str]:
     _write_text_file(hashfile_path, E2E_SAMPLE_HASH + "\n")
 
     with seed_app.app_context():
-        settings = Settings.query.first()
+        settings = db.session.execute(select(Settings)).scalars().first()
         if settings is None:
             settings = Settings()
             db.session.add(settings)
             db.session.commit()
 
-        admin_user = Users.query.filter_by(username=E2E_ADMIN_USERNAME).first()
+        admin_user = db.session.execute(
+            select(Users).filter_by(username=E2E_ADMIN_USERNAME)
+        ).scalars().first()
         if not admin_user:
             admin_user = Users(
                 username=E2E_ADMIN_USERNAME,
@@ -660,7 +664,9 @@ def _seed_test_environment(runtime_path: str, env_path: str) -> dict[str, str]:
             db.session.add(admin_user)
             db.session.commit()
 
-        second_user = Users.query.filter_by(username=E2E_SECOND_USERNAME).first()
+        second_user = db.session.execute(
+            select(Users).filter_by(username=E2E_SECOND_USERNAME)
+        ).scalars().first()
         if not second_user:
             second_user = Users(
                 username=E2E_SECOND_USERNAME,
@@ -673,7 +679,9 @@ def _seed_test_environment(runtime_path: str, env_path: str) -> dict[str, str]:
         if default_tasks_need_added(db):
             add_default_tasks(db)
 
-        wordlist = Wordlists.query.filter_by(path=wordlist_path).first()
+        wordlist = db.session.execute(
+            select(Wordlists).filter_by(path=wordlist_path)
+        ).scalars().first()
         if not wordlist:
             wordlist = Wordlists(
                 name=E2E_WORDLIST_NAME,
@@ -685,7 +693,9 @@ def _seed_test_environment(runtime_path: str, env_path: str) -> dict[str, str]:
             db.session.add(wordlist)
             db.session.commit()
 
-        rule = Rules.query.filter_by(path=rule_path).first()
+        rule = db.session.execute(
+            select(Rules).filter_by(path=rule_path)
+        ).scalars().first()
         if not rule:
             rule = Rules(
                 name=E2E_RULE_NAME,
@@ -696,7 +706,9 @@ def _seed_test_environment(runtime_path: str, env_path: str) -> dict[str, str]:
             db.session.add(rule)
             db.session.commit()
 
-        mask_task = Tasks.query.filter_by(name=E2E_MASK_TASK_NAME).first()
+        mask_task = db.session.execute(
+            select(Tasks).filter_by(name=E2E_MASK_TASK_NAME)
+        ).scalars().first()
         if not mask_task:
             mask_task = Tasks(
                 name=E2E_MASK_TASK_NAME,
@@ -708,7 +720,9 @@ def _seed_test_environment(runtime_path: str, env_path: str) -> dict[str, str]:
             db.session.add(mask_task)
             db.session.commit()
 
-        dictionary_task = Tasks.query.filter_by(name=E2E_DICTIONARY_TASK_NAME).first()
+        dictionary_task = db.session.execute(
+            select(Tasks).filter_by(name=E2E_DICTIONARY_TASK_NAME)
+        ).scalars().first()
         if not dictionary_task:
             dictionary_task = Tasks(
                 name=E2E_DICTIONARY_TASK_NAME,
@@ -720,7 +734,9 @@ def _seed_test_environment(runtime_path: str, env_path: str) -> dict[str, str]:
             db.session.add(dictionary_task)
             db.session.commit()
 
-        dictionary_rule_task = Tasks.query.filter_by(name=E2E_DICTIONARY_RULE_TASK_NAME).first()
+        dictionary_rule_task = db.session.execute(
+            select(Tasks).filter_by(name=E2E_DICTIONARY_RULE_TASK_NAME)
+        ).scalars().first()
         if not dictionary_rule_task:
             dictionary_rule_task = Tasks(
                 name=E2E_DICTIONARY_RULE_TASK_NAME,
@@ -732,16 +748,20 @@ def _seed_test_environment(runtime_path: str, env_path: str) -> dict[str, str]:
             db.session.add(dictionary_rule_task)
             db.session.commit()
 
-        domain = Domains.query.filter_by(name=E2E_DOMAIN_NAME).first()
+        domain = db.session.execute(
+            select(Domains).filter_by(name=E2E_DOMAIN_NAME)
+        ).scalars().first()
         if not domain:
             domain = Domains(name=E2E_DOMAIN_NAME)
             db.session.add(domain)
             db.session.commit()
 
-        hashfile = Hashfiles.query.filter_by(
-            name=E2E_SAMPLE_HASHFILE_NAME,
-            domain_id=domain.id,
-        ).first()
+        hashfile = db.session.execute(
+            select(Hashfiles).filter_by(
+                name=E2E_SAMPLE_HASHFILE_NAME,
+                domain_id=domain.id,
+            )
+        ).scalars().first()
         if not hashfile:
             hashfile = Hashfiles(name=E2E_SAMPLE_HASHFILE_NAME, domain_id=domain.id)
             db.session.add(hashfile)
@@ -754,7 +774,9 @@ def _seed_test_environment(runtime_path: str, env_path: str) -> dict[str, str]:
             ):
                 raise RuntimeError("Failed importing E2E sample hashfile.")
 
-        sample_job = Jobs.query.filter_by(name=E2E_SAMPLE_JOB_NAME).first()
+        sample_job = db.session.execute(
+            select(Jobs).filter_by(name=E2E_SAMPLE_JOB_NAME)
+        ).scalars().first()
         if not sample_job:
             sample_job = Jobs(
                 name=E2E_SAMPLE_JOB_NAME,
@@ -767,7 +789,9 @@ def _seed_test_environment(runtime_path: str, env_path: str) -> dict[str, str]:
             db.session.add(sample_job)
             db.session.commit()
 
-        if not JobTasks.query.filter_by(job_id=sample_job.id, task_id=dictionary_task.id).first():
+        if not db.session.execute(
+            select(JobTasks).filter_by(job_id=sample_job.id, task_id=dictionary_task.id)
+        ).scalars().first():
             job_task = JobTasks(job_id=sample_job.id, task_id=dictionary_task.id, status="Not Started")
             db.session.add(job_task)
             db.session.commit()

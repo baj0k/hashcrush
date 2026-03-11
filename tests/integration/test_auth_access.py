@@ -173,7 +173,7 @@ def test_users_add_handles_integrity_error_cleanly(monkeypatch):
         )
         assert response.status_code == 200
         assert b"Account could not be created" in response.data
-        assert Users.query.count() == 1
+        assert _count_rows(Users) == 1
 
 @pytest.mark.security
 def test_users_add_rejects_whitespace_only_username():
@@ -195,7 +195,7 @@ def test_users_add_rejects_whitespace_only_username():
             },
         )
         assert response.status_code == 200
-        assert Users.query.count() == 1
+        assert _count_rows(Users) == 1
 
 @pytest.mark.security
 def test_users_delete_handles_integrity_error_cleanly(monkeypatch):
@@ -223,7 +223,7 @@ def test_users_delete_handles_integrity_error_cleanly(monkeypatch):
             b"Cannot delete user while they own records or while related jobs are being created"
             in response.data
         )
-        assert Users.query.filter_by(id=target_user.id).count() == 1
+        assert _count_rows(Users, id=target_user.id) == 1
 
 @pytest.mark.security
 def test_shared_resource_mutation_requires_admin(tmp_path, monkeypatch):
@@ -323,7 +323,7 @@ def test_shared_resource_mutation_requires_admin(tmp_path, monkeypatch):
             },
         )
         assert response.status_code == 302
-        assert Tasks.query.filter_by(name="blocked-task").first() is None
+        assert _first_row(Tasks, name="blocked-task") is None
 
         response = client.get(f"/tasks/edit/{task.id}")
         assert response.status_code == 302
@@ -344,13 +344,13 @@ def test_shared_resource_mutation_requires_admin(tmp_path, monkeypatch):
 
         response = client.post(f"/tasks/delete/{task.id}")
         assert response.status_code == 302
-        assert Tasks.query.get(task.id) is not None
+        assert db.session.get(Tasks, task.id) is not None
 
         response = client.get("/task_groups/add")
         assert response.status_code == 302
         response = client.post("/task_groups/add", data={"name": "blocked-group"})
         assert response.status_code == 302
-        assert TaskGroups.query.filter_by(name="blocked-group").first() is None
+        assert _first_row(TaskGroups, name="blocked-group") is None
 
         response = client.post("/task_groups/import", data={})
         assert response.status_code == 302
@@ -379,7 +379,7 @@ def test_shared_resource_mutation_requires_admin(tmp_path, monkeypatch):
 
         db.session.refresh(task_group)
         assert json.loads(task_group.tasks) == [task.id, extra_task.id]
-        assert TaskGroups.query.get(task_group.id) is not None
+        assert db.session.get(TaskGroups, task_group.id) is not None
 
         response = client.get("/wordlists/add")
         assert response.status_code == 302
@@ -388,7 +388,7 @@ def test_shared_resource_mutation_requires_admin(tmp_path, monkeypatch):
             data={"name": "blocked-wordlist", "existing_file": "SecLists/passwords/test.txt"},
         )
         assert response.status_code == 302
-        assert Wordlists.query.filter_by(name="blocked-wordlist").first() is None
+        assert _first_row(Wordlists, name="blocked-wordlist") is None
 
         response = client.post(f"/wordlists/update/{dynamic_wordlist.id}")
         assert response.status_code == 302
@@ -396,7 +396,7 @@ def test_shared_resource_mutation_requires_admin(tmp_path, monkeypatch):
 
         response = client.post(f"/wordlists/delete/{static_wordlist.id}")
         assert response.status_code == 302
-        assert Wordlists.query.get(static_wordlist.id) is not None
+        assert db.session.get(Wordlists, static_wordlist.id) is not None
 
         response = client.get("/rules/add")
         assert response.status_code == 302
@@ -405,11 +405,11 @@ def test_shared_resource_mutation_requires_admin(tmp_path, monkeypatch):
             data={"name": "blocked-rule", "existing_file": "hashcat/rules/test.rule"},
         )
         assert response.status_code == 302
-        assert Rules.query.filter_by(name="blocked-rule").first() is None
+        assert _first_row(Rules, name="blocked-rule") is None
 
         response = client.post(f"/rules/delete/{rule.id}")
         assert response.status_code == 302
-        assert Rules.query.get(rule.id) is not None
+        assert db.session.get(Rules, rule.id) is not None
 
 @pytest.mark.security
 def test_shared_resource_lists_hide_admin_controls_for_non_admin():
@@ -586,8 +586,8 @@ def test_users_delete_blocks_last_admin_account():
 
         response = client.post(f"/users/delete/{admin.id}")
         assert response.status_code == 302
-        assert Users.query.get(admin.id) is not None
-        assert Users.query.filter_by(admin=True).count() == 1
+        assert db.session.get(Users, admin.id) is not None
+        assert _count_rows(Users, admin=True) == 1
 
 @pytest.mark.security
 def test_users_delete_blocks_self_delete_even_when_other_admin_exists():
@@ -603,8 +603,8 @@ def test_users_delete_blocks_self_delete_even_when_other_admin_exists():
 
         response = client.post(f"/users/delete/{admin.id}")
         assert response.status_code == 302
-        assert Users.query.get(admin.id) is not None
-        assert Users.query.filter_by(admin=True).count() == 2
+        assert db.session.get(Users, admin.id) is not None
+        assert _count_rows(Users, admin=True) == 2
 
 @pytest.mark.security
 def test_users_delete_allows_deleting_other_admin_when_not_last_admin():
@@ -620,8 +620,8 @@ def test_users_delete_allows_deleting_other_admin_when_not_last_admin():
 
         response = client.post(f"/users/delete/{other_admin.id}")
         assert response.status_code == 302
-        assert Users.query.get(other_admin.id) is None
-        assert Users.query.filter_by(admin=True).count() == 1
+        assert db.session.get(Users, other_admin.id) is None
+        assert _count_rows(Users, admin=True) == 1
 
 @pytest.mark.security
 def test_admin_reset_blocks_self_reset_flow():
@@ -758,4 +758,4 @@ def test_users_delete_blocks_when_target_user_owns_records():
 
         response = client.post(f"/users/delete/{target_user.id}")
         assert response.status_code == 302
-        assert Users.query.get(target_user.id) is not None
+        assert db.session.get(Users, target_user.id) is not None

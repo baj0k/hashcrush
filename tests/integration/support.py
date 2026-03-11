@@ -8,7 +8,7 @@ from configparser import ConfigParser
 from pathlib import Path
 
 import pytest
-from sqlalchemy import inspect
+from sqlalchemy import func, inspect, select
 from sqlalchemy.exc import IntegrityError
 
 from hashcrush import create_app
@@ -127,7 +127,44 @@ def _login_client_as_user(client, user: Users):
 
 
 def _latest_audit_entry() -> AuditLog | None:
-    return AuditLog.query.order_by(AuditLog.id.desc()).first()
+    return db.session.scalar(select(AuditLog).order_by(AuditLog.id.desc()))
+
+
+def _count_rows(model, *criteria, **filters) -> int:
+    stmt = select(func.count()).select_from(model)
+    if filters:
+        stmt = stmt.filter_by(**filters)
+    if criteria:
+        stmt = stmt.where(*criteria)
+    return int(db.session.scalar(stmt) or 0)
+
+
+def _first_row(model, *criteria, order_by=None, **filters):
+    stmt = select(model)
+    if filters:
+        stmt = stmt.filter_by(**filters)
+    if criteria:
+        stmt = stmt.where(*criteria)
+    if order_by is not None:
+        if isinstance(order_by, list | tuple):
+            stmt = stmt.order_by(*order_by)
+        else:
+            stmt = stmt.order_by(order_by)
+    return db.session.scalar(stmt)
+
+
+def _all_rows(model, *criteria, order_by=None, **filters):
+    stmt = select(model)
+    if filters:
+        stmt = stmt.filter_by(**filters)
+    if criteria:
+        stmt = stmt.where(*criteria)
+    if order_by is not None:
+        if isinstance(order_by, list | tuple):
+            stmt = stmt.order_by(*order_by)
+        else:
+            stmt = stmt.order_by(order_by)
+    return db.session.execute(stmt).scalars().all()
 
 
 

@@ -3,6 +3,7 @@ import json
 
 from flask import Blueprint, flash, redirect, render_template, url_for
 from flask_login import login_required
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from hashcrush.audit import record_audit_event
@@ -62,16 +63,18 @@ def _task_save_conflict_response(template_name, title, tasks_form, task=None, wo
 def tasks_list():
     """Function to list tasks"""
 
-    tasks = Tasks.query.all()
-    jobs = visible_jobs_query().all()
+    tasks = db.session.execute(select(Tasks)).scalars().all()
+    jobs = db.session.execute(visible_jobs_query()).scalars().all()
     visible_job_ids = [job.id for job in jobs]
     job_tasks = (
-        JobTasks.query.filter(JobTasks.job_id.in_(visible_job_ids)).all()
+        db.session.execute(
+            select(JobTasks).where(JobTasks.job_id.in_(visible_job_ids))
+        ).scalars().all()
         if visible_job_ids
         else []
     )
-    wordlists = Wordlists.query.all()
-    task_groups = TaskGroups.query.all()
+    wordlists = db.session.execute(select(Wordlists)).scalars().all()
+    task_groups = db.session.execute(select(TaskGroups)).scalars().all()
     task_group_task_ids = {
         task_group.id: _parse_task_group_task_ids(task_group.tasks)
         for task_group in task_groups
@@ -99,8 +102,8 @@ def tasks_add():
     tasksForm.rule_id.choices = []
     tasksForm.wl_id.choices = []
 
-    wordlists = Wordlists.query.all()
-    rules = Rules.query.all()
+    wordlists = db.session.execute(select(Wordlists)).scalars().all()
+    rules = db.session.execute(select(Rules)).scalars().all()
 
     for wordlist in wordlists:
         tasksForm.wl_id.choices += [(wordlist.id, wordlist.name)]
@@ -113,7 +116,7 @@ def tasks_add():
         if tasksForm.hc_attackmode.data == 'dictionary':
             selected_wl_id = _parse_positive_int(tasksForm.wl_id.data)
             selected_wordlist = (
-                Wordlists.query.filter(Wordlists.id == selected_wl_id).first()
+                db.session.scalar(select(Wordlists).where(Wordlists.id == selected_wl_id))
                 if selected_wl_id is not None
                 else None
             )
@@ -125,7 +128,7 @@ def tasks_add():
             if tasksForm.rule_id.data not in ('None', None, ''):
                 selected_rule_id = _parse_positive_int(tasksForm.rule_id.data)
                 selected_rule = (
-                    Rules.query.filter(Rules.id == selected_rule_id).first()
+                    db.session.scalar(select(Rules).where(Rules.id == selected_rule_id))
                     if selected_rule_id is not None
                     else None
                 )
@@ -196,10 +199,12 @@ def tasks_add():
 def task_edit(task_id):
     """Function to edit task"""
 
-    task = Tasks.query.filter(Tasks.id == task_id).first_or_404()
+    task = db.get_or_404(Tasks, task_id)
 
     # Shared tasks are immutable once any job references them.
-    affected_jobs = JobTasks.query.filter_by(task_id=task_id).all()
+    affected_jobs = db.session.execute(
+        select(JobTasks).filter_by(task_id=task_id)
+    ).scalars().all()
     if affected_jobs:
         flash('Cannot edit this task. It is already associated with one or more jobs.', 'danger')
         return redirect(url_for('tasks.tasks_list'))
@@ -210,16 +215,16 @@ def task_edit(task_id):
     tasksForm.rule_id.choices = []
     tasksForm.wl_id.choices = []
 
-    wordlists = Wordlists.query.all()
+    wordlists = db.session.execute(select(Wordlists)).scalars().all()
     # Add the current value for wordlist.
     if task.hc_attackmode == 'dictionary':
-        edit_task_wl = Wordlists.query.filter(Wordlists.id == task.wl_id).first()
+        edit_task_wl = db.session.scalar(select(Wordlists).where(Wordlists.id == task.wl_id))
         if edit_task_wl:
             tasksForm.wl_id.choices.append((edit_task_wl.id, edit_task_wl.name))
-    rules = Rules.query.all()
+    rules = db.session.execute(select(Rules)).scalars().all()
     # Check if the current value for rule is an integer.
     if isinstance(task.rule_id, int):
-        edit_task_rl = Rules.query.filter(Rules.id == task.rule_id).first()
+        edit_task_rl = db.session.scalar(select(Rules).where(Rules.id == task.rule_id))
         if edit_task_rl:
             tasksForm.rule_id.choices.append((edit_task_rl.id, edit_task_rl.name))
             tasksForm.rule_id.choices.append(('None', 'None'))
@@ -241,7 +246,7 @@ def task_edit(task_id):
         if tasksForm.hc_attackmode.data == 'dictionary':
             selected_wl_id = _parse_positive_int(tasksForm.wl_id.data)
             selected_wordlist = (
-                Wordlists.query.filter(Wordlists.id == selected_wl_id).first()
+                db.session.scalar(select(Wordlists).where(Wordlists.id == selected_wl_id))
                 if selected_wl_id is not None
                 else None
             )
@@ -253,7 +258,7 @@ def task_edit(task_id):
             if tasksForm.rule_id.data not in ('None', None, ''):
                 selected_rule_id = _parse_positive_int(tasksForm.rule_id.data)
                 selected_rule = (
-                    Rules.query.filter(Rules.id == selected_rule_id).first()
+                    db.session.scalar(select(Rules).where(Rules.id == selected_rule_id))
                     if selected_rule_id is not None
                     else None
                 )
@@ -349,11 +354,11 @@ def task_edit(task_id):
 def tasks_delete(task_id):
     """Function to delete task"""
 
-    task = Tasks.query.filter(Tasks.id == task_id).first_or_404()
-    task_groups = TaskGroups.query.all()
+    task = db.get_or_404(Tasks, task_id)
+    task_groups = db.session.execute(select(TaskGroups)).scalars().all()
 
     # Check if associated with JobTask (which implies its associated with a job)
-    jobtask = JobTasks.query.filter_by(task_id=task_id).first()
+    jobtask = db.session.scalar(select(JobTasks).filter_by(task_id=task_id))
     if jobtask:
         flash('Cannot delete. Task is associated with one or more jobs.', 'danger')
         return redirect(url_for('tasks.tasks_list'))

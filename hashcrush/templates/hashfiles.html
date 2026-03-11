@@ -30,15 +30,16 @@ The following are hash files currently configured in HashCrush. Each hash file i
                 </thead>
                 <tbody>
                     {% for domain in domains %}
-                        <tr>
-                            <td>{{ domain.name }}</td>
-                            <td></td>
-                            <td></td>
-                            <td></td>
-                            <td></td>
-                        </tr>
-                        {% for hashfile in hashfiles %}
-                            {% if hashfile.domain_id == domain.id %}
+                        {% set domain_hashfiles = hashfiles_by_domain.get(domain.id, []) %}
+                        {% if domain_hashfiles %}
+                            <tr>
+                                <td>{{ domain.name }}</td>
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                            </tr>
+                            {% for hashfile in domain_hashfiles %}
                                 <tr>
                                     <td></td>
                                     <td>{{ hashfile.name }}</td>
@@ -62,8 +63,8 @@ The following are hash files currently configured in HashCrush. Each hash file i
                                         {% endif %}
                                     </td>
                                 </tr>
-                            {% endif %}
-                        {% endfor %}
+                            {% endfor %}
+                        {% endif %}
                     {% endfor %}
                 </tbody>
               </table>
@@ -87,16 +88,14 @@ The following are hash files currently configured in HashCrush. Each hash file i
                                 <tr>
                                     <th scope="row">Associated Jobs</th>
                                     <td>
-                                        {% set associated_jobs = namespace(value=0) %}
-                                        {% for job in jobs %}
-                                            {% if job.hashfile_id == hashfile.id %}
-                                                {% set associated_jobs.value = 1 %}
+                                        {% set associated_jobs = jobs_by_hashfile.get(hashfile.id, []) %}
+                                        {% if associated_jobs %}
+                                            {% for job in associated_jobs %}
                                                 {{ job.name }} <br>
-                                            {% endif %}
-                                        {% endfor %}
-                                        {% if associated_jobs.value == 0 %}
+                                            {% endfor %}
+                                        {% else %}
                                             <i>none</i><br>
-                                        {% endif %}                                        
+                                        {% endif %}
                                     </td>
                                 </tr>
                             </tbody>

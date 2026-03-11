@@ -9,6 +9,7 @@ import tempfile
 from datetime import UTC, datetime
 
 from flask import current_app, has_app_context
+from sqlalchemy import func, select
 from werkzeug.utils import secure_filename
 
 from hashcrush.models import (
@@ -143,14 +144,14 @@ def migrate_plaintext_storage_rows(batch_size: int = 1000) -> int:
     last_id = 0
 
     while True:
-        rows = (
-            Hashes.query.filter(Hashes.id > last_id)
-            .filter(Hashes.cracked.is_(True))
-            .filter(Hashes.plaintext.isnot(None))
+        rows = db.session.execute(
+            select(Hashes)
+            .where(Hashes.id > last_id)
+            .where(Hashes.cracked.is_(True))
+            .where(Hashes.plaintext.isnot(None))
             .order_by(Hashes.id.asc())
             .limit(batch_size)
-            .all()
-        )
+        ).scalars().all()
         if not rows:
             break
 
@@ -263,7 +264,9 @@ def get_md5_hash(string):
 def import_hash_only(line, hash_type):
     """Function to import single hash"""
 
-    hash = Hashes.query.filter_by(hash_type=hash_type, sub_ciphertext=get_md5_hash(line)).first()
+    hash = db.session.scalar(
+        select(Hashes).filter_by(hash_type=hash_type, sub_ciphertext=get_md5_hash(line))
+    )
 
     if hash:
         return hash.id
@@ -357,11 +360,13 @@ def import_hashfilehashes(hashfile_id, hashfile_path, file_type, hash_type):
             if username is not None:
                 encoded_username = username.encode('latin-1', errors='replace').hex()
 
-            existing_link = HashfileHashes.query.filter_by(
-                hash_id=hash_id,
-                hashfile_id=hashfile_id,
-                username=encoded_username,
-            ).first()
+            existing_link = db.session.scalar(
+                select(HashfileHashes).filter_by(
+                    hash_id=hash_id,
+                    hashfile_id=hashfile_id,
+                    username=encoded_username,
+                )
+            )
             if not existing_link:
                 hashfilehashes = HashfileHashes(
                     hash_id=hash_id,
@@ -376,18 +381,19 @@ def import_hashfilehashes(hashfile_id, hashfile_path, file_type, hash_type):
 def update_dynamic_wordlist(wordlist_id):
     """Function to update dynamic wordlist"""
 
-    wordlist = Wordlists.query.get(wordlist_id)
+    wordlist = db.session.get(Wordlists, wordlist_id)
     if not wordlist:
         return False
 
-    plaintext_query = (
-        db.session.query(Hashes.plaintext)
+    plaintext_stmt = (
+        select(Hashes.plaintext)
         .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
         .join(Hashfiles, HashfileHashes.hashfile_id == Hashfiles.id)
-        .filter(Hashes.cracked.is_(True))
-        .filter(Hashes.plaintext.isnot(None))
+        .where(Hashes.cracked.is_(True))
+        .where(Hashes.plaintext.isnot(None))
+        .distinct()
     )
-    plaintext_rows = plaintext_query.distinct().all()
+    plaintext_rows = db.session.execute(plaintext_stmt).scalars().all()
 
     # Do we delete the original file, or overwrite it?
     # if we overwrite, what happens if the new content has fewer lines than the previous file.
@@ -397,8 +403,8 @@ def update_dynamic_wordlist(wordlist_id):
     os.makedirs(os.path.dirname(resolved_path), exist_ok=True)
 
     with open(resolved_path, 'w') as file:
-        for entry in plaintext_rows:
-            decoded_plaintext = decode_plaintext_from_storage(entry.plaintext)
+        for plaintext in plaintext_rows:
+            decoded_plaintext = decode_plaintext_from_storage(plaintext)
             if decoded_plaintext is not None:
                 file.write(decoded_plaintext + '\n')
 
@@ -414,24 +420,26 @@ def update_dynamic_wordlist(wordlist_id):
 def build_hashcat_argv(job_id, task_id, hashcat_bin=None):
     """Build a safe argv list for launching hashcat without a shell."""
 
-    task = Tasks.query.get(task_id)
-    job = Jobs.query.get(job_id)
+    task = db.session.get(Tasks, task_id)
+    job = db.session.get(Jobs, job_id)
     if not task or not job:
         raise ValueError("Invalid job/task combination when building hashcat command.")
 
-    hashfilehashes_single_entry = HashfileHashes.query.filter_by(hashfile_id=job.hashfile_id).first()
+    hashfilehashes_single_entry = db.session.scalar(
+        select(HashfileHashes).filter_by(hashfile_id=job.hashfile_id)
+    )
     if not hashfilehashes_single_entry:
         raise ValueError("Job has no hashes assigned.")
 
-    hashes_single_entry = Hashes.query.get(hashfilehashes_single_entry.hash_id)
+    hashes_single_entry = db.session.get(Hashes, hashfilehashes_single_entry.hash_id)
     if not hashes_single_entry:
         raise ValueError("Hash type could not be determined from job hashfile.")
 
     hash_type = hashes_single_entry.hash_type
     attackmode = task.hc_attackmode
     mask = task.hc_mask
-    rules_file = Rules.query.get(task.rule_id) if task.rule_id else None
-    wordlist = Wordlists.query.get(task.wl_id) if task.wl_id else None
+    rules_file = db.session.get(Rules, task.rule_id) if task.rule_id else None
+    wordlist = db.session.get(Wordlists, task.wl_id) if task.wl_id else None
 
     hashes_dir = get_runtime_subdir('hashes')
     outfiles_dir = get_runtime_subdir('outfiles')
@@ -497,7 +505,7 @@ def update_job_task_status(jobtask_id, status):
       - Job completion is determined by the absence of active tasks (Queued/Running/Importing/Paused).
     """
 
-    jobtask = JobTasks.query.get(jobtask_id)
+    jobtask = db.session.get(JobTasks, jobtask_id)
     if jobtask is None:
         return False
 
@@ -508,7 +516,7 @@ def update_job_task_status(jobtask_id, status):
     db.session.commit()
 
     # Update the parent Job's lifecycle.
-    job = Jobs.query.get(jobtask.job_id)
+    job = db.session.get(Jobs, jobtask.job_id)
     if not job:
         return True
 
@@ -526,17 +534,26 @@ def update_job_task_status(jobtask_id, status):
 
     # Determine if all tasks are finished.
     active_statuses = {'Queued', 'Running', 'Importing', 'Paused'}
-    remaining_active = JobTasks.query.filter(
-        JobTasks.job_id == job.id,
-        JobTasks.status.in_(active_statuses),
-    ).count()
+    remaining_active = int(
+        db.session.scalar(
+            select(func.count())
+            .select_from(JobTasks)
+            .where(JobTasks.job_id == job.id)
+            .where(JobTasks.status.in_(active_statuses))
+        )
+        or 0
+    )
 
     if remaining_active == 0 and job.status in ('Queued', 'Running', 'Paused'):
         # Mark job as completed or canceled depending on whether any task was canceled.
-        any_canceled = JobTasks.query.filter(
-            JobTasks.job_id == job.id,
-            JobTasks.status == 'Canceled',
-        ).count() > 0
+        any_canceled = bool(
+            db.session.scalar(
+                select(JobTasks.id)
+                .where(JobTasks.job_id == job.id)
+                .where(JobTasks.status == 'Canceled')
+                .limit(1)
+            )
+        )
 
         job.status = 'Canceled' if any_canceled else 'Completed'
         job.ended_at = _utc_now_naive()
@@ -564,25 +581,37 @@ def update_job_task_status(jobtask_id, status):
             duration = 0
 
         if duration and job.hashfile_id:
-            hashfile = Hashfiles.query.get(job.hashfile_id)
+            hashfile = db.session.get(Hashfiles, job.hashfile_id)
             if hashfile:
                 hashfile.runtime += duration
                 db.session.commit()
 
     elif remaining_active > 0:
         # Keep the parent job status consistent with remaining active tasks.
-        has_running = JobTasks.query.filter(
-            JobTasks.job_id == job.id,
-            JobTasks.status.in_(('Running', 'Importing')),
-        ).count() > 0
-        has_paused = JobTasks.query.filter(
-            JobTasks.job_id == job.id,
-            JobTasks.status == 'Paused',
-        ).count() > 0
-        has_queued = JobTasks.query.filter(
-            JobTasks.job_id == job.id,
-            JobTasks.status == 'Queued',
-        ).count() > 0
+        has_running = bool(
+            db.session.scalar(
+                select(JobTasks.id)
+                .where(JobTasks.job_id == job.id)
+                .where(JobTasks.status.in_(('Running', 'Importing')))
+                .limit(1)
+            )
+        )
+        has_paused = bool(
+            db.session.scalar(
+                select(JobTasks.id)
+                .where(JobTasks.job_id == job.id)
+                .where(JobTasks.status == 'Paused')
+                .limit(1)
+            )
+        )
+        has_queued = bool(
+            db.session.scalar(
+                select(JobTasks.id)
+                .where(JobTasks.job_id == job.id)
+                .where(JobTasks.status == 'Queued')
+                .limit(1)
+            )
+        )
 
         if has_running and job.status != 'Running':
             job.status = 'Running'

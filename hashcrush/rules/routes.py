@@ -3,6 +3,7 @@ import os
 
 from flask import Blueprint, current_app, flash, redirect, render_template, url_for
 from flask_login import login_required
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from hashcrush.audit import record_audit_event
@@ -125,8 +126,8 @@ def _resolve_selected_file(selected_relative_path: str, base_dir: str) -> str | 
 @login_required
 def rules_list():
     """Function to return list of rules"""
-    rules = Rules.query.all()
-    tasks = Tasks.query.all()
+    rules = db.session.execute(select(Rules)).scalars().all()
+    tasks = db.session.execute(select(Tasks)).scalars().all()
     return render_template(
         'rules.html',
         title='Rules',
@@ -174,10 +175,10 @@ def rules_add():
             )
 
         rules_path = os.path.abspath(rules_path)
-        if Rules.query.filter_by(path=rules_path).first():
+        if db.session.scalar(select(Rules).filter_by(path=rules_path)):
             flash('Rules file is already registered.', 'warning')
             return redirect(url_for('rules.rules_list'))
-        if Rules.query.filter_by(name=form.name.data).first():
+        if db.session.scalar(select(Rules).filter_by(name=form.name.data)):
             flash('Rules name is already registered.', 'warning')
             return redirect(url_for('rules.rules_list'))
 
@@ -230,9 +231,9 @@ def rules_add():
 @admin_required_redirect('rules.rules_list')
 def rules_delete(rule_id):
     """Function to delete rule file record"""
-    rule = Rules.query.get_or_404(rule_id)
+    rule = db.get_or_404(Rules, rule_id)
     # Check if part of a task.
-    task = Tasks.query.filter_by(rule_id=rule.id).first()
+    task = db.session.scalar(select(Tasks).filter_by(rule_id=rule.id))
     if task:
         flash('Rule file is currently used in a task and cannot be deleted.', 'danger')
     else:
