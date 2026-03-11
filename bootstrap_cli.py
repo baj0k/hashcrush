@@ -10,6 +10,8 @@ from getpass import getpass
 
 from sqlalchemy import select
 
+from hashcrush.crypto_utils import generate_data_encryption_key
+
 CONFIG_PATH = os.path.join("hashcrush", "config.conf")
 ENV_TEST_PATH = ".env.test"
 LOCAL_POSTGRES_HOST_ALIASES = {"localhost", "127.0.0.1", "::1"}
@@ -20,9 +22,8 @@ DEFAULT_DB_USERNAME = "hashcrush"
 DEFAULT_DB_PASSWORD = "hashcrush"
 DEFAULT_HASHCAT_BIN = "/usr/bin/hashcat"
 DEFAULT_HASHCAT_STATUS_TIMER = 5
-DEFAULT_WORDLISTS_PATH = "/usr/share/seclists/Passwords"
-DEFAULT_RULES_PATH = "/usr/share/hashcat/rules"
 DEFAULT_RUNTIME_PATH = "/tmp/hashcrush-runtime"
+DEFAULT_STORAGE_PATH = "/var/lib/hashcrush"
 DEFAULT_SSL_DIR = "/etc/hashcrush/ssl"
 FALLBACK_TEST_SSL_DIR = os.path.join("hashcrush", "ssl")
 
@@ -48,22 +49,6 @@ def _read_existing_app_value(config_path: str, key: str) -> str | None:
     parser.read(config_path, encoding="utf-8")
     value = parser.get("app", key, fallback="").strip()
     return value or None
-
-
-def _prompt_existing_directory(prompt: str, default: str | None) -> str:
-    while True:
-        suffix = f" [{default}]" if default else ""
-        value = input(f"{prompt}{suffix}: ").strip()
-        if not value:
-            value = default or ""
-        resolved = os.path.abspath(os.path.expanduser(value))
-        if not resolved:
-            print("Error: path is required.")
-            continue
-        if not os.path.isdir(resolved):
-            print(f"Error: directory does not exist: {resolved}")
-            continue
-        return resolved
 
 
 def _probe_writable_directory(path: str) -> str:
@@ -115,6 +100,7 @@ def _set_path_mode(path: str, mode: int) -> None:
 
 def _ensure_runtime_directories(
     runtime_root: str,
+    storage_root: str,
     ssl_cert_path: str,
     ssl_key_path: str,
 ) -> None:
@@ -122,6 +108,8 @@ def _ensure_runtime_directories(
         os.path.join(runtime_root, "tmp"),
         os.path.join(runtime_root, "hashes"),
         os.path.join(runtime_root, "outfiles"),
+        os.path.join(storage_root, "wordlists"),
+        os.path.join(storage_root, "rules"),
         os.path.dirname(ssl_cert_path),
         os.path.dirname(ssl_key_path),
     )
@@ -139,11 +127,11 @@ def _write_config_atomic(
     db_username: str,
     db_password: str,
     secret_key: str,
+    data_encryption_key: str,
     hashcat_bin: str,
     hashcat_status_timer: int,
-    wordlists_path: str,
-    rules_path: str,
     runtime_path: str,
+    storage_path: str,
     ssl_cert_path: str,
     ssl_key_path: str,
 ) -> None:
@@ -158,11 +146,11 @@ def _write_config_atomic(
     }
     parser["app"] = {
         "secret_key": secret_key,
+        "data_encryption_key": data_encryption_key,
         "hashcat_bin": hashcat_bin,
         "hashcat_status_timer": str(hashcat_status_timer),
-        "wordlists_path": wordlists_path,
-        "rules_path": rules_path,
         "runtime_path": runtime_path,
+        "storage_path": storage_path,
         "ssl_cert_path": ssl_cert_path,
         "ssl_key_path": ssl_key_path,
     }
@@ -329,21 +317,6 @@ def _run_root_guard() -> None:
             sys.exit()
 
 
-def _install_dependencies() -> None:
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "-r",
-            "requirements.txt",
-            "--break-system-packages",
-        ],
-        check=True,
-    )
-
-
 def _existing_ssl_dir(existing_ssl_cert_path: str | None, existing_ssl_key_path: str | None) -> str | None:
     if not existing_ssl_cert_path or not existing_ssl_key_path:
         return None
@@ -422,27 +395,6 @@ def _collect_interactive_install_config(existing_values: dict[str, str | None]) 
         print("Error: You must provide a password.")
         db_password = getpass("Enter the password for " + db_username + ": ")
 
-    wordlists_default = (
-        os.getenv("HASHCRUSH_WORDLISTS_PATH")
-        or existing_values["wordlists_path"]
-        or DEFAULT_WORDLISTS_PATH
-    )
-    rules_default = (
-        os.getenv("HASHCRUSH_RULES_PATH")
-        or existing_values["rules_path"]
-        or DEFAULT_RULES_PATH
-    )
-
-    print("\nCollecting External Dictionary and Rules Paths")
-    wordlists_path = _prompt_existing_directory(
-        "Enter path to the SecLists/Passwords wordlists root",
-        wordlists_default,
-    )
-    rules_path = _prompt_existing_directory(
-        "Enter path to the hashcat rules root",
-        rules_default,
-    )
-
     runtime_default = (
         os.getenv("HASHCRUSH_RUNTIME_PATH")
         or existing_values["runtime_path"]
@@ -455,6 +407,16 @@ def _collect_interactive_install_config(existing_values: dict[str, str | None]) 
         runtime_path = runtime_default
     runtime_path = os.path.abspath(os.path.expanduser(runtime_path))
     os.makedirs(runtime_path, exist_ok=True)
+
+    storage_default = (
+        os.getenv("HASHCRUSH_STORAGE_PATH")
+        or existing_values["storage_path"]
+        or DEFAULT_STORAGE_PATH
+    )
+    storage_path = _prompt_writable_directory(
+        "Enter path for persistent uploaded asset storage",
+        storage_default,
+    )
 
     ssl_dir_default = (
         _env_ssl_dir()
@@ -515,9 +477,8 @@ def _collect_interactive_install_config(existing_values: dict[str, str | None]) 
         "admin_username": admin_username,
         "admin_password": admin_password,
         "hashcat_bin": hashcat_bin,
-        "wordlists_path": wordlists_path,
-        "rules_path": rules_path,
         "runtime_path": runtime_path,
+        "storage_path": storage_path,
         "ssl_cert_path": os.path.join(ssl_dir, "cert.pem"),
         "ssl_key_path": os.path.join(ssl_dir, "key.pem"),
     }
@@ -551,10 +512,14 @@ def _collect_test_install_config(existing_values: dict[str, str | None]) -> dict
         )
     )
     os.makedirs(runtime_path, exist_ok=True)
-
-    fixture_root = os.path.join(runtime_path, "e2e-fixtures")
-    wordlists_path = os.path.join(fixture_root, "wordlists")
-    rules_path = os.path.join(fixture_root, "rules")
+    storage_path = os.path.abspath(
+        os.path.expanduser(
+            os.getenv("HASHCRUSH_STORAGE_PATH")
+            or existing_values["storage_path"]
+            or DEFAULT_STORAGE_PATH
+        )
+    )
+    os.makedirs(storage_path, exist_ok=True)
 
     project_root = os.path.abspath(os.path.dirname(__file__))
     ssl_dir = _find_first_writable_directory(
@@ -580,9 +545,8 @@ def _collect_test_install_config(existing_values: dict[str, str | None]) -> dict
     print(f"- db_port={db_port}")
     print(f"- db_name={db_name}")
     print(f"- db_username={db_username}")
-    print(f"- wordlists_path={wordlists_path}")
-    print(f"- rules_path={rules_path}")
     print(f"- runtime_path={runtime_path}")
+    print(f"- storage_path={storage_path}")
     print(f"- ssl_dir={ssl_dir}")
 
     return {
@@ -592,17 +556,21 @@ def _collect_test_install_config(existing_values: dict[str, str | None]) -> dict
         "db_username": db_username,
         "db_password": db_password,
         "hashcat_bin": hashcat_bin,
-        "wordlists_path": wordlists_path,
-        "rules_path": rules_path,
         "runtime_path": runtime_path,
+        "storage_path": storage_path,
         "ssl_cert_path": os.path.join(ssl_dir, "cert.pem"),
         "ssl_key_path": os.path.join(ssl_dir, "key.pem"),
     }
 
 
-def _generate_ssl_certificates(runtime_path: str, ssl_cert_path: str, ssl_key_path: str) -> None:
+def _generate_ssl_certificates(
+    runtime_path: str,
+    storage_path: str,
+    ssl_cert_path: str,
+    ssl_key_path: str,
+) -> None:
     print("Generating SSL Certificates")
-    _ensure_runtime_directories(runtime_path, ssl_cert_path, ssl_key_path)
+    _ensure_runtime_directories(runtime_path, storage_path, ssl_cert_path, ssl_key_path)
     subprocess.run(
         [
             "openssl",
@@ -663,7 +631,9 @@ def _write_e2e_env_file(env_path: str, values: dict[str, str]) -> None:
         handle.write("\n".join(lines))
 
 
-def _seed_test_environment(runtime_path: str, env_path: str) -> dict[str, str]:
+def _seed_test_environment(
+    runtime_path: str, storage_path: str, env_path: str
+) -> dict[str, str]:
     from hashcrush.models import (
         Domains,
         Hashfiles,
@@ -682,8 +652,8 @@ def _seed_test_environment(runtime_path: str, env_path: str) -> dict[str, str]:
 
     seed_app = _build_seed_app()
     fixture_root = os.path.join(runtime_path, "e2e-fixtures")
-    wordlists_dir = os.path.join(fixture_root, "wordlists")
-    rules_dir = os.path.join(fixture_root, "rules")
+    wordlists_dir = os.path.join(storage_path, "wordlists")
+    rules_dir = os.path.join(storage_path, "rules")
     hashes_dir = os.path.join(fixture_root, "hashes")
     wordlist_path = os.path.join(wordlists_dir, "e2e-passwords.txt")
     rule_path = os.path.join(rules_dir, "noop.rule")
@@ -888,9 +858,8 @@ def _print_test_environment_summary(values: dict[str, str]) -> None:
 def _existing_install_values() -> dict[str, str | None]:
     return {
         "hashcat_bin": _read_existing_app_value(CONFIG_PATH, "hashcat_bin"),
-        "wordlists_path": _read_existing_app_value(CONFIG_PATH, "wordlists_path"),
-        "rules_path": _read_existing_app_value(CONFIG_PATH, "rules_path"),
         "runtime_path": _read_existing_app_value(CONFIG_PATH, "runtime_path"),
+        "storage_path": _read_existing_app_value(CONFIG_PATH, "storage_path"),
         "ssl_cert_path": _read_existing_app_value(CONFIG_PATH, "ssl_cert_path"),
         "ssl_key_path": _read_existing_app_value(CONFIG_PATH, "ssl_key_path"),
     }
@@ -915,7 +884,6 @@ def main(argv: list[str] | None = None) -> int:
     existing_values = _existing_install_values()
 
     _run_root_guard()
-    _install_dependencies()
 
     if args.test_mode:
         print(
@@ -936,6 +904,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     secret_key = secrets.token_urlsafe(64)
+    data_encryption_key = generate_data_encryption_key()
     _write_config_atomic(
         CONFIG_PATH,
         install_config["db_server"],
@@ -944,25 +913,25 @@ def main(argv: list[str] | None = None) -> int:
         install_config["db_username"],
         install_config["db_password"],
         secret_key,
+        data_encryption_key,
         install_config["hashcat_bin"],
         DEFAULT_HASHCAT_STATUS_TIMER,
-        install_config["wordlists_path"],
-        install_config["rules_path"],
         install_config["runtime_path"],
+        install_config["storage_path"],
         install_config["ssl_cert_path"],
         install_config["ssl_key_path"],
     )
     print(f"Writing hashcrush config at: {CONFIG_PATH}")
     print("Generated a new app secret_key and stored it in config.")
+    print("Generated a new data_encryption_key and stored it in config.")
     print(f"Set db_host={install_config['db_server']}")
     print(f"Set db_port={install_config['db_port']}")
     print(f"Set db_name={install_config['db_name']}")
     print(f"Set db_username={install_config['db_username']}")
     print(f"Set hashcat_bin={install_config['hashcat_bin']}")
     print(f"Set hashcat_status_timer={DEFAULT_HASHCAT_STATUS_TIMER}")
-    print(f"Set wordlists_path={install_config['wordlists_path']}")
-    print(f"Set rules_path={install_config['rules_path']}")
     print(f"Set runtime_path={install_config['runtime_path']}")
+    print(f"Set storage_path={install_config['storage_path']}")
     print(f"Set ssl_cert_path={install_config['ssl_cert_path']}")
     print(f"Set ssl_key_path={install_config['ssl_key_path']}")
 
@@ -976,6 +945,7 @@ def main(argv: list[str] | None = None) -> int:
 
     _generate_ssl_certificates(
         install_config["runtime_path"],
+        install_config["storage_path"],
         install_config["ssl_cert_path"],
         install_config["ssl_key_path"],
     )
@@ -983,6 +953,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.test_mode:
         seeded_values = _seed_test_environment(
             install_config["runtime_path"],
+            install_config["storage_path"],
             ENV_TEST_PATH,
         )
         _print_test_environment_summary(seeded_values)

@@ -115,10 +115,93 @@ def test_attach_werkzeug_tls_disconnect_filter_adds_filter_to_loggers(monkeypatc
             for item in logger.handlers[0].filters
         )
 
+
+@pytest.mark.security
+def test_validate_runtime_directories_rejects_missing_runtime_tree(tmp_path):
+    from hashcrush import _validate_runtime_directories
+
+    with pytest.raises(RuntimeError, match="Runtime directory is missing"):
+        _validate_runtime_directories(str(tmp_path))
+
+
+@pytest.mark.security
+def test_validate_runtime_directories_accepts_existing_runtime_tree(tmp_path):
+    from hashcrush import _validate_runtime_directories
+
+    root_path = tmp_path / "runtime-root"
+    for subdir in ("tmp", "hashes", "outfiles"):
+        (root_path / "control" / subdir).mkdir(parents=True, exist_ok=True)
+
+    _validate_runtime_directories(str(root_path))
+
+
+@pytest.mark.security
+def test_validate_storage_directories_accepts_existing_storage_tree(tmp_path):
+    from hashcrush import _validate_storage_directories
+
+    storage_path = tmp_path / "storage-root"
+    for subdir in ("wordlists", "rules"):
+        (storage_path / subdir).mkdir(parents=True, exist_ok=True)
+
+    _validate_storage_directories(str(storage_path))
+
+
+@pytest.mark.security
+def test_validate_storage_directories_rejects_missing_storage_tree(tmp_path):
+    from hashcrush import _validate_storage_directories
+
+    with pytest.raises(RuntimeError, match="Persistent storage directory is missing"):
+        _validate_storage_directories(str(tmp_path))
+
+
+@pytest.mark.security
+def test_validate_runtime_directories_uses_configured_runtime_root(tmp_path):
+    from hashcrush import _validate_runtime_directories
+
+    root_path = tmp_path / "app-root"
+    runtime_path = tmp_path / "custom-runtime"
+    for subdir in ("tmp", "hashes", "outfiles"):
+        (runtime_path / subdir).mkdir(parents=True, exist_ok=True)
+
+    _validate_runtime_directories(str(root_path), str(runtime_path))
+
 @pytest.mark.security
 def test_setup_parse_args_accepts_test_flag():
     bootstrap_module = _load_bootstrap_module()
     assert bootstrap_module.parse_args(["--test"]).test_mode is True
+
+
+@pytest.mark.security
+def test_write_config_atomic_omits_wordlist_and_rule_paths(tmp_path):
+    bootstrap_module = _load_bootstrap_module()
+    config_path = tmp_path / "config.conf"
+
+    bootstrap_module._write_config_atomic(
+        str(config_path),
+        "127.0.0.1",
+        "5432",
+        "hashcrush",
+        "hashcrush",
+        "secret-db-pass",
+        "secret-key",
+        TEST_DATA_ENCRYPTION_KEY,
+        "/usr/bin/hashcat",
+        5,
+        "/tmp/hashcrush-runtime",
+        "/var/lib/hashcrush",
+        "/etc/hashcrush/ssl/cert.pem",
+        "/etc/hashcrush/ssl/key.pem",
+    )
+
+    parser = ConfigParser(interpolation=None)
+    parser.read(config_path, encoding="utf-8")
+
+    assert parser.has_option("app", "hashcat_bin")
+    assert parser.has_option("app", "data_encryption_key")
+    assert parser.has_option("app", "runtime_path")
+    assert parser.has_option("app", "storage_path")
+    assert not parser.has_option("app", "wordlists_path")
+    assert not parser.has_option("app", "rules_path")
 
 @pytest.mark.security
 def test_hashcrush_cli_setup_subcommand_delegates_to_bootstrap(monkeypatch):
@@ -177,6 +260,39 @@ def test_hashcrush_cli_upgrade_subcommand_runs_schema_upgrade(monkeypatch):
 
 
 @pytest.mark.security
+def test_upgrade_bootstraps_missing_data_encryption_key_into_config(tmp_path, monkeypatch):
+    cli_module = _load_cli_module()
+    config_dir = tmp_path / "hashcrush"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / "config.conf"
+    parser = ConfigParser(interpolation=None)
+    parser["database"] = {
+        "uri": "postgresql+psycopg://hashcrush:secret@127.0.0.1:5432/hashcrush",
+    }
+    parser["app"] = {
+        "secret_key": "existing-secret",
+        "hashcat_bin": "/usr/bin/hashcat",
+        "runtime_path": "/tmp/hashcrush-runtime",
+        "storage_path": "/tmp/hashcrush-storage",
+        "ssl_cert_path": "/tmp/cert.pem",
+        "ssl_key_path": "/tmp/key.pem",
+    }
+    with open(config_path, "w", encoding="utf-8") as handle:
+        parser.write(handle)
+
+    monkeypatch.setattr(cli_module, "__file__", str(tmp_path / "hashcrush.py"))
+    monkeypatch.delenv("HASHCRUSH_DATA_ENCRYPTION_KEY", raising=False)
+
+    changed = cli_module._ensure_upgrade_data_encryption_key()
+
+    assert changed is True
+    persisted = ConfigParser(interpolation=None)
+    persisted.read(config_path, encoding="utf-8")
+    generated = persisted.get("app", "data_encryption_key", fallback="").strip()
+    assert generated
+
+
+@pytest.mark.security
 def test_hashcrush_cli_serve_refuses_missing_runtime_bootstrap_state(monkeypatch, capsys):
     cli_module = _load_cli_module()
     app = _build_app()
@@ -192,45 +308,6 @@ def test_hashcrush_cli_serve_refuses_missing_runtime_bootstrap_state(monkeypatch
     assert result == 1
     assert "Settings row is missing" in captured.err
     assert "Admin account is missing" in captured.err
-
-
-@pytest.mark.security
-def test_hashcrush_cli_external_repos_subcommand_delegates(monkeypatch):
-    cli_module = _load_cli_module()
-    captured = {}
-
-    class _ExternalReposModule:
-        @staticmethod
-        def main(argv=None):
-            captured["argv"] = argv
-            return 29
-
-    monkeypatch.setattr(
-        cli_module, "_load_external_repos_cli", lambda: _ExternalReposModule()
-    )
-
-    result = cli_module.cli(
-        [
-            "hashcrush.py",
-            "external-repos",
-            "--base-dir",
-            "/tmp/hashcrush-vendor",
-            "--seclists-ref",
-            "abc123",
-            "--hashcat-ref",
-            "def456",
-        ]
-    )
-
-    assert result == 29
-    assert captured["argv"] == [
-        "--base-dir",
-        "/tmp/hashcrush-vendor",
-        "--seclists-ref",
-        "abc123",
-        "--hashcat-ref",
-        "def456",
-    ]
 
 
 @pytest.mark.security
@@ -260,86 +337,11 @@ def test_hashcrush_cli_rejects_unknown_root_command():
 
 
 @pytest.mark.security
-def test_external_repos_cli_updates_config_and_pins_refs(tmp_path, monkeypatch):
-    external_module = _load_external_repos_module()
-    config_path = tmp_path / "config.conf"
-    config_path.write_text(
-        "[database]\nuri=\n\n[app]\nwordlists_path=/old/wordlists\nrules_path=/old/rules\n",
-        encoding="utf-8",
-    )
-
-    commands: list[tuple[str, ...]] = []
-    rev_parse_values = {
-        ("-C", str(tmp_path / "vendor" / "SecLists"), "rev-parse", "HEAD"): "sec123",
-        ("-C", str(tmp_path / "vendor" / "hashcat"), "rev-parse", "HEAD"): "hash456",
-    }
-
-    def fake_run_git(*args, capture_output=False):
-        commands.append(tuple(args))
-        if args[:3] == ("-C", str(tmp_path / "vendor" / "SecLists"), "status"):
-            return ""
-        if args[:3] == ("-C", str(tmp_path / "vendor" / "hashcat"), "status"):
-            return ""
-        return rev_parse_values.get(tuple(args), "")
-
-    monkeypatch.setattr(external_module, "_run_git", fake_run_git)
-    real_isdir = external_module.os.path.isdir
-    monkeypatch.setattr(
-        external_module.os.path,
-        "isdir",
-        lambda path: real_isdir(path) or path.endswith(".git"),
-    )
-
-    result = external_module.main(
-        [
-            "--base-dir",
-            str(tmp_path / "vendor"),
-            "--seclists-ref",
-            "refs/tags/2026.1",
-            "--hashcat-ref",
-            "refs/tags/v6.2.6",
-            "--config-path",
-            str(config_path),
-        ]
-    )
-
-    parser = ConfigParser()
-    parser.read(config_path, encoding="utf-8")
-
-    assert result == 0
-    assert parser.get("app", "wordlists_path") == str(tmp_path / "vendor" / "SecLists" / "Passwords")
-    assert parser.get("app", "rules_path") == str(tmp_path / "vendor" / "hashcat" / "rules")
-    assert ("-C", str(tmp_path / "vendor" / "SecLists"), "checkout", "--detach", "refs/tags/2026.1") in commands
-    assert ("-C", str(tmp_path / "vendor" / "hashcat"), "checkout", "--detach", "refs/tags/v6.2.6") in commands
-
-
-@pytest.mark.security
-def test_external_repos_cli_rejects_dirty_existing_repo(tmp_path, monkeypatch):
-    external_module = _load_external_repos_module()
-    repo_dir = tmp_path / "vendor" / "SecLists"
-    (repo_dir / ".git").mkdir(parents=True)
-
-    def fake_run_git(*args, capture_output=False):
-        if args[:3] == ("-C", str(repo_dir), "status"):
-            return " M README.md"
-        return ""
-
-    monkeypatch.setattr(external_module, "_run_git", fake_run_git)
-
-    with pytest.raises(
-        RuntimeError, match="uncommitted changes and cannot be repinned safely"
-    ):
-        external_module._clone_or_refresh_repo(
-            external_module.DEFAULT_SECLISTS_URL,
-            str(repo_dir),
-            "Passwords",
-        )
-
-@pytest.mark.security
 def test_setup_seed_test_environment_creates_dummy_fixture_set(tmp_path, monkeypatch):
     bootstrap_module = _load_bootstrap_module()
     app = _build_app()
     runtime_path = tmp_path / "runtime"
+    storage_path = tmp_path / "storage"
     env_path = tmp_path / ".env.test"
 
     with app.app_context():
@@ -347,7 +349,11 @@ def test_setup_seed_test_environment_creates_dummy_fixture_set(tmp_path, monkeyp
 
     monkeypatch.setattr(bootstrap_module, "_build_seed_app", lambda: app)
 
-    values = bootstrap_module._seed_test_environment(str(runtime_path), str(env_path))
+    values = bootstrap_module._seed_test_environment(
+        str(runtime_path),
+        str(storage_path),
+        str(env_path),
+    )
 
     with app.app_context():
         assert _count_rows(Users, username=bootstrap_module.E2E_ADMIN_USERNAME) == 1
@@ -365,6 +371,8 @@ def test_setup_seed_test_environment_creates_dummy_fixture_set(tmp_path, monkeyp
     assert bootstrap_module.E2E_ADMIN_PASSWORD in env_text
     assert values["HASHCRUSH_E2E_DOMAIN_NAME"] == bootstrap_module.E2E_DOMAIN_NAME
     assert values["HASHCRUSH_E2E_TASK_NAME"] == bootstrap_module.E2E_MASK_TASK_NAME
+    assert values["wordlist_path"].startswith(str((storage_path / "wordlists").resolve()))
+    assert values["rule_path"].startswith(str((storage_path / "rules").resolve()))
 
 @pytest.mark.security
 def test_upgrade_database_initializes_empty_schema_and_tracks_version():
@@ -417,7 +425,7 @@ def test_upgrade_database_migrates_v1_schema_forward_to_current_version():
         result = upgrade_database()
 
         assert inspect(db.engine).has_table(AuditLog.__tablename__)
-        assert [step.version for step in result.applied_steps] == [2, 3, 4]
+        assert [step.version for step in result.applied_steps] == [2, 3, 4, 5]
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -447,7 +455,7 @@ def test_upgrade_database_migrates_v2_schema_forward_to_current_version():
         }
         assert "retention_period" not in settings_columns
         assert "enabled_job_weights" not in settings_columns
-        assert [step.version for step in result.applied_steps] == [3, 4]
+        assert [step.version for step in result.applied_steps] == [3, 4, 5]
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -499,7 +507,7 @@ def test_upgrade_database_migrates_v3_schema_to_v4_job_task_positions():
         index_names = {
             index["name"] for index in inspect(db.engine).get_indexes("job_tasks")
         }
-        assert [step.version for step in result.applied_steps] == [4]
+        assert [step.version for step in result.applied_steps] == [4, 5]
         assert [row.position for row in persisted] == [0, 1]
         assert "ix_job_tasks_job_id_position" in index_names
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
@@ -611,16 +619,16 @@ def test_upgrade_command_normalizes_legacy_plaintext_storage(monkeypatch):
     app = _build_app()
     with app.app_context():
         db.create_all()
-        db.session.add(
-            Hashes(
-                sub_ciphertext="legacy-plaintext-subcipher",
-                ciphertext="legacy-plaintext-cipher",
-                hash_type=1000,
-                cracked=True,
-                plaintext="Password123!",
-            )
+        hash_row = Hashes(
+            sub_ciphertext="legacy-plaintext-subcipher",
+            ciphertext="legacy-plaintext-cipher",
+            hash_type=1000,
+            cracked=True,
+            plaintext="Password123!",
         )
+        db.session.add(hash_row)
         db.session.commit()
+        hash_row_id = hash_row.id
 
     def fake_upgrade_database(*, dry_run=False):
         return UpgradeResult(
@@ -642,9 +650,11 @@ def test_upgrade_command_normalizes_legacy_plaintext_storage(monkeypatch):
 
     assert result == 0
     with app.app_context():
-        hash_row = _first_row(Hashes, ciphertext="legacy-plaintext-cipher")
+        hash_row = db.session.get(Hashes, hash_row_id)
         assert hash_row is not None
-        assert hash_row.plaintext == "Password123!".encode("latin-1").hex()
+        assert decode_ciphertext_from_storage(hash_row.ciphertext) == "legacy-plaintext-cipher"
+        assert hash_row.plaintext != "Password123!"
+        assert hash_row.plaintext != "Password123!".encode("latin-1").hex()
 
 @pytest.mark.security
 def test_schema_declares_expected_constraints_and_indexes():
@@ -742,8 +752,14 @@ def test_schema_declares_expected_constraints_and_indexes():
         assert "TEXT" in task_groups_columns["tasks"]
 
 @pytest.mark.security
-def test_create_app_rejects_uninitialized_database():
+def test_create_app_rejects_uninitialized_database(tmp_path):
     database_uri = create_managed_postgres_database()
+    runtime_path = tmp_path / "runtime"
+    storage_path = tmp_path / "storage"
+    for subdir in ("tmp", "hashes", "outfiles"):
+        (runtime_path / subdir).mkdir(parents=True, exist_ok=True)
+    for subdir in ("wordlists", "rules"):
+        (storage_path / subdir).mkdir(parents=True, exist_ok=True)
     with pytest.raises(RuntimeError, match="Database schema is uninitialized"):
         create_app(
             testing=False,
@@ -752,16 +768,26 @@ def test_create_app_rejects_uninitialized_database():
                 "SQLALCHEMY_DATABASE_URI": database_uri,
                 "SQLALCHEMY_TRACK_MODIFICATIONS": False,
                 "ENABLE_LOCAL_EXECUTOR": False,
+                "DATA_ENCRYPTION_KEY": TEST_DATA_ENCRYPTION_KEY,
+                "RUNTIME_PATH": str(runtime_path),
+                "STORAGE_PATH": str(storage_path),
             },
         )
 
 @pytest.mark.security
-def test_create_app_rejects_unversioned_non_empty_database():
+def test_create_app_rejects_unversioned_non_empty_database(tmp_path):
     database_uri = create_managed_postgres_database()
+    runtime_path = tmp_path / "runtime"
+    storage_path = tmp_path / "storage"
+    for subdir in ("tmp", "hashes", "outfiles"):
+        (runtime_path / subdir).mkdir(parents=True, exist_ok=True)
+    for subdir in ("wordlists", "rules"):
+        (storage_path / subdir).mkdir(parents=True, exist_ok=True)
     bootstrap_app = create_app(
         testing=True,
         config_overrides={
             "SECRET_KEY": "phase1-test-secret",
+            "DATA_ENCRYPTION_KEY": TEST_DATA_ENCRYPTION_KEY,
             "SQLALCHEMY_DATABASE_URI": database_uri,
             "SQLALCHEMY_TRACK_MODIFICATIONS": False,
             "ENABLE_LOCAL_EXECUTOR": False,
@@ -783,6 +809,9 @@ def test_create_app_rejects_unversioned_non_empty_database():
                 "SQLALCHEMY_DATABASE_URI": database_uri,
                 "SQLALCHEMY_TRACK_MODIFICATIONS": False,
                 "ENABLE_LOCAL_EXECUTOR": False,
+                "DATA_ENCRYPTION_KEY": TEST_DATA_ENCRYPTION_KEY,
+                "RUNTIME_PATH": str(runtime_path),
+                "STORAGE_PATH": str(storage_path),
             },
         )
 
@@ -878,27 +907,23 @@ def test_schema_unique_constraints_reject_duplicate_names_and_paths():
             db.session.rollback()
 
 @pytest.mark.security
-def test_runtime_bootstrap_creates_required_directories(tmp_path):
-    from hashcrush import _ensure_runtime_directories
+def test_runtime_bootstrap_rejects_missing_required_directories(tmp_path):
+    from hashcrush import _validate_runtime_directories
 
     root_path = tmp_path / "runtime-root"
-    _ensure_runtime_directories(str(root_path))
-
-    assert (root_path / "control" / "tmp").is_dir()
-    assert (root_path / "control" / "hashes").is_dir()
-    assert (root_path / "control" / "outfiles").is_dir()
+    with pytest.raises(RuntimeError, match="Runtime directory is missing"):
+        _validate_runtime_directories(str(root_path))
 
 @pytest.mark.security
 def test_runtime_bootstrap_uses_configured_runtime_root(tmp_path):
-    from hashcrush import _ensure_runtime_directories
+    from hashcrush import _validate_runtime_directories
 
     root_path = tmp_path / "app-root"
     runtime_path = tmp_path / "custom-runtime"
-    _ensure_runtime_directories(str(root_path), str(runtime_path))
+    for subdir in ("tmp", "hashes", "outfiles"):
+        (runtime_path / subdir).mkdir(parents=True, exist_ok=True)
 
-    assert (runtime_path / "tmp").is_dir()
-    assert (runtime_path / "hashes").is_dir()
-    assert (runtime_path / "outfiles").is_dir()
+    _validate_runtime_directories(str(root_path), str(runtime_path))
 
 @pytest.mark.security
 def test_setup_defaults_no_longer_seeds_rules_or_wordlists():
@@ -912,105 +937,6 @@ def test_setup_defaults_no_longer_seeds_rules_or_wordlists():
 
         assert _count_rows(Rules) == 0
         assert _count_rows(Wordlists) == 0
-
-@pytest.mark.security
-def test_rules_selectable_files_support_nested_folders(tmp_path):
-    from hashcrush.rules.routes import _list_selectable_files, _resolve_selected_file
-
-    rules_root = tmp_path / "rules"
-    nested_dir = rules_root / "example_folder1"
-    nested_dir.mkdir(parents=True, exist_ok=True)
-    nested_file = nested_dir / "best64.rule"
-    nested_file.write_text("X", encoding="utf-8")
-    non_rule_file = nested_dir / "not_a_rule.txt"
-    non_rule_file.write_text("Z", encoding="utf-8")
-    hidden_dir = rules_root / ".hidden"
-    hidden_dir.mkdir(parents=True, exist_ok=True)
-    (hidden_dir / "secret.rule").write_text("Y", encoding="utf-8")
-
-    selectable_files, truncated = _list_selectable_files(str(rules_root))
-    assert truncated is False
-    assert (
-        "example_folder1/best64.rule",
-        "example_folder1/best64.rule",
-    ) in selectable_files
-    assert (
-        "example_folder1/not_a_rule.txt",
-        "example_folder1/not_a_rule.txt",
-    ) not in selectable_files
-    assert (".hidden/secret.rule", ".hidden/secret.rule") not in selectable_files
-
-    resolved_nested = _resolve_selected_file(
-        "example_folder1/best64.rule", str(rules_root)
-    )
-    assert resolved_nested == str(nested_file.resolve())
-    assert (
-        _resolve_selected_file("example_folder1/not_a_rule.txt", str(rules_root))
-        is None
-    )
-    assert _resolve_selected_file(".hidden/secret.rule", str(rules_root)) is None
-    assert _resolve_selected_file("../etc/passwd", str(rules_root)) is None
-    missing_files, missing_truncated = _list_selectable_files(
-        str(rules_root / "does-not-exist")
-    )
-    assert missing_files == []
-    assert missing_truncated is False
-
-@pytest.mark.security
-def test_wordlists_selectable_files_support_nested_folders(tmp_path):
-    from hashcrush.wordlists.routes import (
-        _list_selectable_files,
-        _resolve_selected_file,
-    )
-
-    wordlists_root = tmp_path / "wordlists"
-    nested_dir = wordlists_root / "example_folder1"
-    nested_dir.mkdir(parents=True, exist_ok=True)
-    nested_file = nested_dir / "rockyou.txt"
-    nested_file.write_text("password", encoding="utf-8")
-    nested_tar_file = nested_dir / "rockyou.txt.tar.gz"
-    nested_tar_file.write_text("compressed-placeholder", encoding="utf-8")
-    disallowed_file = nested_dir / "ignore.csv"
-    disallowed_file.write_text("x,y", encoding="utf-8")
-    hidden_dir = wordlists_root / ".hidden"
-    hidden_dir.mkdir(parents=True, exist_ok=True)
-    (hidden_dir / "secret.txt").write_text("secret", encoding="utf-8")
-
-    selectable_files, truncated = _list_selectable_files(str(wordlists_root))
-    assert truncated is False
-    assert (
-        "example_folder1/rockyou.txt",
-        "example_folder1/rockyou.txt",
-    ) in selectable_files
-    assert (
-        "example_folder1/rockyou.txt.tar.gz",
-        "example_folder1/rockyou.txt.tar.gz",
-    ) not in selectable_files
-    assert (
-        "example_folder1/ignore.csv",
-        "example_folder1/ignore.csv",
-    ) not in selectable_files
-    assert (".hidden/secret.txt", ".hidden/secret.txt") not in selectable_files
-
-    resolved_nested = _resolve_selected_file(
-        "example_folder1/rockyou.txt", str(wordlists_root)
-    )
-    assert resolved_nested == str(nested_file.resolve())
-    resolved_nested_tar = _resolve_selected_file(
-        "example_folder1/rockyou.txt.tar.gz", str(wordlists_root)
-    )
-    assert resolved_nested_tar is None
-    assert (
-        _resolve_selected_file("example_folder1/ignore.csv", str(wordlists_root))
-        is None
-    )
-    assert _resolve_selected_file(".hidden/secret.txt", str(wordlists_root)) is None
-    assert _resolve_selected_file("../etc/passwd", str(wordlists_root)) is None
-    missing_files, missing_truncated = _list_selectable_files(
-        str(wordlists_root / "does-not-exist")
-    )
-    assert missing_files == []
-    assert missing_truncated is False
 
 @pytest.mark.security
 def test_settings_page_renders_without_csrf_template_failure():
@@ -1069,6 +995,7 @@ def test_settings_hashcrush_config_update_persists_values(tmp_path):
                 "cfg__app__hashcat_bin": "/usr/bin/hashcat",
                 "cfg__app__hashcat_status_timer": "10",
                 "cfg__app__runtime_path": "/tmp/hashcrush-runtime-custom",
+                "cfg__app__storage_path": "/var/lib/hashcrush-custom",
             },
         )
         assert response.status_code == 302
@@ -1085,6 +1012,7 @@ def test_settings_hashcrush_config_update_persists_values(tmp_path):
         assert parser.get("app", "hashcat_bin") == "/usr/bin/hashcat"
         assert parser.get("app", "hashcat_status_timer") == "10"
         assert parser.get("app", "runtime_path") == "/tmp/hashcrush-runtime-custom"
+        assert parser.get("app", "storage_path") == "/var/lib/hashcrush-custom"
 
 @pytest.mark.security
 def test_config_prefers_database_uri_from_config(tmp_path, monkeypatch):
@@ -1331,11 +1259,13 @@ def test_import_user_hash_dcc2_preserves_username_association(tmp_path):
 
         association = _first_row(HashfileHashes, hashfile_id=hashfile.id)
         assert association is not None
-        assert bytes.fromhex(association.username).decode("latin-1") == "alice"
+        assert decode_username_from_storage(association.username) == "alice"
 
         imported_hash = db.session.get(Hashes, association.hash_id)
         assert imported_hash is not None
-        assert imported_hash.ciphertext.startswith("$DCC2$10240#alice#")
+        assert decode_ciphertext_from_storage(imported_hash.ciphertext).startswith(
+            "$DCC2$10240#alice#"
+        )
 
 @pytest.mark.security
 def test_netntlm_validator_still_rejects_duplicate_user_host(tmp_path):
@@ -1408,7 +1338,7 @@ def test_database_constraints_and_indexes_exist_on_core_link_tables():
             tuple(entry["column_names"])
             for entry in inspector.get_unique_constraints("hashfile_hashes")
         }
-        assert ("hashfile_id", "hash_id", "username") in hashfile_hashes_unique
+        assert ("hashfile_id", "hash_id", "username_digest") in hashfile_hashes_unique
 
         job_tasks_unique = {
             tuple(entry["column_names"])

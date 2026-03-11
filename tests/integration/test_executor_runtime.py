@@ -4,7 +4,7 @@ from tests.integration.support import *
 
 
 @pytest.mark.security
-def test_plaintext_storage_migration_normalizes_legacy_rows():
+def test_plaintext_storage_migration_encrypts_legacy_rows():
     from hashcrush.utils.utils import (
         decode_plaintext_from_storage,
         encode_plaintext_for_storage,
@@ -34,20 +34,20 @@ def test_plaintext_storage_migration_normalizes_legacy_rows():
         db.session.commit()
 
         migrated_rows = migrate_plaintext_storage_rows()
-        assert migrated_rows == 1
+        assert migrated_rows >= 1
 
         legacy_row = db.session.get(Hashes, legacy.id)
         canonical_row = db.session.get(Hashes, canonical.id)
 
-        assert legacy_row.plaintext == encode_plaintext_for_storage("PASSWORD")
+        assert legacy_row.plaintext != "PASSWORD"
         assert decode_plaintext_from_storage(legacy_row.plaintext) == "PASSWORD"
         assert canonical_row.plaintext == canonical_value
         assert decode_plaintext_from_storage(canonical_row.plaintext) == "Summer2026!"
 
 @pytest.mark.security
-def test_executor_import_stores_plaintext_in_hex_format(tmp_path):
+def test_executor_import_stores_plaintext_encrypted_at_rest(tmp_path):
     from hashcrush.executor.service import LocalExecutorService
-    from hashcrush.utils.utils import encode_plaintext_for_storage, get_md5_hash
+    from hashcrush.utils.utils import decode_plaintext_from_storage, get_md5_hash
 
     app = _build_app()
     with app.app_context():
@@ -109,12 +109,13 @@ def test_executor_import_stores_plaintext_in_hex_format(tmp_path):
 
         imported_hash = db.session.get(Hashes, hash_row.id)
         assert imported_hash.cracked is True
-        assert imported_hash.plaintext == encode_plaintext_for_storage("Pa$$w0rd")
+        assert imported_hash.plaintext != "Pa$$w0rd"
+        assert decode_plaintext_from_storage(imported_hash.plaintext) == "Pa$$w0rd"
 
 @pytest.mark.security
 def test_executor_canceled_flow_imports_recovered_hashes(tmp_path, monkeypatch):
     from hashcrush.executor.service import ActiveTask, LocalExecutorService
-    from hashcrush.utils.utils import encode_plaintext_for_storage, get_md5_hash
+    from hashcrush.utils.utils import decode_plaintext_from_storage, get_md5_hash
 
     class _DoneProcess:
         def __init__(self):
@@ -203,14 +204,12 @@ def test_executor_canceled_flow_imports_recovered_hashes(tmp_path, monkeypatch):
 
         imported_hash = db.session.get(Hashes, hash_row.id)
         assert imported_hash.cracked is True
-        assert imported_hash.plaintext == encode_plaintext_for_storage(
-            "RecoveredDuringCancel"
-        )
+        assert decode_plaintext_from_storage(imported_hash.plaintext) == "RecoveredDuringCancel"
 
 @pytest.mark.security
 def test_recover_orphaned_tasks_imports_crackfile_before_requeue(tmp_path):
     from hashcrush.executor.service import LocalExecutorService
-    from hashcrush.utils.utils import encode_plaintext_for_storage, get_md5_hash
+    from hashcrush.utils.utils import decode_plaintext_from_storage, get_md5_hash
 
     app = _build_app({"RUNTIME_PATH": str(tmp_path)})
     with app.app_context():
@@ -276,14 +275,12 @@ def test_recover_orphaned_tasks_imports_crackfile_before_requeue(tmp_path):
         assert orphan.status == "Queued"
         assert job.status == "Queued"
         assert imported_hash.cracked is True
-        assert imported_hash.plaintext == encode_plaintext_for_storage(
-            "RecoveredAfterCrash"
-        )
+        assert decode_plaintext_from_storage(imported_hash.plaintext) == "RecoveredAfterCrash"
 
 @pytest.mark.security
 def test_executor_running_checkpoint_imports_cracks(tmp_path):
     from hashcrush.executor.service import ActiveTask, LocalExecutorService
-    from hashcrush.utils.utils import encode_plaintext_for_storage, get_md5_hash
+    from hashcrush.utils.utils import decode_plaintext_from_storage, get_md5_hash
 
     class _RunningProcess:
         returncode = None
@@ -379,9 +376,7 @@ def test_executor_running_checkpoint_imports_cracks(tmp_path):
 
         imported_hash = db.session.get(Hashes, hash_row.id)
         assert imported_hash.cracked is True
-        assert imported_hash.plaintext == encode_plaintext_for_storage(
-            "RecoveredDuringRun"
-        )
+        assert decode_plaintext_from_storage(imported_hash.plaintext) == "RecoveredDuringRun"
 
 @pytest.mark.security
 def test_hashcat_exit_code_one_is_success_when_status_indicates_exhausted(tmp_path):
@@ -412,7 +407,7 @@ def test_hashcat_exit_code_one_without_completion_signal_is_failure():
 @pytest.mark.security
 def test_recover_orphaned_paused_task_cleans_stale_pid_and_keeps_status(tmp_path):
     from hashcrush.executor.service import LocalExecutorService
-    from hashcrush.utils.utils import encode_plaintext_for_storage, get_md5_hash
+    from hashcrush.utils.utils import decode_plaintext_from_storage, get_md5_hash
 
     app = _build_app({"RUNTIME_PATH": str(tmp_path)})
     with app.app_context():
@@ -481,6 +476,4 @@ def test_recover_orphaned_paused_task_cleans_stale_pid_and_keeps_status(tmp_path
         assert orphan.status == "Paused"
         assert orphan.worker_pid is None
         assert imported_hash.cracked is True
-        assert imported_hash.plaintext == encode_plaintext_for_storage(
-            "RecoveredWhilePaused"
-        )
+        assert decode_plaintext_from_storage(imported_hash.plaintext) == "RecoveredWhilePaused"

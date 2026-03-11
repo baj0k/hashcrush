@@ -20,6 +20,8 @@ Use the wrapper:
 ./tests/test-all.sh
 ```
 
+The automated harness injects its own `HASHCRUSH_DATA_ENCRYPTION_KEY`. For manual smoke runs against a real instance, make sure the target app has its production encryption key configured before running the external suite.
+
 It runs:
 
 1. non-E2E tests:
@@ -65,6 +67,7 @@ What local mode does automatically:
   - hashfile
   - wordlist
   - task
+  - uploaded-style managed files for shared wordlists/rules under temporary storage
 
 Local mode is the authoritative automated path and should stay green in CI.
 

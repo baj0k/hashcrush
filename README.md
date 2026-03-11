@@ -23,6 +23,7 @@ sudo service postgresql start
 git clone https://github.com/baj0k/hashcrush.git
 cd hashcrush
 sudo apt install python3 python3-pip python3-flask -y
+python3 -m pip install -r requirements.txt
 python3 ./hashcrush.py setup
 ```
 Disposable live-test environment bootstrap:
@@ -30,15 +31,6 @@ Disposable live-test environment bootstrap:
 python3 ./hashcrush.py setup --test
 ```
 `hashcrush.py setup --test` rebuilds the DB, creates dummy users/data, and writes `.env.test` for E2E tests.
-
-Optional external repository bootstrap and pinning:
-```bash
-python3 ./hashcrush.py external-repos \
-  --base-dir /opt/hashcrush-external \
-  --seclists-ref <pinned-seclists-ref> \
-  --hashcat-ref <pinned-hashcat-ref>
-```
-This clones `SecLists` and `hashcat` outside the app repo, checks out the requested pinned refs, and updates `wordlists_path` / `rules_path` in `config.conf`.
 ##### Important Setup Warning
 
 `hashcrush.py setup` is destructive.
@@ -73,10 +65,13 @@ Recommended production environment overrides:
 
 ```bash
 export HASHCRUSH_SECRET_KEY='<strong-random-secret>'
+export HASHCRUSH_DATA_ENCRYPTION_KEY='<fernet-key>'
 export HASHCRUSH_DATABASE_URI='postgresql+psycopg://hashcrush:<strong-db-password>@127.0.0.1:5432/hashcrush'
 export HASHCRUSH_SSL_CERT_PATH='/run/secrets/hashcrush-cert.pem'
 export HASHCRUSH_SSL_KEY_PATH='/run/secrets/hashcrush-key.pem'
 ```
+
+Persisted data is encrypted at rest with the data encryption key. Keep `HASHCRUSH_DATA_ENCRYPTION_KEY` in a secret store or environment, not in shell history.
 
 If you do not want to use a full URI, HashCrush also supports:
 
@@ -114,15 +109,7 @@ python3 ./hashcrush.py
 
 `hashcrush.py upgrade` is non-destructive. It applies tracked schema/data migrations in place and preserves existing data.
 If the database schema is older than the code expects, app startup shows an explicit error until an upgrade is performed.
-
-## External Wordlists and Rules
-`hashcrush.py setup` prompts for paths and writes them to `hashcrush/config.conf`. Example:
-
-```ini
-[app]
-wordlists_path = /path/to/SecLists/Passwords
-rules_path = /path/to/hashcat/rules
-```
+Current releases expect schema version `5`.
 
 ## Account and Password Management
 - Admins can reset a password of any user.

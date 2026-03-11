@@ -3,13 +3,12 @@
 <br>
 <h1>Rules</h1>
 <br>
-Rules are instructions combined with wordlists. Register rule files from the configured external rules path.
+Rules are instructions combined with wordlists. Admins upload shared rule files here.
 {% if current_user.admin %}
-<a class="btn btn-success btn-sm mt-1 mb-1" href="{{ url_for('rules.rules_add') }}">Add/Register</a>
+<a class="btn btn-success btn-sm mt-1 mb-1" href="{{ url_for('rules.rules_add') }}">Upload Rule</a>
 {% else %}
 <p class="text-muted mb-0">Shared rules are managed by admins. All users can view and use them in tasks.</p>
 {% endif %}
-Configured root: <code>{{ rules_root }}</code>
 <br>
 <br>
 <br>
@@ -76,7 +75,6 @@ Configured root: <code>{{ rules_root }}</code>
                 </div>
                 <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
-                <button type="button" class="btn btn-primary">Understood</button>
                 </div>
             </div>
             </div>

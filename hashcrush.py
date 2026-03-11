@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import traceback
+from configparser import ConfigParser
 from datetime import datetime
 from pathlib import Path
 
@@ -53,11 +54,57 @@ def _load_bootstrap_cli():
     return importlib.import_module("bootstrap_cli")
 
 
-def _load_external_repos_cli():
-    repo_root = Path(__file__).resolve().parent
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
-    return importlib.import_module("external_repos_cli")
+def _config_path() -> Path:
+    return Path(__file__).resolve().parent / "hashcrush" / "config.conf"
+
+
+def _write_config_parser_atomic(config_path: Path, parser: ConfigParser) -> None:
+    config_dir = config_path.parent
+    config_dir.mkdir(parents=True, exist_ok=True)
+    if hasattr(os, "chmod"):
+        try:
+            os.chmod(config_dir, 0o700)
+        except OSError:
+            pass
+
+    tmp_path = config_path.with_name(f".{config_path.name}.tmp")
+    with open(tmp_path, "w", encoding="utf-8", newline="\n") as handle:
+        parser.write(handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp_path, config_path)
+    if hasattr(os, "chmod"):
+        try:
+            os.chmod(config_path, 0o600)
+        except OSError:
+            pass
+
+
+def _ensure_upgrade_data_encryption_key() -> bool:
+    """Bootstrap the data encryption key into config for tracked upgrades only."""
+    if str(os.getenv("HASHCRUSH_DATA_ENCRYPTION_KEY") or "").strip():
+        return False
+
+    config_path = _config_path()
+    if not config_path.exists():
+        return False
+
+    parser = ConfigParser()
+    parser.read(config_path, encoding="utf-8")
+    configured_key = parser.get("app", "data_encryption_key", fallback="").strip()
+    if configured_key:
+        return False
+
+    from hashcrush.crypto_utils import generate_data_encryption_key
+
+    if not parser.has_section("app"):
+        parser.add_section("app")
+    parser.set("app", "data_encryption_key", generate_data_encryption_key())
+    _write_config_parser_atomic(config_path, parser)
+    print(
+        "Bootstrapped missing data_encryption_key into config for upgrade compatibility."
+    )
+    return True
 
 
 def _resolve_ssl_context(app) -> tuple[str, str]:
@@ -216,7 +263,7 @@ def _build_root_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=("serve", "setup", "upgrade", "external-repos"),
+        choices=("serve", "setup", "upgrade"),
         help="command to run (default: serve)",
     )
     parser.add_argument(
@@ -317,12 +364,8 @@ def _run_setup(args: list[str]) -> int:
     return bootstrap_cli.main(args)
 
 
-def _run_external_repos(args: list[str]) -> int:
-    external_repos_cli = _load_external_repos_cli()
-    return external_repos_cli.main(args)
-
-
 def _run_upgrade(parsed_args: argparse.Namespace) -> int:
+    _ensure_upgrade_data_encryption_key()
     create_app = _load_create_app()
     app = create_app(
         config_overrides={
@@ -332,12 +375,12 @@ def _run_upgrade(parsed_args: argparse.Namespace) -> int:
     )
     with app.app_context():
         from hashcrush.db_upgrade import upgrade_database
-        from hashcrush.utils.utils import migrate_plaintext_storage_rows
+        from hashcrush.utils.utils import migrate_sensitive_storage_rows
 
         result = upgrade_database(dry_run=parsed_args.dry_run)
-        normalized_rows = 0
+        migrated_rows = 0
         if not parsed_args.dry_run:
-            normalized_rows = migrate_plaintext_storage_rows()
+            migrated_rows = migrate_sensitive_storage_rows()
 
     print(
         f"Schema version: {result.starting_version} -> {result.target_version}"
@@ -350,10 +393,10 @@ def _run_upgrade(parsed_args: argparse.Namespace) -> int:
             print(f"- v{step.version}: {step.summary}")
     else:
         print("No schema changes were required.")
-    if not parsed_args.dry_run and normalized_rows:
+    if not parsed_args.dry_run and migrated_rows:
         print(
-            "Normalized "
-            f"{normalized_rows} legacy plaintext row(s) to canonical hex storage."
+            "Migrated "
+            f"{migrated_rows} sensitive storage row update(s) to encrypted-at-rest format."
         )
     return 0
 
@@ -374,8 +417,6 @@ def cli(args) -> int:
             return _run_setup(argv[1:])
         if first == "upgrade":
             return _run_upgrade(_parse_upgrade_args(argv[1:]))
-        if first == "external-repos":
-            return _run_external_repos(argv[1:])
         if first == "serve":
             return _run_serve(_parse_serve_args(argv[1:]))
         if first.startswith("-"):

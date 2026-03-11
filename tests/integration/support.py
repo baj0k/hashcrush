@@ -33,8 +33,15 @@ from hashcrush.models import (
 )
 from hashcrush.users.routes import bcrypt
 from hashcrush.utils.utils import (
+    decode_ciphertext_from_storage,
+    decode_username_from_storage,
+    encode_ciphertext_for_storage,
     encode_plaintext_for_storage,
+    encode_username_for_storage,
+    get_ciphertext_search_digest,
     get_linecount,
+    get_plaintext_search_digest,
+    get_username_search_digest,
     import_hashfilehashes,
     validate_hash_only_hashfile,
     validate_netntlm_hashfile,
@@ -44,6 +51,8 @@ from tests.db_runtime import (
     create_managed_postgres_database,
     sqlalchemy_engine_options,
 )
+
+TEST_DATA_ENCRYPTION_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 
 
 def _integrity_error():
@@ -56,6 +65,7 @@ def _build_app(extra_overrides: dict | None = None):
     database_uri = create_managed_postgres_database()
     base_overrides = {
         "SECRET_KEY": "phase1-test-secret-key-for-hashcrush",
+        "DATA_ENCRYPTION_KEY": TEST_DATA_ENCRYPTION_KEY,
         "SQLALCHEMY_DATABASE_URI": database_uri,
         "SQLALCHEMY_TRACK_MODIFICATIONS": False,
         "SQLALCHEMY_ENGINE_OPTIONS": sqlalchemy_engine_options(),
@@ -83,18 +93,6 @@ def _load_bootstrap_module():
     project_root = Path(__file__).resolve().parents[2]
     script_path = project_root / "bootstrap_cli.py"
     spec = importlib.util.spec_from_file_location("hashcrush_bootstrap_script", script_path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(module)
-    return module
-
-
-def _load_external_repos_module():
-    project_root = Path(__file__).resolve().parents[2]
-    script_path = project_root / "external_repos_cli.py"
-    spec = importlib.util.spec_from_file_location(
-        "hashcrush_external_repos_script", script_path
-    )
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)
@@ -182,6 +180,50 @@ def _all_rows(model, *criteria, order_by=None, **filters):
         else:
             stmt = stmt.order_by(order_by)
     return db.session.execute(stmt).scalars().all()
+
+
+def _seed_hash(
+    ciphertext: str,
+    *,
+    hash_type: int = 1000,
+    cracked: bool = False,
+    plaintext: str | None = None,
+    sub_ciphertext: str | None = None,
+) -> Hashes:
+    row = Hashes(
+        sub_ciphertext=sub_ciphertext or (get_ciphertext_search_digest(ciphertext) or ""),
+        ciphertext=encode_ciphertext_for_storage(ciphertext),
+        hash_type=hash_type,
+        cracked=cracked,
+        plaintext=encode_plaintext_for_storage(plaintext) if plaintext is not None else None,
+        plaintext_digest=get_plaintext_search_digest(plaintext) if plaintext is not None else None,
+    )
+    db.session.add(row)
+    db.session.commit()
+    return row
+
+
+def _seed_hashfile_hash(
+    *,
+    hash_id: int,
+    hashfile_id: int,
+    username: str | None = None,
+) -> HashfileHashes:
+    normalized_username = username or ""
+    encoded_username = ""
+    username_digest = ""
+    if username is not None:
+        encoded_username = encode_username_for_storage(normalized_username)
+        username_digest = get_username_search_digest(normalized_username) or ""
+    row = HashfileHashes(
+        hash_id=hash_id,
+        hashfile_id=hashfile_id,
+        username=encoded_username,
+        username_digest=username_digest,
+    )
+    db.session.add(row)
+    db.session.commit()
+    return row
 
 
 

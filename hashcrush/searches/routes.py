@@ -14,11 +14,17 @@ from flask import (
 from flask_login import current_user, login_required
 from sqlalchemy import func, or_, select
 
-from hashcrush import jinja_hex_decode
+from hashcrush import jinja_ciphertext_decode, jinja_hex_decode
 from hashcrush.audit import record_audit_event
 from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles, db
 from hashcrush.searches.forms import SearchForm
-from hashcrush.utils.utils import encode_plaintext_for_storage, get_md5_hash
+from hashcrush.utils.utils import (
+    decode_ciphertext_from_storage,
+    get_ciphertext_search_digest,
+    get_md5_hash,
+    get_plaintext_search_digest,
+    get_username_search_digest,
+)
 
 searches = Blueprint('searches', __name__)
 
@@ -53,32 +59,45 @@ def _parse_positive_int(raw_value) -> int | None:
 
 
 def _hash_search_filters(query_text: str):
-    query_lower = query_text.lower()
-    return or_(
-        Hashes.ciphertext == query_text,
-        func.lower(Hashes.ciphertext) == query_lower,
-        Hashes.sub_ciphertext == get_md5_hash(query_text),
+    variants = {query_text}
+    lower_variant = query_text.lower()
+    upper_variant = query_text.upper()
+    variants.add(lower_variant)
+    variants.add(upper_variant)
+
+    digest_values = sorted(
+        {
+            digest
+            for variant in variants
+            for digest in (
+                get_ciphertext_search_digest(variant),
+                get_md5_hash(variant),
+            )
+            if digest
+        }
     )
+
+    clauses = []
+    if digest_values:
+        clauses.append(Hashes.sub_ciphertext.in_(digest_values))
+    clauses.append(Hashes.ciphertext == query_text)
+    clauses.append(func.lower(Hashes.ciphertext) == lower_variant)
+    return or_(*clauses)
 
 
 def _password_search_filters(query_text: str):
-    candidates = {query_text}
-
+    candidates = {query_text, query_text.lower(), query_text.upper()}
     try:
-        encoded_query = encode_plaintext_for_storage(query_text)
+        candidates.add(query_text.encode('latin-1').hex())
     except UnicodeEncodeError:
-        encoded_query = None
+        pass
 
-    if encoded_query is not None:
-        # Canonical format is lowercase hex, but include uppercase for legacy rows.
-        candidates.add(encoded_query)
-        candidates.add(encoded_query.upper())
-
-    # Some legacy databases may still contain raw plaintext rows.
-    candidates.add(query_text.lower())
-    candidates.add(query_text.upper())
-
-    return or_(*[Hashes.plaintext == candidate for candidate in sorted(candidates)])
+    clauses = []
+    digest = get_plaintext_search_digest(query_text)
+    if digest:
+        clauses.append(Hashes.plaintext_digest == digest)
+    clauses.extend(Hashes.plaintext == candidate for candidate in sorted(candidates))
+    return or_(*clauses)
 
 @searches.route("/search", methods=['GET', 'POST'])
 @login_required
@@ -101,11 +120,12 @@ def searches_list():
                 _scoped_search_stmt().where(_hash_search_filters(query_text))
             ).tuples().all()
         elif search_form.search_type.data == 'user':
-            user_filters = [HashfileHashes.username == query_text]
+            user_filters = [HashfileHashes.username_digest == (get_username_search_digest(query_text) or '')]
             try:
                 encoded_username = query_text.encode('latin-1').hex()
             except UnicodeEncodeError:
                 encoded_username = None
+            user_filters.append(HashfileHashes.username == query_text)
             if encoded_username:
                 user_filters.append(HashfileHashes.username.like('%' + encoded_username + '%'))
             results = db.session.execute(
@@ -129,7 +149,7 @@ def searches_list():
             ).tuples().all()
             first_result = results[0] if results else None
             if first_result: #Without a value in the search input the export button will not pass the form validation
-                search_form.query.data = first_result[0].ciphertext #All hashs should be the same, so set the search input as the first rows hash value
+                search_form.query.data = decode_ciphertext_from_storage(first_result[0].ciphertext) #All hashes should be the same, so set the search input as the first rows hash value
                 search_form.search_type.data = 'hash' #Set the search type to hash
         else:
             domains = None
@@ -188,7 +208,7 @@ def get_rows(str_io, domains, results, hashfiles, separator):
         else:
             col.append("None")
 
-        col.append(entry[0].ciphertext) # Hash
+        col.append(jinja_ciphertext_decode(entry[0].ciphertext)) # Hash
 
         if entry[0].cracked: #Plaintext
             col.append(jinja_hex_decode(entry[0].plaintext))

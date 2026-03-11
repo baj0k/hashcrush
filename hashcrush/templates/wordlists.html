@@ -3,13 +3,12 @@
 <br>
 <h1>Wordlists</h1>
 <br>
-These are plaintext, newline-delimited files assigned to tasks. Register files from the configured external wordlists path. The dynamic wordlist is generated from cracked plaintexts.
+These are plaintext, newline-delimited files assigned to tasks. Admins upload shared static wordlists here. The dynamic wordlist is generated from cracked plaintexts.
 {% if current_user.admin %}
-<a class="btn btn-success btn-sm mt-1 mb-1" href="{{ url_for('wordlists.wordlists_add') }}">Add/Register</a>
+<a class="btn btn-success btn-sm mt-1 mb-1" href="{{ url_for('wordlists.wordlists_add') }}">Upload Wordlist</a>
 {% else %}
 <p class="text-muted mb-0">Shared wordlists are managed by admins. All users can view and use them in tasks.</p>
 {% endif %}
-Configured root: <code>{{ wordlists_root }}</code>
 <br>
 <br>
 <br>

@@ -27,8 +27,12 @@ from hashcrush.models import (
 )
 from hashcrush.utils.utils import (
     build_hashcat_argv,
+    decode_ciphertext_from_storage,
+    decode_plaintext_from_storage,
     encode_plaintext_for_storage,
+    get_ciphertext_search_digest,
     get_md5_hash,
+    get_plaintext_search_digest,
     get_runtime_subdir,
     update_dynamic_wordlist,
     update_job_task_status,
@@ -440,7 +444,9 @@ class LocalExecutorService:
         )
         with open(target, "w", encoding="utf-8", errors="ignore") as file_object:
             for ciphertext in rows.scalars():
-                file_object.write(f"{ciphertext}\n")
+                decoded_ciphertext = decode_ciphertext_from_storage(ciphertext)
+                if decoded_ciphertext is not None:
+                    file_object.write(f"{decoded_ciphertext}\n")
         return target
 
     def _monitor_active_task(self) -> None:
@@ -595,7 +601,7 @@ class LocalExecutorService:
         if not expected_hash:
             return 0
 
-        parsed_entries: list[tuple[str, str]] = []
+        parsed_entries: list[tuple[tuple[str, ...], str]] = []
         with open(crack_path, encoding="latin-1", errors="ignore") as file_contents:
             for entry in file_contents.read().split("\n"):
                 if ":" not in entry:
@@ -605,12 +611,28 @@ class LocalExecutorService:
                 elements = entry.split(":")
                 elements.pop()
                 ciphertext = ":".join(elements)
-                parsed_entries.append((get_md5_hash(ciphertext), plaintext))
+                parsed_entries.append(
+                    (
+                        tuple(
+                            value
+                            for value in (
+                                get_ciphertext_search_digest(ciphertext),
+                                get_md5_hash(ciphertext),
+                            )
+                            if value
+                        ),
+                        plaintext,
+                    )
+                )
 
         if not parsed_entries:
             return 0
 
-        sub_ciphertexts = {sub_ciphertext for sub_ciphertext, _ in parsed_entries}
+        sub_ciphertexts = {
+            digest
+            for digest_values, _ in parsed_entries
+            for digest in digest_values
+        }
         candidate_rows = db.session.execute(
             select(Hashes)
             .where(Hashes.hash_type == expected_hash.hash_type)
@@ -622,12 +644,17 @@ class LocalExecutorService:
             records_by_sub_ciphertext.setdefault(row.sub_ciphertext, row)
 
         imported_count = 0
-        for sub_ciphertext, plaintext in parsed_entries:
-            record = records_by_sub_ciphertext.get(sub_ciphertext)
-            if record:
-                record.plaintext = plaintext
-                record.cracked = True
-                imported_count += 1
+        for digest_values, plaintext in parsed_entries:
+            for digest in digest_values:
+                record = records_by_sub_ciphertext.get(digest)
+                if record:
+                    record.plaintext = plaintext
+                    record.plaintext_digest = get_plaintext_search_digest(
+                        decode_plaintext_from_storage(plaintext)
+                    )
+                    record.cracked = True
+                    imported_count += 1
+                    break
         db.session.commit()
         return imported_count
 

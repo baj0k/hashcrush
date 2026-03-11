@@ -75,30 +75,11 @@ def test_analytics_page_is_global_but_downloads_require_admin():
         db.session.add_all([owner_hashfile, other_hashfile])
         db.session.commit()
 
-        owner_hash = Hashes(
-            sub_ciphertext="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            ciphertext="owner-ciphertext",
-            hash_type=1000,
-            cracked=True,
-            plaintext=encode_plaintext_for_storage("owner-password"),
-        )
-        other_hash = Hashes(
-            sub_ciphertext="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            ciphertext="other-ciphertext",
-            hash_type=1000,
-            cracked=True,
-            plaintext=encode_plaintext_for_storage("other-password"),
-        )
-        db.session.add_all([owner_hash, other_hash])
-        db.session.commit()
+        owner_hash = _seed_hash("owner-ciphertext", cracked=True, plaintext="owner-password")
+        other_hash = _seed_hash("other-ciphertext", cracked=True, plaintext="other-password")
 
-        db.session.add(
-            HashfileHashes(hash_id=owner_hash.id, hashfile_id=owner_hashfile.id)
-        )
-        db.session.add(
-            HashfileHashes(hash_id=other_hash.id, hashfile_id=other_hashfile.id)
-        )
-        db.session.commit()
+        _seed_hashfile_hash(hash_id=owner_hash.id, hashfile_id=owner_hashfile.id)
+        _seed_hashfile_hash(hash_id=other_hash.id, hashfile_id=other_hashfile.id)
 
         client = app.test_client()
         _login_client_as_user(client, owner)
@@ -132,29 +113,10 @@ def test_analytics_page_renders_upperalphanumeric_and_mixed_categories():
         db.session.add(hashfile)
         db.session.commit()
 
-        upper_alphanumeric = Hashes(
-            sub_ciphertext="abc" * 10 + "12",
-            ciphertext="upper-alpha-num",
-            hash_type=1000,
-            cracked=True,
-            plaintext=encode_plaintext_for_storage("UPPER123"),
-        )
-        mixed_special = Hashes(
-            sub_ciphertext="def" * 10 + "34",
-            ciphertext="mixed-special",
-            hash_type=1000,
-            cracked=True,
-            plaintext=encode_plaintext_for_storage("Pass123!"),
-        )
-        db.session.add_all([upper_alphanumeric, mixed_special])
-        db.session.commit()
-        db.session.add_all(
-            [
-                HashfileHashes(hash_id=upper_alphanumeric.id, hashfile_id=hashfile.id),
-                HashfileHashes(hash_id=mixed_special.id, hashfile_id=hashfile.id),
-            ]
-        )
-        db.session.commit()
+        upper_alphanumeric = _seed_hash("upper-alpha-num", cracked=True, plaintext="UPPER123")
+        mixed_special = _seed_hash("mixed-special", cracked=True, plaintext="Pass123!")
+        _seed_hashfile_hash(hash_id=upper_alphanumeric.id, hashfile_id=hashfile.id)
+        _seed_hashfile_hash(hash_id=mixed_special.id, hashfile_id=hashfile.id)
 
         client = app.test_client()
         _login_client_as_user(client, admin)
@@ -183,17 +145,8 @@ def test_search_hash_post_is_trimmed_and_case_insensitive():
         db.session.add(hashfile)
         db.session.commit()
 
-        hash_row = Hashes(
-            sub_ciphertext="eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-            ciphertext="ABCDEF0123456789",
-            hash_type=1000,
-            cracked=False,
-            plaintext=None,
-        )
-        db.session.add(hash_row)
-        db.session.commit()
-        db.session.add(HashfileHashes(hash_id=hash_row.id, hashfile_id=hashfile.id))
-        db.session.commit()
+        hash_row = _seed_hash("ABCDEF0123456789", cracked=False)
+        _seed_hashfile_hash(hash_id=hash_row.id, hashfile_id=hashfile.id)
 
         client = app.test_client()
         _login_client_as_user(client, admin)
@@ -224,12 +177,10 @@ def test_search_password_post_matches_canonical_and_legacy_plaintext_rows():
         db.session.add(hashfile)
         db.session.commit()
 
-        canonical_hash = Hashes(
-            sub_ciphertext="f" * 32,
-            ciphertext="canonical-ciphertext",
-            hash_type=1000,
+        canonical_hash = _seed_hash(
+            "canonical-ciphertext",
             cracked=True,
-            plaintext=encode_plaintext_for_storage("CanonicalPass1!"),
+            plaintext="CanonicalPass1!",
         )
         legacy_hash = Hashes(
             sub_ciphertext="1" * 32,
@@ -238,13 +189,10 @@ def test_search_password_post_matches_canonical_and_legacy_plaintext_rows():
             cracked=True,
             plaintext="LegacyPass1!",
         )
-        db.session.add_all([canonical_hash, legacy_hash])
+        db.session.add(legacy_hash)
         db.session.commit()
-        db.session.add(
-            HashfileHashes(hash_id=canonical_hash.id, hashfile_id=hashfile.id)
-        )
-        db.session.add(HashfileHashes(hash_id=legacy_hash.id, hashfile_id=hashfile.id))
-        db.session.commit()
+        _seed_hashfile_hash(hash_id=canonical_hash.id, hashfile_id=hashfile.id)
+        _seed_hashfile_hash(hash_id=legacy_hash.id, hashfile_id=hashfile.id)
 
         client = app.test_client()
         _login_client_as_user(client, admin)
@@ -285,17 +233,8 @@ def test_search_post_rejects_whitespace_only_query():
         db.session.add(hashfile)
         db.session.commit()
 
-        hash_row = Hashes(
-            sub_ciphertext="a" * 32,
-            ciphertext="SHOULD-NOT-MATCH",
-            hash_type=1000,
-            cracked=False,
-            plaintext=None,
-        )
-        db.session.add(hash_row)
-        db.session.commit()
-        db.session.add(HashfileHashes(hash_id=hash_row.id, hashfile_id=hashfile.id))
-        db.session.commit()
+        hash_row = _seed_hash("SHOULD-NOT-MATCH", cracked=False)
+        _seed_hashfile_hash(hash_id=hash_row.id, hashfile_id=hashfile.id)
 
         client = app.test_client()
         _login_client_as_user(client, admin)
@@ -329,30 +268,11 @@ def test_search_hash_id_lookup_is_global_for_shared_hashfiles():
         db.session.add_all([owner_hashfile, other_hashfile])
         db.session.commit()
 
-        owner_hash = Hashes(
-            sub_ciphertext="cccccccccccccccccccccccccccccccc",
-            ciphertext="owner-search-ciphertext",
-            hash_type=1000,
-            cracked=False,
-            plaintext=None,
-        )
-        other_hash = Hashes(
-            sub_ciphertext="dddddddddddddddddddddddddddddddd",
-            ciphertext="other-search-ciphertext",
-            hash_type=1000,
-            cracked=False,
-            plaintext=None,
-        )
-        db.session.add_all([owner_hash, other_hash])
-        db.session.commit()
+        owner_hash = _seed_hash("owner-search-ciphertext", cracked=False)
+        other_hash = _seed_hash("other-search-ciphertext", cracked=False)
 
-        db.session.add(
-            HashfileHashes(hash_id=owner_hash.id, hashfile_id=owner_hashfile.id)
-        )
-        db.session.add(
-            HashfileHashes(hash_id=other_hash.id, hashfile_id=other_hashfile.id)
-        )
-        db.session.commit()
+        _seed_hashfile_hash(hash_id=owner_hash.id, hashfile_id=owner_hashfile.id)
+        _seed_hashfile_hash(hash_id=other_hash.id, hashfile_id=other_hashfile.id)
 
         client = app.test_client()
         _login_client_as_user(client, owner)
@@ -392,17 +312,8 @@ def test_search_hash_id_lookup_accepts_trimmed_numeric_value():
         db.session.add(hashfile)
         db.session.commit()
 
-        hash_row = Hashes(
-            sub_ciphertext="e" * 32,
-            ciphertext="trimmed-hash-id-ciphertext",
-            hash_type=1000,
-            cracked=False,
-            plaintext=None,
-        )
-        db.session.add(hash_row)
-        db.session.commit()
-        db.session.add(HashfileHashes(hash_id=hash_row.id, hashfile_id=hashfile.id))
-        db.session.commit()
+        hash_row = _seed_hash("trimmed-hash-id-ciphertext", cracked=False)
+        _seed_hashfile_hash(hash_id=hash_row.id, hashfile_id=hashfile.id)
 
         client = app.test_client()
         _login_client_as_user(client, admin)
@@ -427,17 +338,12 @@ def test_search_page_hides_export_controls_for_non_admin():
         db.session.add(hashfile)
         db.session.commit()
 
-        hash_row = Hashes(
-            sub_ciphertext="f" * 32,
-            ciphertext="search-export-ciphertext",
-            hash_type=1000,
+        hash_row = _seed_hash(
+            "search-export-ciphertext",
             cracked=True,
-            plaintext=encode_plaintext_for_storage("ExportMe123!"),
+            plaintext="ExportMe123!",
         )
-        db.session.add(hash_row)
-        db.session.commit()
-        db.session.add(HashfileHashes(hash_id=hash_row.id, hashfile_id=hashfile.id))
-        db.session.commit()
+        _seed_hashfile_hash(hash_id=hash_row.id, hashfile_id=hashfile.id)
 
         client = app.test_client()
         _login_client_as_user(client, user)
@@ -471,17 +377,12 @@ def test_search_export_requires_admin():
         db.session.add(hashfile)
         db.session.commit()
 
-        hash_row = Hashes(
-            sub_ciphertext="1" * 32,
-            ciphertext="search-export-denied-ciphertext",
-            hash_type=1000,
+        hash_row = _seed_hash(
+            "search-export-denied-ciphertext",
             cracked=True,
-            plaintext=encode_plaintext_for_storage("DeniedExport123!"),
+            plaintext="DeniedExport123!",
         )
-        db.session.add(hash_row)
-        db.session.commit()
-        db.session.add(HashfileHashes(hash_id=hash_row.id, hashfile_id=hashfile.id))
-        db.session.commit()
+        _seed_hashfile_hash(hash_id=hash_row.id, hashfile_id=hashfile.id)
 
         client = app.test_client()
         _login_client_as_user(client, user)
@@ -516,17 +417,12 @@ def test_search_export_still_works_for_admin():
         db.session.add(hashfile)
         db.session.commit()
 
-        hash_row = Hashes(
-            sub_ciphertext="2" * 32,
-            ciphertext="search-export-admin-ciphertext",
-            hash_type=1000,
+        hash_row = _seed_hash(
+            "search-export-admin-ciphertext",
             cracked=True,
-            plaintext=encode_plaintext_for_storage("AdminExport123!"),
+            plaintext="AdminExport123!",
         )
-        db.session.add(hash_row)
-        db.session.commit()
-        db.session.add(HashfileHashes(hash_id=hash_row.id, hashfile_id=hashfile.id))
-        db.session.commit()
+        _seed_hashfile_hash(hash_id=hash_row.id, hashfile_id=hashfile.id)
 
         client = app.test_client()
         _login_client_as_user(client, admin)

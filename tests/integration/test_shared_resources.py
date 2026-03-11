@@ -96,15 +96,82 @@ def test_task_groups_add_handles_integrity_error_cleanly(monkeypatch):
         assert _count_rows(TaskGroups) == 0
 
 @pytest.mark.security
-def test_wordlists_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
-    app = _build_app({"WORDLISTS_PATH": str(tmp_path)})
+def test_wordlists_add_uploads_static_wordlist_to_managed_runtime(tmp_path):
+    app = _build_app(
+        {
+            "RUNTIME_PATH": str(tmp_path / "runtime"),
+            "STORAGE_PATH": str(tmp_path / "storage"),
+        }
+    )
     with app.app_context():
         db.create_all()
         admin = _seed_admin_user()
         _seed_settings()
 
-        wordlist_path = tmp_path / "wordlist.txt"
-        wordlist_path.write_text("password\n", encoding="utf-8")
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/wordlists/add",
+            data={
+                "name": "uploaded-wordlist",
+                "upload": (io.BytesIO(b"password\nletmein\n"), "uploaded.txt"),
+            },
+        )
+
+        assert response.status_code == 302
+        wordlist = _first_row(Wordlists, name="uploaded-wordlist")
+        assert wordlist is not None
+        assert wordlist.type == "static"
+        assert wordlist.path.startswith(
+            str((tmp_path / "storage" / "wordlists").resolve())
+        )
+        assert Path(wordlist.path).read_text(encoding="utf-8") == "password\nletmein\n"
+
+
+@pytest.mark.security
+def test_rules_add_uploads_rule_to_managed_runtime(tmp_path):
+    app = _build_app(
+        {
+            "RUNTIME_PATH": str(tmp_path / "runtime"),
+            "STORAGE_PATH": str(tmp_path / "storage"),
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/rules/add",
+            data={
+                "name": "uploaded-rule",
+                "upload": (io.BytesIO(b":\n"), "uploaded.rule"),
+            },
+        )
+
+        assert response.status_code == 302
+        rule = _first_row(Rules, name="uploaded-rule")
+        assert rule is not None
+        assert rule.path.startswith(str((tmp_path / "storage" / "rules").resolve()))
+        assert Path(rule.path).read_text(encoding="utf-8") == ":\n"
+
+
+@pytest.mark.security
+def test_wordlists_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
+    app = _build_app(
+        {
+            "RUNTIME_PATH": str(tmp_path / "runtime"),
+            "STORAGE_PATH": str(tmp_path / "storage"),
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
 
         client = app.test_client()
         _login_client_as_user(client, admin)
@@ -118,23 +185,25 @@ def test_wordlists_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
             "/wordlists/add",
             data={
                 "name": "conflict-wordlist",
-                "existing_file": "wordlist.txt",
+                "upload": (io.BytesIO(b"password\n"), "wordlist.txt"),
             },
         )
         assert response.status_code == 200
-        assert b"Wordlist could not be registered" in response.data
+        assert b"Wordlist could not be uploaded" in response.data
         assert _count_rows(Wordlists) == 0
 
 @pytest.mark.security
 def test_rules_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
-    app = _build_app({"RULES_PATH": str(tmp_path)})
+    app = _build_app(
+        {
+            "RUNTIME_PATH": str(tmp_path / "runtime"),
+            "STORAGE_PATH": str(tmp_path / "storage"),
+        }
+    )
     with app.app_context():
         db.create_all()
         admin = _seed_admin_user()
         _seed_settings()
-
-        rule_path = tmp_path / "best.rule"
-        rule_path.write_text(":\n", encoding="utf-8")
 
         client = app.test_client()
         _login_client_as_user(client, admin)
@@ -148,11 +217,11 @@ def test_rules_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
             "/rules/add",
             data={
                 "name": "conflict-rule",
-                "existing_file": "best.rule",
+                "upload": (io.BytesIO(b":\n"), "best.rule"),
             },
         )
         assert response.status_code == 200
-        assert b"Rule file could not be registered" in response.data
+        assert b"Rule file could not be uploaded" in response.data
         assert _count_rows(Rules) == 0
 
 @pytest.mark.security

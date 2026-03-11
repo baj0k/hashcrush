@@ -385,7 +385,7 @@ def test_shared_resource_mutation_requires_admin(tmp_path, monkeypatch):
         assert response.status_code == 302
         response = client.post(
             "/wordlists/add",
-            data={"name": "blocked-wordlist", "existing_file": "SecLists/passwords/test.txt"},
+            data={"name": "blocked-wordlist", "upload": (io.BytesIO(b"password\n"), "test.txt")},
         )
         assert response.status_code == 302
         assert _first_row(Wordlists, name="blocked-wordlist") is None
@@ -402,7 +402,7 @@ def test_shared_resource_mutation_requires_admin(tmp_path, monkeypatch):
         assert response.status_code == 302
         response = client.post(
             "/rules/add",
-            data={"name": "blocked-rule", "existing_file": "hashcat/rules/test.rule"},
+            data={"name": "blocked-rule", "upload": (io.BytesIO(b":\n"), "test.rule")},
         )
         assert response.status_code == 302
         assert _first_row(Rules, name="blocked-rule") is None

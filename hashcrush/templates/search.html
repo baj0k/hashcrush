@@ -73,7 +73,7 @@
                             </td>
                             <td>
                                 <p class="text-break">
-                                    {{ entry[0].ciphertext }}
+                                    {{ entry[0].ciphertext | jinja_ciphertext_decode }}
                                 </p>
                             </td>
                             <td>

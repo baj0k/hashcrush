@@ -24,6 +24,7 @@ TEST_DOMAIN_NAME = "E2E Domain"
 TEST_HASHFILE_NAME = "e2e-existing-hashes.txt"
 TEST_TASK_NAME = "?a [1]"
 TEST_SECRET_KEY = "local-e2e-test-secret-key-for-hashcrush-0123456789"
+TEST_DATA_ENCRYPTION_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 _SETUP_COMPLETED = False
 
 
@@ -58,24 +59,22 @@ def _sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def build_test_config(
-    database_uri: str, runtime_path: Path, wordlists_path: Path, rules_path: Path
-):
+def build_test_config(database_uri: str, runtime_path: Path, storage_path: Path):
     return {
         "SECRET_KEY": TEST_SECRET_KEY,
+        "DATA_ENCRYPTION_KEY": TEST_DATA_ENCRYPTION_KEY,
         "SQLALCHEMY_DATABASE_URI": database_uri,
         "SQLALCHEMY_TRACK_MODIFICATIONS": False,
         "SQLALCHEMY_ENGINE_OPTIONS": sqlalchemy_engine_options(),
         "ENABLE_LOCAL_EXECUTOR": False,
         "SKIP_RUNTIME_BOOTSTRAP": False,
         "RUNTIME_PATH": str(runtime_path),
-        "WORDLISTS_PATH": str(wordlists_path),
-        "RULES_PATH": str(rules_path),
+        "STORAGE_PATH": str(storage_path),
         "SESSION_COOKIE_SECURE": False,
     }
 
 
-def _seed_local_e2e_data(app, wordlists_dir: Path, rules_dir: Path) -> dict[str, str]:
+def _seed_local_e2e_data(app, storage_path: Path) -> dict[str, str]:
     from hashcrush.models import (
         Domains,
         Hashes,
@@ -88,7 +87,12 @@ def _seed_local_e2e_data(app, wordlists_dir: Path, rules_dir: Path) -> dict[str,
         db,
     )
     from hashcrush.users.routes import bcrypt
-    from hashcrush.utils.utils import get_md5_hash
+    from hashcrush.utils.utils import (
+        encode_ciphertext_for_storage,
+        encode_username_for_storage,
+        get_ciphertext_search_digest,
+        get_username_search_digest,
+    )
 
     with app.app_context():
         db.create_all()
@@ -105,11 +109,13 @@ def _seed_local_e2e_data(app, wordlists_dir: Path, rules_dir: Path) -> dict[str,
         )
         domain = Domains(name=TEST_DOMAIN_NAME)
 
+        wordlists_dir = storage_path / "wordlists"
+        wordlists_dir.mkdir(parents=True, exist_ok=True)
         wordlist_path = wordlists_dir / "e2e.txt"
         wordlist_path.write_text("password\nhashcrush\nletmein\n", encoding="utf-8")
         wordlist = Wordlists(
             name="e2e.txt",
-            type="Static",
+            type="static",
             path=str(wordlist_path),
             size=wordlist_path.stat().st_size,
             checksum=_sha256_text(wordlist_path.read_text(encoding="utf-8")),
@@ -129,11 +135,12 @@ def _seed_local_e2e_data(app, wordlists_dir: Path, rules_dir: Path) -> dict[str,
         db.session.commit()
 
         existing_hash = Hashes(
-            sub_ciphertext=get_md5_hash("5f4dcc3b5aa765d61d8327deb882cf99"),
-            ciphertext="5f4dcc3b5aa765d61d8327deb882cf99",
+            sub_ciphertext=get_ciphertext_search_digest("5f4dcc3b5aa765d61d8327deb882cf99"),
+            ciphertext=encode_ciphertext_for_storage("5f4dcc3b5aa765d61d8327deb882cf99"),
             hash_type=0,
             cracked=False,
             plaintext=None,
+            plaintext_digest=None,
         )
         db.session.add(existing_hash)
         db.session.commit()
@@ -146,7 +153,8 @@ def _seed_local_e2e_data(app, wordlists_dir: Path, rules_dir: Path) -> dict[str,
             HashfileHashes(
                 hash_id=existing_hash.id,
                 hashfile_id=hashfile.id,
-                username="alice",
+                username=encode_username_for_storage("alice"),
+                username_digest=get_username_search_digest("alice") or "",
             )
         )
         db.session.commit()
@@ -170,29 +178,23 @@ def _seed_local_e2e_data(app, wordlists_dir: Path, rules_dir: Path) -> dict[str,
 def local_e2e_environment(tmp_path_factory):
     root = tmp_path_factory.mktemp("e2e-local")
     runtime_path = root / "runtime"
-    wordlists_path = root / "wordlists"
-    rules_path = root / "rules"
+    storage_path = root / "storage"
     runtime_path.mkdir(parents=True, exist_ok=True)
-    wordlists_path.mkdir(parents=True, exist_ok=True)
-    rules_path.mkdir(parents=True, exist_ok=True)
+    storage_path.mkdir(parents=True, exist_ok=True)
 
     database_uri = create_managed_postgres_database()
 
     os.environ["HASHCRUSH_DATABASE_URI"] = database_uri
     os.environ["HASHCRUSH_SECRET_KEY"] = TEST_SECRET_KEY
+    os.environ["HASHCRUSH_DATA_ENCRYPTION_KEY"] = TEST_DATA_ENCRYPTION_KEY
 
     from hashcrush import create_app
 
     app = create_app(
         testing=True,
-        config_overrides=build_test_config(
-            database_uri,
-            runtime_path,
-            wordlists_path,
-            rules_path,
-        ),
+        config_overrides=build_test_config(database_uri, runtime_path, storage_path),
     )
-    fixture_data = _seed_local_e2e_data(app, wordlists_path, rules_path)
+    fixture_data = _seed_local_e2e_data(app, storage_path)
 
     server = make_server("127.0.0.1", 0, app, threaded=True)
     server_port = server.socket.getsockname()[1]

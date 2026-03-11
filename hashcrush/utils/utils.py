@@ -12,6 +12,12 @@ from flask import current_app, has_app_context
 from sqlalchemy import func, select
 from werkzeug.utils import secure_filename
 
+from hashcrush.crypto_utils import (
+    blind_index,
+    decrypt_secret_value,
+    encrypt_secret_value,
+    is_encrypted_storage_value,
+)
 from hashcrush.models import (
     Hashes,
     HashfileHashes,
@@ -103,6 +109,19 @@ def get_runtime_subdir(name: str) -> str:
     return os.path.join(get_runtime_root_path(), name)
 
 
+def get_storage_root_path() -> str:
+    """Return absolute persistent storage root path for uploaded assets."""
+    configured = current_app.config.get('STORAGE_PATH')
+    if configured:
+        return os.path.abspath(os.path.expanduser(str(configured)))
+    return os.path.join(tempfile.gettempdir(), 'hashcrush-storage')
+
+
+def get_storage_subdir(name: str) -> str:
+    """Return absolute path to a persistent storage subdirectory."""
+    return os.path.join(get_storage_root_path(), name)
+
+
 def is_plaintext_hex_encoded(value: str | None) -> bool:
     """Return True when value matches canonical lowercase hex encoding."""
     if value is None:
@@ -114,19 +133,37 @@ def is_plaintext_hex_encoded(value: str | None) -> bool:
     return bool(_PLAINTEXT_HEX_PATTERN.fullmatch(value))
 
 
+def get_ciphertext_search_digest(value: str | None) -> str | None:
+    return blind_index(value, purpose='ciphertext', length=32)
+
+
+def get_plaintext_search_digest(value: str | None) -> str | None:
+    return blind_index(value, purpose='plaintext', length=64)
+
+
+def get_username_search_digest(value: str | None) -> str | None:
+    return blind_index(value or '', purpose='username', length=64)
+
+
+def encode_ciphertext_for_storage(value: str | None) -> str | None:
+    return encrypt_secret_value(value)
+
+
+def decode_ciphertext_from_storage(value: str | None) -> str | None:
+    return decrypt_secret_value(value)
+
+
 def encode_plaintext_for_storage(value: str | None) -> str | None:
-    """Encode plaintext to canonical lowercase hex for DB storage."""
-    if value is None:
-        return None
-    if value == '':
-        return ''
-    return value.encode('latin-1').hex()
+    """Encrypt plaintext for DB storage."""
+    return encrypt_secret_value(value)
 
 
 def decode_plaintext_from_storage(value: str | None) -> str | None:
-    """Decode canonical plaintext storage format, with legacy fallback."""
+    """Decode encrypted plaintext storage format, with legacy fallback."""
     if value is None:
         return None
+    if is_encrypted_storage_value(value):
+        return decrypt_secret_value(value)
     if value == '':
         return ''
     if is_plaintext_hex_encoded(value):
@@ -138,8 +175,27 @@ def decode_plaintext_from_storage(value: str | None) -> str | None:
     return value
 
 
-def migrate_plaintext_storage_rows(batch_size: int = 1000) -> int:
-    """Convert legacy raw plaintext rows to canonical hex encoding."""
+def encode_username_for_storage(value: str | None) -> str:
+    return encrypt_secret_value(value or '') or ''
+
+
+def decode_username_from_storage(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if value == '':
+        return ''
+    if is_encrypted_storage_value(value):
+        return decrypt_secret_value(value)
+    if is_plaintext_hex_encoded(value):
+        try:
+            return bytes.fromhex(value).decode('latin-1')
+        except (TypeError, ValueError):
+            return value
+    return value
+
+
+def migrate_sensitive_storage_rows(batch_size: int = 1000) -> int:
+    """Encrypt legacy persisted hash material and populate blind indexes."""
     migrated_rows = 0
     last_id = 0
 
@@ -147,8 +203,6 @@ def migrate_plaintext_storage_rows(batch_size: int = 1000) -> int:
         rows = db.session.execute(
             select(Hashes)
             .where(Hashes.id > last_id)
-            .where(Hashes.cracked.is_(True))
-            .where(Hashes.plaintext.isnot(None))
             .order_by(Hashes.id.asc())
             .limit(batch_size)
         ).scalars().all()
@@ -158,16 +212,66 @@ def migrate_plaintext_storage_rows(batch_size: int = 1000) -> int:
         changed = False
         for row in rows:
             last_id = row.id
-            if is_plaintext_hex_encoded(row.plaintext):
-                continue
-            row.plaintext = encode_plaintext_for_storage(row.plaintext)
-            migrated_rows += 1
-            changed = True
+            expected_ciphertext_digest = get_ciphertext_search_digest(
+                decode_ciphertext_from_storage(row.ciphertext)
+            )
+            if expected_ciphertext_digest and row.sub_ciphertext != expected_ciphertext_digest:
+                row.sub_ciphertext = expected_ciphertext_digest
+                changed = True
+                migrated_rows += 1
+            if row.ciphertext and not is_encrypted_storage_value(row.ciphertext):
+                row.ciphertext = encode_ciphertext_for_storage(row.ciphertext)
+                changed = True
+                migrated_rows += 1
+
+            decoded_plaintext = decode_plaintext_from_storage(row.plaintext)
+            expected_plaintext_digest = get_plaintext_search_digest(decoded_plaintext)
+            if row.plaintext_digest != expected_plaintext_digest:
+                row.plaintext_digest = expected_plaintext_digest
+                changed = True
+                migrated_rows += 1
+            if row.plaintext is not None and not is_encrypted_storage_value(row.plaintext):
+                row.plaintext = encode_plaintext_for_storage(decoded_plaintext)
+                changed = True
+                migrated_rows += 1
+
+        if changed:
+            db.session.commit()
+
+    association_last_id = 0
+    while True:
+        associations = db.session.execute(
+            select(HashfileHashes)
+            .where(HashfileHashes.id > association_last_id)
+            .order_by(HashfileHashes.id.asc())
+            .limit(batch_size)
+        ).scalars().all()
+        if not associations:
+            break
+
+        changed = False
+        for row in associations:
+            association_last_id = row.id
+            decoded_username = decode_username_from_storage(row.username)
+            expected_username_digest = get_username_search_digest(decoded_username)
+            if row.username_digest != expected_username_digest:
+                row.username_digest = expected_username_digest or ''
+                changed = True
+                migrated_rows += 1
+            if row.username and not is_encrypted_storage_value(row.username):
+                row.username = encode_username_for_storage(decoded_username)
+                changed = True
+                migrated_rows += 1
 
         if changed:
             db.session.commit()
 
     return migrated_rows
+
+
+def migrate_plaintext_storage_rows(batch_size: int = 1000) -> int:
+    """Backward-compatible wrapper for sensitive-storage migration."""
+    return migrate_sensitive_storage_rows(batch_size=batch_size)
 
 
 def _resolve_storage_path(stored_path: str) -> str:
@@ -273,11 +377,16 @@ def normalize_hash_type(hash_type):
 def import_hash_only(line, hash_type):
     """Function to import single hash"""
     normalized_hash_type = normalize_hash_type(hash_type)
+    current_digest = get_ciphertext_search_digest(line)
+    legacy_digest = get_md5_hash(line)
 
     hash = db.session.scalar(
-        select(Hashes).filter_by(
-            hash_type=normalized_hash_type,
-            sub_ciphertext=get_md5_hash(line),
+        select(Hashes)
+        .where(Hashes.hash_type == normalized_hash_type)
+        .where(
+            Hashes.sub_ciphertext.in_(
+                [value for value in (current_digest, legacy_digest) if value]
+            )
         )
     )
 
@@ -286,9 +395,10 @@ def import_hash_only(line, hash_type):
 
     new_hash = Hashes(
         hash_type=normalized_hash_type,
-        sub_ciphertext=get_md5_hash(line),
-        ciphertext=line,
+        sub_ciphertext=current_digest or legacy_digest,
+        ciphertext=encode_ciphertext_for_storage(line),
         cracked=0,
+        plaintext_digest=None,
     )
     db.session.add(new_hash)
     db.session.flush()
@@ -375,20 +485,26 @@ def import_hashfilehashes(hashfile_id, hashfile_path, file_type, hash_type):
                 return False
 
             encoded_username = ''
+            username_digest = ''
             if username is not None:
-                encoded_username = username.encode('latin-1', errors='replace').hex()
+                normalized_username = username.encode(
+                    'latin-1', errors='replace'
+                ).decode('latin-1')
+                encoded_username = encode_username_for_storage(normalized_username)
+                username_digest = get_username_search_digest(normalized_username) or ''
 
             existing_link = db.session.scalar(
                 select(HashfileHashes).filter_by(
                     hash_id=hash_id,
                     hashfile_id=hashfile_id,
-                    username=encoded_username,
+                    username_digest=username_digest,
                 )
             )
             if not existing_link:
                 hashfilehashes = HashfileHashes(
                     hash_id=hash_id,
                     username=encoded_username,
+                    username_digest=username_digest,
                     hashfile_id=hashfile_id,
                 )
                 db.session.add(hashfilehashes)

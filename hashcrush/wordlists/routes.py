@@ -1,7 +1,7 @@
-"""Flask routes to handle Wordlists"""
+"""Flask routes to handle Wordlists."""
 import os
 
-from flask import Blueprint, current_app, flash, redirect, render_template, url_for
+from flask import Blueprint, flash, redirect, render_template, url_for
 from flask_login import login_required
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -9,113 +9,55 @@ from sqlalchemy.exc import IntegrityError
 from hashcrush.audit import record_audit_event
 from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Tasks, Wordlists, db
-from hashcrush.utils.utils import get_filehash, get_linecount, update_dynamic_wordlist
+from hashcrush.utils.utils import (
+    get_filehash,
+    get_linecount,
+    get_storage_subdir,
+    save_file,
+    update_dynamic_wordlist,
+)
 from hashcrush.wordlists.forms import WordlistsForm
 
 wordlists = Blueprint('wordlists', __name__)
-MAX_SELECTABLE_WORDLIST_FILES = 5000
 
 
-def _render_wordlists_add_form(form, wordlists_root, wordlists_root_exists, selectable_files, selectable_truncated, selectable_tree):
+def _render_wordlists_add_form(form):
     return render_template(
         'wordlists_add.html',
         title='Wordlist Add',
         form=form,
-        wordlists_root=wordlists_root,
-        wordlists_root_exists=wordlists_root_exists,
-        selectable_count=len(selectable_files),
-        selectable_truncated=selectable_truncated,
-        selectable_tree=selectable_tree,
     )
 
 
-def _contains_hidden_segment(relative_path: str) -> bool:
-    return any(segment.startswith('.') for segment in relative_path.split('/') if segment not in ('', '.'))
+def _managed_wordlists_dir() -> str:
+    path = get_storage_subdir('wordlists')
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
-def _is_selectable_wordlist_filename(filename: str) -> bool:
-    lowered = (filename or '').lower()
-    return lowered.endswith('.txt')
-
-
-def _wordlists_root_path() -> str:
-    configured = current_app.config.get('WORDLISTS_PATH')
-    if configured:
-        return os.path.abspath(os.path.expanduser(str(configured)))
-    return os.path.abspath(os.path.join(current_app.root_path, 'control', 'wordlists'))
-
-
-def _list_selectable_files(base_dir: str, max_entries: int = MAX_SELECTABLE_WORDLIST_FILES) -> tuple[list[tuple[str, str]], bool]:
-    if (not base_dir) or (not os.path.isdir(base_dir)):
-        return [], False
-
-    discovered: list[str] = []
-    for dirpath, dirnames, files in os.walk(base_dir):
-        # Skip hidden directories from recursive discovery.
-        dirnames[:] = [dirname for dirname in dirnames if not dirname.startswith('.')]
-        for filename in files:
-            if not _is_selectable_wordlist_filename(filename):
-                continue
-            abs_path = os.path.abspath(os.path.join(dirpath, filename))
-            rel_path = os.path.relpath(abs_path, base_dir).replace(os.path.sep, '/')
-            discovered.append(rel_path)
-            if len(discovered) >= max_entries:
-                discovered.sort(key=str.casefold)
-                return [(path, path) for path in discovered], True
-
-    discovered.sort(key=str.casefold)
-    return [(path, path) for path in discovered], False
-
-
-def _build_file_tree(relative_paths: list[str]) -> dict:
-    root = {"dirs": {}, "files": []}
-    for relative_path in relative_paths:
-        parts = [segment for segment in relative_path.split('/') if segment]
-        if not parts:
-            continue
-        node = root
-        for segment in parts[:-1]:
-            node = node["dirs"].setdefault(segment, {"dirs": {}, "files": []})
-        node["files"].append(parts[-1])
-    return _serialize_file_tree(root, "")
-
-
-def _serialize_file_tree(node: dict, prefix: str) -> dict:
-    serialized_dirs = []
-    for dirname in sorted(node["dirs"].keys(), key=str.casefold):
-        child = node["dirs"][dirname]
-        child_prefix = f"{prefix}/{dirname}" if prefix else dirname
-        serialized_child = _serialize_file_tree(child, child_prefix)
-        serialized_child["name"] = dirname
-        serialized_child["path"] = child_prefix
-        serialized_dirs.append(serialized_child)
-
-    serialized_files = []
-    for filename in sorted(node["files"], key=str.casefold):
-        file_path = f"{prefix}/{filename}" if prefix else filename
-        serialized_files.append({"name": filename, "path": file_path})
-
-    return {"dirs": serialized_dirs, "files": serialized_files}
-
-
-def _resolve_selected_file(selected_relative_path: str, base_dir: str) -> str | None:
-    selected = (selected_relative_path or '').strip()
-    if not selected:
-        return None
-    normalized_selected = selected.replace('\\', '/')
-    if _contains_hidden_segment(normalized_selected):
-        return None
-    if not _is_selectable_wordlist_filename(normalized_selected):
-        return None
-
-    candidate = os.path.abspath(os.path.join(base_dir, normalized_selected))
+def _remove_managed_wordlist_file(stored_path: str) -> None:
+    resolved_path = os.path.abspath(stored_path)
+    managed_root = os.path.abspath(_managed_wordlists_dir())
     try:
-        if os.path.commonpath([candidate, base_dir]) != base_dir:
-            return None
+        if os.path.commonpath([resolved_path, managed_root]) != managed_root:
+            return
     except ValueError:
-        return None
+        return
+    if os.path.isfile(resolved_path):
+        try:
+            os.remove(resolved_path)
+        except OSError:
+            pass
 
-    return candidate if os.path.isfile(candidate) else None
+
+def _derive_wordlist_name(form_name: str | None, uploaded_filename: str | None) -> str:
+    preferred = (form_name or '').strip()
+    if preferred:
+        return preferred
+    filename = os.path.basename(uploaded_filename or '').strip()
+    if not filename:
+        return ''
+    return os.path.splitext(filename)[0]
 
 
 @wordlists.route("/wordlists", methods=['GET'])
@@ -134,7 +76,6 @@ def wordlists_list():
         dynamic_wordlists=dynamic_wordlists,
         wordlists=wordlists,
         tasks=tasks,
-        wordlists_root=_wordlists_root_path(),
     )
 
 
@@ -142,50 +83,36 @@ def wordlists_list():
 @login_required
 @admin_required_redirect('wordlists.wordlists_list')
 def wordlists_add():
-    """Function to add or register a new static wordlist"""
+    """Upload a new shared static wordlist."""
 
     form = WordlistsForm()
-    wordlists_root = _wordlists_root_path()
-    wordlists_root_exists = os.path.isdir(wordlists_root)
-    selectable_files, selectable_truncated = _list_selectable_files(wordlists_root)
-    selectable_paths = [path for path, _ in selectable_files]
-    selectable_tree = _build_file_tree(selectable_paths)
-    form.existing_file.choices = [('', '--SELECT FILE--')] + selectable_files
 
     if form.validate_on_submit():
-        if not wordlists_root_exists:
-            flash('Configured wordlists_path directory does not exist. Cannot register wordlists until it is fixed.', 'danger')
-            return _render_wordlists_add_form(
-                form,
-                wordlists_root,
-                wordlists_root_exists,
-                selectable_files,
-                selectable_truncated,
-                selectable_tree,
-            )
+        uploaded_file = form.upload.data
+        if not uploaded_file or not getattr(uploaded_file, 'filename', ''):
+            flash('Select a wordlist file to upload.', 'danger')
+            return _render_wordlists_add_form(form)
+        if not uploaded_file.filename.lower().endswith('.txt'):
+            flash('Wordlist uploads must use the .txt extension.', 'danger')
+            return _render_wordlists_add_form(form)
 
-        wordlist_path = _resolve_selected_file(form.existing_file.data, wordlists_root)
-        if not wordlist_path:
-            flash('Invalid file selection. Choose an existing file from the configured wordlists_path list.', 'danger')
-            return _render_wordlists_add_form(
-                form,
-                wordlists_root,
-                wordlists_root_exists,
-                selectable_files,
-                selectable_truncated,
-                selectable_tree,
-            )
-
-        wordlist_path = os.path.abspath(wordlist_path)
-        if db.session.scalar(select(Wordlists).filter_by(path=wordlist_path)):
-            flash('Wordlist is already registered.', 'warning')
-            return redirect(url_for('wordlists.wordlists_list'))
-        if db.session.scalar(select(Wordlists).filter_by(name=form.name.data)):
+        wordlist_name = _derive_wordlist_name(form.name.data, uploaded_file.filename)
+        if not wordlist_name:
+            flash('Wordlist name is required.', 'danger')
+            return _render_wordlists_add_form(form)
+        if db.session.scalar(select(Wordlists).filter_by(name=wordlist_name)):
             flash('Wordlist name is already registered.', 'warning')
             return redirect(url_for('wordlists.wordlists_list'))
 
+        wordlist_path = save_file(_managed_wordlists_dir(), uploaded_file)
+        wordlist_path = os.path.abspath(wordlist_path)
+        if db.session.scalar(select(Wordlists).filter_by(path=wordlist_path)):
+            _remove_managed_wordlist_file(wordlist_path)
+            flash('Wordlist is already registered.', 'warning')
+            return redirect(url_for('wordlists.wordlists_list'))
+
         wordlist = Wordlists(
-            name=form.name.data,
+            name=wordlist_name,
             type='static',
             path=wordlist_path,
             checksum=get_filehash(wordlist_path),
@@ -196,20 +123,14 @@ def wordlists_add():
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
-            flash('Wordlist could not be registered because that name or path already exists. Refresh and retry.', 'danger')
-            return _render_wordlists_add_form(
-                form,
-                wordlists_root,
-                wordlists_root_exists,
-                selectable_files,
-                selectable_truncated,
-                selectable_tree,
-            )
+            _remove_managed_wordlist_file(wordlist_path)
+            flash('Wordlist could not be uploaded because that name or file already exists. Refresh and retry.', 'danger')
+            return _render_wordlists_add_form(form)
         record_audit_event(
             'wordlist.create',
             'wordlist',
             target_id=wordlist.id,
-            summary=f'Registered shared wordlist "{wordlist.name}".',
+            summary=f'Uploaded shared wordlist "{wordlist.name}".',
             details={
                 'wordlist_name': wordlist.name,
                 'path': wordlist.path,
@@ -217,17 +138,10 @@ def wordlists_add():
                 'size': wordlist.size,
             },
         )
-        flash('Wordlist created!', 'success')
+        flash('Wordlist uploaded!', 'success')
         return redirect(url_for('wordlists.wordlists_list'))
 
-    return _render_wordlists_add_form(
-        form,
-        wordlists_root,
-        wordlists_root_exists,
-        selectable_files,
-        selectable_truncated,
-        selectable_tree,
-    )
+    return _render_wordlists_add_form(form)
 
 
 @wordlists.route("/wordlists/delete/<int:wordlist_id>", methods=['POST'])
@@ -257,6 +171,7 @@ def wordlists_delete(wordlist_id):
         db.session.rollback()
         flash('Failed. Wordlist is associated to one or more tasks or changed concurrently.', 'danger')
         return redirect(url_for('wordlists.wordlists_list'))
+    _remove_managed_wordlist_file(deleted_wordlist_path)
     record_audit_event(
         'wordlist.delete',
         'wordlist',

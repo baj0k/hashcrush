@@ -32,10 +32,10 @@ def _attach_werkzeug_tls_disconnect_filter() -> None:
         for handler in logger.handlers:
             handler.addFilter(tls_filter)
 
-def _ensure_runtime_directories(
+def _validate_runtime_directories(
     root_path: str, runtime_root: str | None = None
 ) -> None:
-    """Create runtime directories required by file IO paths."""
+    """Ensure runtime directories already exist and are writable."""
     runtime_base = (
         os.path.abspath(os.path.expanduser(runtime_root))
         if runtime_root
@@ -47,7 +47,38 @@ def _ensure_runtime_directories(
         os.path.join(runtime_base, "outfiles"),
     )
     for runtime_dir in runtime_dirs:
-        os.makedirs(runtime_dir, exist_ok=True)
+        if not os.path.isdir(runtime_dir):
+            raise RuntimeError(
+                "Runtime directory is missing. Run `python3 ./hashcrush.py setup` "
+                f"or create it manually: {runtime_dir}"
+            )
+        if not os.access(runtime_dir, os.W_OK):
+            raise RuntimeError(
+                f"Runtime directory is not writable by the current process: {runtime_dir}"
+            )
+
+
+def _validate_storage_directories(storage_root: str | None) -> None:
+    """Ensure persistent storage directories already exist and are writable."""
+    storage_base = (
+        os.path.abspath(os.path.expanduser(storage_root))
+        if storage_root
+        else os.path.join("/var", "lib", "hashcrush")
+    )
+    storage_dirs = (
+        os.path.join(storage_base, "wordlists"),
+        os.path.join(storage_base, "rules"),
+    )
+    for storage_dir in storage_dirs:
+        if not os.path.isdir(storage_dir):
+            raise RuntimeError(
+                "Persistent storage directory is missing. Run `python3 ./hashcrush.py setup` "
+                f"or create it manually: {storage_dir}"
+            )
+        if not os.access(storage_dir, os.W_OK):
+            raise RuntimeError(
+                f"Persistent storage directory is not writable by the current process: {storage_dir}"
+            )
 
 
 def _ensure_database_schema(app: Flask) -> None:
@@ -121,6 +152,13 @@ def jinja_hex_decode(text):
     return decode_plaintext_from_storage(text)
 
 
+def jinja_ciphertext_decode(text):
+    """Jinja2 filter to decode stored ciphertext with legacy fallback."""
+    from hashcrush.utils.utils import decode_ciphertext_from_storage
+
+    return decode_ciphertext_from_storage(text)
+
+
 def create_app(testing: bool = False, config_overrides: dict | None = None):
     app = Flask(__name__)
 
@@ -170,6 +208,7 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     app.config.setdefault(
         "RUNTIME_PATH", os.path.join(tempfile.gettempdir(), "hashcrush-runtime")
     )
+    app.config.setdefault("STORAGE_PATH", os.path.join("/var", "lib", "hashcrush"))
 
     if testing:
         app.config["TESTING"] = True
@@ -198,8 +237,9 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
 
     _warn_insecure_configuration(app)
 
-    if not app.config.get("SKIP_RUNTIME_BOOTSTRAP"):
-        _ensure_runtime_directories(app.root_path, app.config.get("RUNTIME_PATH"))
+    if (not app.config.get("TESTING")) and (not app.config.get("SKIP_RUNTIME_BOOTSTRAP")):
+        _validate_runtime_directories(app.root_path, app.config.get("RUNTIME_PATH"))
+        _validate_storage_directories(app.config.get("STORAGE_PATH"))
 
     from hashcrush.models import db
 
@@ -252,6 +292,7 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     app.register_blueprint(searches)
 
     app.add_template_filter(jinja_hex_decode)
+    app.add_template_filter(jinja_ciphertext_decode)
     app.add_template_global(get_application_version, get_application_version.__name__)
 
     # Local single-node executor for queued JobTasks.

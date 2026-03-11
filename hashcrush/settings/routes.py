@@ -113,24 +113,17 @@ HASHCRUSH_CONFIG_FIELDS = [
     },
     {
         "section": "app",
-        "key": "wordlists_path",
-        "label": "Wordlists Directory",
-        "env_name": "HASHCRUSH_WORDLISTS_PATH",
-        "default_display": "/usr/share/seclists/Passwords",
-    },
-    {
-        "section": "app",
-        "key": "rules_path",
-        "label": "Rules Directory",
-        "env_name": "HASHCRUSH_RULES_PATH",
-        "default_display": "/usr/share/hashcat/rules",
-    },
-    {
-        "section": "app",
         "key": "runtime_path",
         "label": "Runtime Directory",
         "env_name": "HASHCRUSH_RUNTIME_PATH",
         "default_display": "/tmp/hashcrush-runtime",
+    },
+    {
+        "section": "app",
+        "key": "storage_path",
+        "label": "Persistent Storage Directory",
+        "env_name": "HASHCRUSH_STORAGE_PATH",
+        "default_display": "/var/lib/hashcrush",
     },
     {
         "section": "app",

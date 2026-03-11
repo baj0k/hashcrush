@@ -31,7 +31,7 @@ The following hashes are already cracked in HashCrush's Local database!
                                     {% endif %}
                                 </td>
 
-                                <td>{{entry[0].ciphertext}}</td>
+                                <td>{{entry[0].ciphertext | jinja_ciphertext_decode}}</td>
                                 <td>
                                     {% if entry[0].plaintext %}
                                         {{entry[0].plaintext | jinja_hex_decode}}

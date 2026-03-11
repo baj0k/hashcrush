@@ -33,6 +33,53 @@ def test_audit_log_page_renders_entries_for_admin():
         assert b"job.start" in response.data
         assert b"sample-job" in response.data
 
+
+@pytest.mark.security
+def test_record_audit_event_flushes_after_commit():
+    from hashcrush.audit import record_audit_event
+
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+
+        db.session.add(Settings())
+        record_audit_event(
+            "settings.create",
+            "settings",
+            target_id="1",
+            summary="Created settings row.",
+            details={"source": "test"},
+        )
+        assert _count_rows(AuditLog) == 0
+
+        db.session.commit()
+
+        entry = _latest_audit_entry()
+        assert entry is not None
+        assert entry.event_type == "settings.create"
+        assert '"source": "test"' in entry.details_json
+
+
+@pytest.mark.security
+def test_record_audit_event_is_cleared_on_rollback():
+    from hashcrush.audit import record_audit_event
+
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+
+        db.session.add(Settings())
+        record_audit_event(
+            "settings.create",
+            "settings",
+            target_id="1",
+            summary="Created settings row.",
+            details={"source": "test"},
+        )
+        db.session.rollback()
+
+        assert _count_rows(AuditLog) == 0
+
 @pytest.mark.security
 def test_audit_log_page_rejects_non_admin():
     app = _build_app()
@@ -127,14 +174,16 @@ def test_jobs_start_records_audit_event():
 
 @pytest.mark.security
 def test_rules_add_records_audit_event(tmp_path):
-    app = _build_app({"RULES_PATH": str(tmp_path)})
+    app = _build_app(
+        {
+            "RUNTIME_PATH": str(tmp_path / "runtime"),
+            "STORAGE_PATH": str(tmp_path / "storage"),
+        }
+    )
     with app.app_context():
         db.create_all()
         admin = _seed_admin_user()
         _seed_settings()
-
-        rule_path = tmp_path / "best.rule"
-        rule_path.write_text(":\n", encoding="utf-8")
 
         client = app.test_client()
         _login_client_as_user(client, admin)
@@ -143,7 +192,7 @@ def test_rules_add_records_audit_event(tmp_path):
             "/rules/add",
             data={
                 "name": "audit-rule",
-                "existing_file": "best.rule",
+                "upload": (io.BytesIO(b":\n"), "best.rule"),
             },
         )
 

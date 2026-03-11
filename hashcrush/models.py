@@ -223,8 +223,8 @@ class HashfileHashes(db.Model):
         db.UniqueConstraint(
             "hashfile_id",
             "hash_id",
-            "username",
-            name="uq_hashfile_hashes_hashfile_hash_username",
+            "username_digest",
+            name="uq_hashfile_hashes_hashfile_hash_username_digest",
         ),
     )
 
@@ -236,7 +236,10 @@ class HashfileHashes(db.Model):
         index=True,
     )
     username: Mapped[str] = mapped_column(
-        String(256), nullable=False, default="", index=True
+        Text, nullable=False, default=""
+    )
+    username_digest: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", index=True
     )
     hashfile_id: Mapped[int] = mapped_column(
         Integer,
@@ -368,11 +371,13 @@ class Hashes(db.Model):
     sub_ciphertext: Mapped[str] = mapped_column(
         String(32), nullable=False, index=True
     )
-    # TEXT avoids row-size pressure while keeping large hash payload support.
     ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
     hash_type: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     cracked: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    plaintext: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    plaintext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    plaintext_digest: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     hashfile_hashes: Mapped[list[HashfileHashes]] = relationship(
         "HashfileHashes",
         back_populates="hash",

@@ -1,7 +1,7 @@
-"""Flask routes to handle Rules"""
+"""Flask routes to handle Rules."""
 import os
 
-from flask import Blueprint, current_app, flash, redirect, render_template, url_for
+from flask import Blueprint, flash, redirect, render_template, url_for
 from flask_login import login_required
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -10,111 +10,53 @@ from hashcrush.audit import record_audit_event
 from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Rules, Tasks, db
 from hashcrush.rules.forms import RulesForm
-from hashcrush.utils.utils import get_filehash, get_linecount
+from hashcrush.utils.utils import (
+    get_filehash,
+    get_linecount,
+    get_storage_subdir,
+    save_file,
+)
 
 rules = Blueprint('rules', __name__)
-MAX_SELECTABLE_RULE_FILES = 5000
 
 
-def _render_rules_add_form(form, rules_root, rules_root_exists, selectable_files, selectable_truncated, selectable_tree):
+def _render_rules_add_form(form):
     return render_template(
         'rules_add.html',
         title='Rules Add',
         form=form,
-        rules_root=rules_root,
-        rules_root_exists=rules_root_exists,
-        selectable_count=len(selectable_files),
-        selectable_truncated=selectable_truncated,
-        selectable_tree=selectable_tree,
     )
 
 
-def _contains_hidden_segment(relative_path: str) -> bool:
-    return any(segment.startswith('.') for segment in relative_path.split('/') if segment not in ('', '.'))
+def _managed_rules_dir() -> str:
+    path = get_storage_subdir('rules')
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
-def _is_selectable_rule_filename(filename: str) -> bool:
-    return (filename or '').lower().endswith('.rule')
-
-
-def _rules_root_path() -> str:
-    configured = current_app.config.get('RULES_PATH')
-    if configured:
-        return os.path.abspath(os.path.expanduser(str(configured)))
-    return os.path.abspath(os.path.join(current_app.root_path, 'control', 'rules'))
-
-
-def _list_selectable_files(base_dir: str, max_entries: int = MAX_SELECTABLE_RULE_FILES) -> tuple[list[tuple[str, str]], bool]:
-    if (not base_dir) or (not os.path.isdir(base_dir)):
-        return [], False
-
-    discovered: list[str] = []
-    for dirpath, dirnames, files in os.walk(base_dir):
-        # Skip hidden directories from recursive discovery.
-        dirnames[:] = [dirname for dirname in dirnames if not dirname.startswith('.')]
-        for filename in files:
-            if not _is_selectable_rule_filename(filename):
-                continue
-            abs_path = os.path.abspath(os.path.join(dirpath, filename))
-            rel_path = os.path.relpath(abs_path, base_dir).replace(os.path.sep, '/')
-            discovered.append(rel_path)
-            if len(discovered) >= max_entries:
-                discovered.sort(key=str.casefold)
-                return [(path, path) for path in discovered], True
-
-    discovered.sort(key=str.casefold)
-    return [(path, path) for path in discovered], False
-
-
-def _build_file_tree(relative_paths: list[str]) -> dict:
-    root = {"dirs": {}, "files": []}
-    for relative_path in relative_paths:
-        parts = [segment for segment in relative_path.split('/') if segment]
-        if not parts:
-            continue
-        node = root
-        for segment in parts[:-1]:
-            node = node["dirs"].setdefault(segment, {"dirs": {}, "files": []})
-        node["files"].append(parts[-1])
-    return _serialize_file_tree(root, "")
-
-
-def _serialize_file_tree(node: dict, prefix: str) -> dict:
-    serialized_dirs = []
-    for dirname in sorted(node["dirs"].keys(), key=str.casefold):
-        child = node["dirs"][dirname]
-        child_prefix = f"{prefix}/{dirname}" if prefix else dirname
-        serialized_child = _serialize_file_tree(child, child_prefix)
-        serialized_child["name"] = dirname
-        serialized_child["path"] = child_prefix
-        serialized_dirs.append(serialized_child)
-
-    serialized_files = []
-    for filename in sorted(node["files"], key=str.casefold):
-        file_path = f"{prefix}/{filename}" if prefix else filename
-        serialized_files.append({"name": filename, "path": file_path})
-
-    return {"dirs": serialized_dirs, "files": serialized_files}
-
-
-def _resolve_selected_file(selected_relative_path: str, base_dir: str) -> str | None:
-    selected = (selected_relative_path or '').strip()
-    if not selected:
-        return None
-    normalized_selected = selected.replace('\\', '/')
-    if _contains_hidden_segment(normalized_selected):
-        return None
-    if not _is_selectable_rule_filename(normalized_selected):
-        return None
-
-    candidate = os.path.abspath(os.path.join(base_dir, normalized_selected))
+def _remove_managed_rule_file(stored_path: str) -> None:
+    resolved_path = os.path.abspath(stored_path)
+    managed_root = os.path.abspath(_managed_rules_dir())
     try:
-        if os.path.commonpath([candidate, base_dir]) != base_dir:
-            return None
+        if os.path.commonpath([resolved_path, managed_root]) != managed_root:
+            return
     except ValueError:
-        return None
+        return
+    if os.path.isfile(resolved_path):
+        try:
+            os.remove(resolved_path)
+        except OSError:
+            pass
 
-    return candidate if os.path.isfile(candidate) else None
+
+def _derive_rule_name(form_name: str | None, uploaded_filename: str | None) -> str:
+    preferred = (form_name or '').strip()
+    if preferred:
+        return preferred
+    filename = os.path.basename(uploaded_filename or '').strip()
+    if not filename:
+        return ''
+    return os.path.splitext(filename)[0]
 
 
 #############################################
@@ -133,7 +75,6 @@ def rules_list():
         title='Rules',
         rules=rules,
         tasks=tasks,
-        rules_root=_rules_root_path(),
     )
 
 
@@ -141,49 +82,35 @@ def rules_list():
 @login_required
 @admin_required_redirect('rules.rules_list')
 def rules_add():
-    """Function to add or register a rules file"""
+    """Upload a shared rule file."""
     form = RulesForm()
-    rules_root = _rules_root_path()
-    rules_root_exists = os.path.isdir(rules_root)
-    selectable_files, selectable_truncated = _list_selectable_files(rules_root)
-    selectable_paths = [path for path, _ in selectable_files]
-    selectable_tree = _build_file_tree(selectable_paths)
-    form.existing_file.choices = [('', '--SELECT FILE--')] + selectable_files
 
     if form.validate_on_submit():
-        if not rules_root_exists:
-            flash('Configured rules_path directory does not exist. Cannot register rules until it is fixed.', 'danger')
-            return _render_rules_add_form(
-                form,
-                rules_root,
-                rules_root_exists,
-                selectable_files,
-                selectable_truncated,
-                selectable_tree,
-            )
+        uploaded_file = form.upload.data
+        if not uploaded_file or not getattr(uploaded_file, 'filename', ''):
+            flash('Select a rule file to upload.', 'danger')
+            return _render_rules_add_form(form)
+        if not uploaded_file.filename.lower().endswith('.rule'):
+            flash('Rule uploads must use the .rule extension.', 'danger')
+            return _render_rules_add_form(form)
 
-        rules_path = _resolve_selected_file(form.existing_file.data, rules_root)
-        if not rules_path:
-            flash('Invalid file selection. Choose an existing file from the configured rules_path list.', 'danger')
-            return _render_rules_add_form(
-                form,
-                rules_root,
-                rules_root_exists,
-                selectable_files,
-                selectable_truncated,
-                selectable_tree,
-            )
-
-        rules_path = os.path.abspath(rules_path)
-        if db.session.scalar(select(Rules).filter_by(path=rules_path)):
-            flash('Rules file is already registered.', 'warning')
-            return redirect(url_for('rules.rules_list'))
-        if db.session.scalar(select(Rules).filter_by(name=form.name.data)):
+        rule_name = _derive_rule_name(form.name.data, uploaded_file.filename)
+        if not rule_name:
+            flash('Rule name is required.', 'danger')
+            return _render_rules_add_form(form)
+        if db.session.scalar(select(Rules).filter_by(name=rule_name)):
             flash('Rules name is already registered.', 'warning')
             return redirect(url_for('rules.rules_list'))
 
+        rules_path = save_file(_managed_rules_dir(), uploaded_file)
+        rules_path = os.path.abspath(rules_path)
+        if db.session.scalar(select(Rules).filter_by(path=rules_path)):
+            _remove_managed_rule_file(rules_path)
+            flash('Rules file is already registered.', 'warning')
+            return redirect(url_for('rules.rules_list'))
+
         rule = Rules(
-            name=form.name.data,
+            name=rule_name,
             path=rules_path,
             size=get_linecount(rules_path),
             checksum=get_filehash(rules_path),
@@ -193,37 +120,24 @@ def rules_add():
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
-            flash('Rule file could not be registered because that name or path already exists. Refresh and retry.', 'danger')
-            return _render_rules_add_form(
-                form,
-                rules_root,
-                rules_root_exists,
-                selectable_files,
-                selectable_truncated,
-                selectable_tree,
-            )
+            _remove_managed_rule_file(rules_path)
+            flash('Rule file could not be uploaded because that name or file already exists. Refresh and retry.', 'danger')
+            return _render_rules_add_form(form)
         record_audit_event(
             'rule.create',
             'rule',
             target_id=rule.id,
-            summary=f'Registered shared rule "{rule.name}".',
+            summary=f'Uploaded shared rule "{rule.name}".',
             details={
                 'rule_name': rule.name,
                 'path': rule.path,
                 'size': rule.size,
             },
         )
-        flash('Rules File created!', 'success')
+        flash('Rule file uploaded!', 'success')
         return redirect(url_for('rules.rules_list'))
 
-    return _render_rules_add_form(
-        form,
-        rules_root,
-        rules_root_exists,
-        selectable_files,
-        selectable_truncated,
-        selectable_tree,
-    )
+    return _render_rules_add_form(form)
 
 
 @rules.route("/rules/delete/<int:rule_id>", methods=['POST'])
@@ -246,6 +160,7 @@ def rules_delete(rule_id):
             db.session.rollback()
             flash('Rule file is currently used in a task or changed concurrently and cannot be deleted.', 'danger')
             return redirect(url_for('rules.rules_list'))
+        _remove_managed_rule_file(deleted_rule_path)
         record_audit_event(
             'rule.delete',
             'rule',

@@ -17,7 +17,11 @@ from sqlalchemy import func, select
 
 from hashcrush.audit import record_audit_event
 from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles, db
-from hashcrush.utils.utils import decode_plaintext_from_storage
+from hashcrush.utils.utils import (
+    decode_ciphertext_from_storage,
+    decode_plaintext_from_storage,
+    decode_username_from_storage,
+)
 
 analytics = Blueprint('analytics', __name__)
 
@@ -46,11 +50,8 @@ def _decoded_plaintext(value: str | None) -> str:
 
 
 def _decode_username(value: str | None) -> str | None:
-    if not value:
-        return None
-    try:
-        decoded_username = bytes.fromhex(value).decode('latin-1')
-    except (TypeError, ValueError):
+    decoded_username = decode_username_from_storage(value)
+    if decoded_username is None:
         return None
     if '\\' in decoded_username:
         return decoded_username.split('\\', 1)[1]
@@ -288,7 +289,7 @@ def get_analytics():
     # Figure 3 (Recovered Hashes)
     fig3_cracked_cnt = int(
         db.session.scalar(
-            select(func.count(func.distinct(Hashes.plaintext)))
+            select(func.count(func.distinct(func.coalesce(Hashes.plaintext_digest, Hashes.plaintext))))
             .select_from(Hashes)
             .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
             .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
@@ -298,7 +299,7 @@ def get_analytics():
     )
     fig3_uncracked_cnt = int(
         db.session.scalar(
-            select(func.count(func.distinct(Hashes.ciphertext)))
+            select(func.count(func.distinct(Hashes.sub_ciphertext)))
             .select_from(Hashes)
             .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
             .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
@@ -320,7 +321,7 @@ def get_analytics():
     total_accounts = fig1_total
     total_unique_hashes = int(
         db.session.scalar(
-            select(func.count(func.distinct(Hashes.ciphertext)))
+            select(func.count(func.distinct(Hashes.sub_ciphertext)))
             .select_from(Hashes)
             .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
             .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
@@ -465,33 +466,37 @@ def analytics_download_hashes():
     if export_type == 'found':
         for entry in cracked_hashes:
             if entry[1].username:
-                try:
-                    username = bytes.fromhex(entry[1].username).decode('latin-1')
-                except (TypeError, ValueError):
-                    username = None
+                username = decode_username_from_storage(entry[1].username)
                 if username:
                     output.write(
                         str(username)
                         + ":"
-                        + str(entry[0].ciphertext)
+                        + str(decode_ciphertext_from_storage(entry[0].ciphertext))
                         + ':'
                         + str(_decoded_plaintext(entry[0].plaintext))
                         + "\n"
                     )
                     continue
-            output.write(str(entry[0].ciphertext) + ':' + str(_decoded_plaintext(entry[0].plaintext)) + "\n")
+            output.write(
+                str(decode_ciphertext_from_storage(entry[0].ciphertext))
+                + ':'
+                + str(_decoded_plaintext(entry[0].plaintext))
+                + "\n"
+            )
 
     if export_type == 'left':
         for entry in uncracked_hashes:
             if entry[1].username:
-                try:
-                    username = bytes.fromhex(entry[1].username).decode('latin-1')
-                except (TypeError, ValueError):
-                    username = None
+                username = decode_username_from_storage(entry[1].username)
                 if username:
-                    output.write(str(username) + ":" + str(entry[0].ciphertext) + "\n")
+                    output.write(
+                        str(username)
+                        + ":"
+                        + str(decode_ciphertext_from_storage(entry[0].ciphertext))
+                        + "\n"
+                    )
                     continue
-            output.write(str(entry[0].ciphertext) + "\n")
+            output.write(str(decode_ciphertext_from_storage(entry[0].ciphertext)) + "\n")
 
     record_audit_event(
         'analytics.download',

@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import logging
 
 from flask import current_app, has_request_context, request
 from flask_login import current_user
+from sqlalchemy import event
+from sqlalchemy.orm import Session as OrmSession
 
 from hashcrush.models import AuditLog, db
+
+_PENDING_AUDIT_EVENTS_KEY = "hashcrush_pending_audit_events"
 
 
 def _audit_client_ip() -> str | None:
@@ -53,6 +58,48 @@ def _serialize_details(details) -> str:
     return json.dumps(payload, sort_keys=True, ensure_ascii=True)
 
 
+def _insert_audit_payloads(payloads: list[dict]) -> None:
+    if not payloads:
+        return
+    with db.engine.begin() as connection:
+        connection.execute(AuditLog.__table__.insert(), payloads)
+
+
+def _audit_logger():
+    if has_request_context():
+        return current_app.logger
+    return logging.getLogger("hashcrush.audit")
+
+
+def _pop_pending_audit_events(session) -> list[dict]:
+    return list(session.info.pop(_PENDING_AUDIT_EVENTS_KEY, []))
+
+
+@event.listens_for(OrmSession, "after_commit")
+def _flush_pending_audit_events(session) -> None:
+    payloads = _pop_pending_audit_events(session)
+    if not payloads:
+        return
+    try:
+        _insert_audit_payloads(payloads)
+    except Exception:
+        _audit_logger().exception(
+            "Failed flushing %s pending audit event(s) after commit.",
+            len(payloads),
+        )
+
+
+@event.listens_for(OrmSession, "after_rollback")
+def _clear_pending_audit_events_on_rollback(session) -> None:
+    session.info.pop(_PENDING_AUDIT_EVENTS_KEY, None)
+
+
+@event.listens_for(OrmSession, "after_soft_rollback")
+def _clear_pending_audit_events_on_soft_rollback(session, previous_transaction) -> None:
+    del previous_transaction
+    session.info.pop(_PENDING_AUDIT_EVENTS_KEY, None)
+
+
 def record_audit_event(
     event_type: str,
     target_type: str,
@@ -61,7 +108,7 @@ def record_audit_event(
     summary: str,
     details=None,
 ) -> None:
-    """Persist an audit record without mutating the caller's ORM session."""
+    """Queue audit persistence for after-commit, or write immediately post-commit."""
     actor_user_id, actor_username, actor_admin = _actor_snapshot()
     payload = {
         "actor_user_id": actor_user_id,
@@ -75,10 +122,19 @@ def record_audit_event(
         "details_json": _serialize_details(details),
     }
     try:
-        with db.engine.begin() as connection:
-            connection.execute(AuditLog.__table__.insert().values(**payload))
+        session = db.session()
+        should_defer = bool(
+            session.info.get(_PENDING_AUDIT_EVENTS_KEY)
+            or session.new
+            or session.dirty
+            or session.deleted
+        )
+        if should_defer:
+            session.info.setdefault(_PENDING_AUDIT_EVENTS_KEY, []).append(payload)
+            return
+        _insert_audit_payloads([payload])
     except Exception:
-        current_app.logger.exception(
+        _audit_logger().exception(
             "Failed recording audit event type=%s target=%s target_id=%s",
             event_type,
             target_type,

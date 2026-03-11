@@ -9,7 +9,7 @@ from sqlalchemy import inspect, text
 import hashcrush
 from hashcrush.models import AuditLog, SchemaVersion, db, utc_now_naive
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -65,6 +65,27 @@ def _index_names(table_name: str) -> set[str]:
     return {index["name"] for index in inspector.get_indexes(table_name)}
 
 
+def _unique_constraint_names(table_name: str) -> set[str]:
+    inspector = inspect(db.engine)
+    if table_name not in inspector.get_table_names():
+        return set()
+    return {
+        constraint["name"]
+        for constraint in inspector.get_unique_constraints(table_name)
+        if constraint.get("name")
+    }
+
+
+def _drop_index_if_exists(index_name: str) -> None:
+    if index_name not in {
+        *(_index_names("hashes")),
+        *(_index_names("hashfile_hashes")),
+    }:
+        return
+    db.session.execute(text(f'DROP INDEX IF EXISTS "{index_name}"'))
+    db.session.commit()
+
+
 def _migration_003_remove_obsolete_settings_fields() -> None:
     """Drop obsolete retention/job-weight settings columns."""
     _drop_column_if_exists("settings", "retention_period")
@@ -90,9 +111,7 @@ def _migration_004_add_job_task_position() -> None:
         column_added = True
 
     has_nonzero_positions = bool(
-        db.session.scalar(
-            text("SELECT 1 FROM job_tasks WHERE position <> 0 LIMIT 1")
-        )
+        db.session.scalar(text("SELECT 1 FROM job_tasks WHERE position <> 0 LIMIT 1"))
     )
     if column_added or not has_nonzero_positions:
         job_ids = db.session.scalars(
@@ -128,6 +147,80 @@ def _migration_004_add_job_task_position() -> None:
         db.session.commit()
 
 
+def _migration_005_encrypt_sensitive_hash_material() -> None:
+    """Encrypt persisted hash material and add blind-index lookup columns."""
+    inspector = inspect(db.engine)
+    table_names = inspector.get_table_names()
+    if "hashes" not in table_names or "hashfile_hashes" not in table_names:
+        return
+
+    hash_columns = {column["name"] for column in inspector.get_columns("hashes")}
+    if "plaintext_digest" not in hash_columns:
+        db.session.execute(
+            text("ALTER TABLE hashes ADD COLUMN plaintext_digest VARCHAR(64)")
+        )
+        db.session.commit()
+    db.session.execute(text("ALTER TABLE hashes ALTER COLUMN plaintext TYPE TEXT"))
+    db.session.commit()
+    _drop_index_if_exists("ix_hashes_plaintext")
+    if "ix_hashes_plaintext_digest" not in _index_names("hashes"):
+        db.session.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_hashes_plaintext_digest "
+                "ON hashes (plaintext_digest)"
+            )
+        )
+        db.session.commit()
+
+    association_columns = {
+        column["name"] for column in inspector.get_columns("hashfile_hashes")
+    }
+    if "username_digest" not in association_columns:
+        db.session.execute(
+            text(
+                "ALTER TABLE hashfile_hashes "
+                "ADD COLUMN username_digest VARCHAR(64) NOT NULL DEFAULT ''"
+            )
+        )
+        db.session.commit()
+    db.session.execute(
+        text("ALTER TABLE hashfile_hashes ALTER COLUMN username TYPE TEXT")
+    )
+    db.session.commit()
+    db.session.execute(
+        text(
+            'ALTER TABLE hashfile_hashes '
+            'DROP CONSTRAINT IF EXISTS "uq_hashfile_hashes_hashfile_hash_username"'
+        )
+    )
+    db.session.commit()
+    _drop_index_if_exists("ix_hashfile_hashes_username")
+    if (
+        "uq_hashfile_hashes_hashfile_hash_username_digest"
+        not in _unique_constraint_names("hashfile_hashes")
+    ):
+        db.session.execute(
+            text(
+                "ALTER TABLE hashfile_hashes "
+                "ADD CONSTRAINT uq_hashfile_hashes_hashfile_hash_username_digest "
+                "UNIQUE (hashfile_id, hash_id, username_digest)"
+            )
+        )
+        db.session.commit()
+    if "ix_hashfile_hashes_username_digest" not in _index_names("hashfile_hashes"):
+        db.session.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_hashfile_hashes_username_digest "
+                "ON hashfile_hashes (username_digest)"
+            )
+        )
+        db.session.commit()
+
+    from hashcrush.utils.utils import migrate_sensitive_storage_rows
+
+    migrate_sensitive_storage_rows()
+
+
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(
         version=1,
@@ -152,6 +245,12 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
         name="add_job_task_position",
         summary="Persist job task ordering without recreating rows on reorder.",
         upgrade=_migration_004_add_job_task_position,
+    ),
+    MigrationStep(
+        version=5,
+        name="encrypt_sensitive_hash_material",
+        summary="Encrypt persisted hashes, cracked plaintexts, and usernames with blind-index lookups.",
+        upgrade=_migration_005_encrypt_sensitive_hash_material,
     ),
 )
 

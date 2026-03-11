@@ -149,6 +149,20 @@ class Config:
     _hashcat_bin = sanitize_config_input(_hashcat_bin)
     HASHCAT_BIN = _hashcat_bin.strip() if _hashcat_bin else "hashcat"
 
+    _configured_data_encryption_key = sanitize_config_input(
+        os.getenv("HASHCRUSH_DATA_ENCRYPTION_KEY")
+    ) or file_config.get("app", "data_encryption_key", fallback="")
+    _configured_data_encryption_key = sanitize_config_input(
+        _configured_data_encryption_key
+    ).strip()
+    if _configured_data_encryption_key:
+        DATA_ENCRYPTION_KEY = _configured_data_encryption_key
+    else:
+        raise RuntimeError(
+            "Missing data encryption key. Set HASHCRUSH_DATA_ENCRYPTION_KEY or "
+            "[app] data_encryption_key in config.conf."
+        )
+
     HASHCAT_STATUS_TIMER = _parse_int(
         os.getenv("HASHCRUSH_HASHCAT_STATUS_TIMER")
         or file_config.get("app", "hashcat_status_timer", fallback="5"),
@@ -224,26 +238,20 @@ class Config:
     else:
         SESSION_COOKIE_SAMESITE = "Lax"
 
-    _default_wordlists_path = "/usr/share/seclists/Passwords"
-    _default_rules_path = "/usr/share/hashcat/rules"
     _default_runtime_path = os.path.join(tempfile.gettempdir(), "hashcrush-runtime")
+    _default_storage_path = "/var/lib/hashcrush"
     _default_ssl_cert_path = "/etc/hashcrush/ssl/cert.pem"
     _default_ssl_key_path = "/etc/hashcrush/ssl/key.pem"
 
-    WORDLISTS_PATH = _normalize_dir_path(
-        os.getenv("HASHCRUSH_WORDLISTS_PATH")
-        or file_config.get("app", "wordlists_path", fallback=_default_wordlists_path),
-        _default_wordlists_path,
-    )
-    RULES_PATH = _normalize_dir_path(
-        os.getenv("HASHCRUSH_RULES_PATH")
-        or file_config.get("app", "rules_path", fallback=_default_rules_path),
-        _default_rules_path,
-    )
     RUNTIME_PATH = _normalize_dir_path(
         os.getenv("HASHCRUSH_RUNTIME_PATH")
         or file_config.get("app", "runtime_path", fallback=_default_runtime_path),
         _default_runtime_path,
+    )
+    STORAGE_PATH = _normalize_dir_path(
+        os.getenv("HASHCRUSH_STORAGE_PATH")
+        or file_config.get("app", "storage_path", fallback=_default_storage_path),
+        _default_storage_path,
     )
     SSL_CERT_PATH = _normalize_file_path(
         os.getenv("HASHCRUSH_SSL_CERT_PATH")
