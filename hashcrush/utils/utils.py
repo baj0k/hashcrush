@@ -261,17 +261,35 @@ def get_md5_hash(string):
     m = _md5.md5(string.encode('utf-8'))
     return m.hexdigest()
 
+
+def normalize_hash_type(hash_type):
+    """Normalize form/request hash types to the integer DB representation."""
+
+    try:
+        return int(str(hash_type).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid hash type: {hash_type!r}") from exc
+
 def import_hash_only(line, hash_type):
     """Function to import single hash"""
+    normalized_hash_type = normalize_hash_type(hash_type)
 
     hash = db.session.scalar(
-        select(Hashes).filter_by(hash_type=hash_type, sub_ciphertext=get_md5_hash(line))
+        select(Hashes).filter_by(
+            hash_type=normalized_hash_type,
+            sub_ciphertext=get_md5_hash(line),
+        )
     )
 
     if hash:
         return hash.id
 
-    new_hash = Hashes(hash_type=hash_type, sub_ciphertext=get_md5_hash(line), ciphertext=line, cracked=0)
+    new_hash = Hashes(
+        hash_type=normalized_hash_type,
+        sub_ciphertext=get_md5_hash(line),
+        ciphertext=line,
+        cracked=0,
+    )
     db.session.add(new_hash)
     db.session.flush()
     return new_hash.id

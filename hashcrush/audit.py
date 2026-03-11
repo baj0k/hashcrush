@@ -61,24 +61,23 @@ def record_audit_event(
     summary: str,
     details=None,
 ) -> None:
-    """Persist an audit record without breaking the caller on failure."""
+    """Persist an audit record without mutating the caller's ORM session."""
     actor_user_id, actor_username, actor_admin = _actor_snapshot()
-    entry = AuditLog(
-        actor_user_id=actor_user_id,
-        actor_username=actor_username,
-        actor_admin=actor_admin,
-        actor_ip=_audit_client_ip(),
-        event_type=str(event_type),
-        target_type=str(target_type),
-        target_id=None if target_id is None else str(target_id),
-        summary=str(summary),
-        details_json=_serialize_details(details),
-    )
+    payload = {
+        "actor_user_id": actor_user_id,
+        "actor_username": actor_username,
+        "actor_admin": actor_admin,
+        "actor_ip": _audit_client_ip(),
+        "event_type": str(event_type),
+        "target_type": str(target_type),
+        "target_id": None if target_id is None else str(target_id),
+        "summary": str(summary),
+        "details_json": _serialize_details(details),
+    }
     try:
-        db.session.add(entry)
-        db.session.commit()
+        with db.engine.begin() as connection:
+            connection.execute(AuditLog.__table__.insert().values(**payload))
     except Exception:
-        db.session.rollback()
         current_app.logger.exception(
             "Failed recording audit event type=%s target=%s target_id=%s",
             event_type,

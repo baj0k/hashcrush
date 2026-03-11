@@ -30,9 +30,10 @@ class JobsForm(FlaskForm):
     domain_id = SelectField(
         "Domain",
         choices=[],
-        coerce=int,
+        coerce=str,
         validators=[DataRequired()],
     )
+    domain_name = StringField("New Domain", filters=[normalize_text_input])
     submit = SubmitField("Next")
 
     def validate_name(self, name):

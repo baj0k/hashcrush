@@ -40,6 +40,10 @@ from hashcrush.utils.utils import (
     validate_netntlm_hashfile,
     validate_user_hash_hashfile,
 )
+from tests.db_runtime import (
+    create_managed_postgres_database,
+    sqlalchemy_engine_options,
+)
 
 
 def _integrity_error():
@@ -49,12 +53,13 @@ def _integrity_error():
 
 
 def _build_app(extra_overrides: dict | None = None):
+    database_uri = create_managed_postgres_database()
     base_overrides = {
         "SECRET_KEY": "phase1-test-secret-key-for-hashcrush",
-        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
+        "SQLALCHEMY_DATABASE_URI": database_uri,
         "SQLALCHEMY_TRACK_MODIFICATIONS": False,
+        "SQLALCHEMY_ENGINE_OPTIONS": sqlalchemy_engine_options(),
         "WTF_CSRF_ENABLED": False,
-        "AUTO_SETUP_DEFAULTS": False,
     }
     if extra_overrides:
         base_overrides.update(extra_overrides)
@@ -78,6 +83,18 @@ def _load_bootstrap_module():
     project_root = Path(__file__).resolve().parents[2]
     script_path = project_root / "bootstrap_cli.py"
     spec = importlib.util.spec_from_file_location("hashcrush_bootstrap_script", script_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_external_repos_module():
+    project_root = Path(__file__).resolve().parents[2]
+    script_path = project_root / "external_repos_cli.py"
+    spec = importlib.util.spec_from_file_location(
+        "hashcrush_external_repos_script", script_path
+    )
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)

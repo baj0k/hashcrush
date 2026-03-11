@@ -1,7 +1,7 @@
 """Flask routes to handle Analytics."""
 import io
 import operator
-import re
+from collections import Counter
 
 from flask import (
     Blueprint,
@@ -21,10 +21,110 @@ from hashcrush.utils.utils import decode_plaintext_from_storage
 
 analytics = Blueprint('analytics', __name__)
 
+CHARSET_CATEGORY_NAMES = {
+    (False, False, True, False): "Numeric Only",
+    (False, True, False, False): "LowerAlpha Only",
+    (True, False, False, False): "UpperAlpha Only",
+    (False, False, False, True): "Special Only",
+    (True, True, False, False): "MixedAlpha",
+    (True, True, True, False): "MixedAlphaNumeric",
+    (False, True, True, False): "LowerAlphaNumeric",
+    (True, False, True, False): "UpperAlphaNumeric",
+    (False, True, False, True): "LowerAlphaSpecial",
+    (True, False, False, True): "UpperAlphaSpecial",
+    (False, False, True, True): "SpecialNumeric",
+    (True, True, False, True): "MixedAlphaSpecial",
+    (True, False, True, True): "UpperAlphaSpecialNumeric",
+    (False, True, True, True): "LowerAlphaSpecialNumeric",
+    (True, True, True, True): "MixedAlphaSpecialNumeric",
+}
+
 
 def _decoded_plaintext(value: str | None) -> str:
     decoded = decode_plaintext_from_storage(value)
     return decoded if decoded is not None else ''
+
+
+def _decode_username(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        decoded_username = bytes.fromhex(value).decode('latin-1')
+    except (TypeError, ValueError):
+        return None
+    if '\\' in decoded_username:
+        return decoded_username.split('\\', 1)[1]
+    if '*' in decoded_username:
+        return decoded_username.split('*', 1)[1]
+    return decoded_username
+
+
+def _mask_for_plaintext(decoded_plaintext: str) -> str:
+    mask_parts: list[str] = []
+    for char in decoded_plaintext:
+        if char.isupper():
+            mask_parts.append('?u')
+        elif char.islower():
+            mask_parts.append('?l')
+        elif char.isdigit():
+            mask_parts.append('?d')
+        else:
+            mask_parts.append('?s')
+    return ''.join(mask_parts)
+
+
+def _build_cracked_password_metrics(cracked_rows: list[tuple[str | None, str | None]]) -> dict[str, object]:
+    complexity_fails = 0
+    complexity_meets = 0
+    composition_counts: Counter[str] = Counter()
+    length_counts: Counter[int] = Counter()
+    password_counts: Counter[str] = Counter()
+    mask_counts: Counter[str] = Counter()
+    username_matches: list[str] = []
+    blank_label = 'Blank (unset)'
+
+    for plaintext_value, username_value in cracked_rows:
+        decoded_plaintext = _decoded_plaintext(plaintext_value)
+        length = len(decoded_plaintext)
+        has_lower = any(char.islower() for char in decoded_plaintext)
+        has_upper = any(char.isupper() for char in decoded_plaintext)
+        has_digit = any(char.isdigit() for char in decoded_plaintext)
+        has_special = any(not char.isalnum() for char in decoded_plaintext)
+        complexity_flags = int(has_lower) + int(has_upper) + int(has_digit) + int(has_special)
+
+        if length >= 8 and complexity_flags >= 3:
+            complexity_meets += 1
+        else:
+            complexity_fails += 1
+
+        if length == 0:
+            composition_counts[blank_label] += 1
+        else:
+            composition_counts[
+                CHARSET_CATEGORY_NAMES.get(
+                    (has_upper, has_lower, has_digit, has_special),
+                    'Other',
+                )
+            ] += 1
+
+        length_counts[length] += 1
+        password_counts[decoded_plaintext or blank_label] += 1
+        mask_counts[_mask_for_plaintext(decoded_plaintext)] += 1
+
+        decoded_username = _decode_username(username_value)
+        if plaintext_value and decoded_username is not None and decoded_plaintext == decoded_username:
+            username_matches.append(decoded_plaintext)
+
+    return {
+        'complexity_fails': complexity_fails,
+        'complexity_meets': complexity_meets,
+        'composition_counts': composition_counts,
+        'length_counts': length_counts,
+        'password_counts': password_counts,
+        'mask_counts': mask_counts,
+        'username_matches': username_matches,
+        'blank_label': blank_label,
+    }
 
 
 def _parse_positive_int(value):
@@ -166,35 +266,16 @@ def get_analytics():
     fig1_total = fig1_cracked_cnt + fig1_uncracked_cnt
     fig1_percent = 0 if fig1_total == 0 else [str(round((fig1_cracked_cnt / fig1_total) * 100, 1)) + '%']
 
-    # Figure 2 (Password complexity)
-    fig2_cracked_hashes = db.session.scalars(
-        select(Hashes.plaintext)
+    cracked_rows = db.session.execute(
+        select(Hashes.plaintext, HashfileHashes.username)
         .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
         .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
         .where(Hashes.cracked.is_(True))
-    )
-    fig2_cracked_hashes = fig2_cracked_hashes.all()
+    ).all()
+    cracked_metrics = _build_cracked_password_metrics(cracked_rows)
     fig2_uncracked_cnt = fig1_uncracked_cnt
-    fig2_fails_complexity_cnt = 0
-    fig2_meets_complexity_cnt = 0
-    for plaintext in fig2_cracked_hashes:
-        flags = 0
-        decoded_plaintext = _decoded_plaintext(plaintext)
-        if len(decoded_plaintext) < 8:
-            flags = -3
-        if re.search(r"[a-z]", decoded_plaintext):
-            flags = flags + 1
-        if re.search(r"[A-Z]", decoded_plaintext):
-            flags = flags + 1
-        if re.search(r"[0-9]", decoded_plaintext):
-            flags = flags + 1
-        if re.search(r"[^0-9A-Za-z]", decoded_plaintext):
-            flags = flags + 1
-
-        if flags < 3:
-            fig2_fails_complexity_cnt = fig2_fails_complexity_cnt + 1
-        else:
-            fig2_meets_complexity_cnt = fig2_meets_complexity_cnt + 1
+    fig2_fails_complexity_cnt = int(cracked_metrics['complexity_fails'])
+    fig2_meets_complexity_cnt = int(cracked_metrics['complexity_meets'])
 
     fig2_data = [
         ("Fails Complexity: " + str(format_display(fig2_fails_complexity_cnt)), fig2_fails_complexity_cnt),
@@ -250,85 +331,11 @@ def get_analytics():
     total_unique_hashes = format_display(total_unique_hashes)
 
     # Figure 4 (Charset Breakdown)
-    blank = 0
-    numeric = 0
-    loweralpha = 0
-    upperalpha = 0
-    special = 0
-    mixedalpha = 0
-    mixedalphanum = 0
-    loweralphanum = 0
-    upperalphanum = 0
-    loweralphaspecial = 0
-    upperalphaspecial = 0
-    specialnum = 0
-    mixedalphaspecial = 0
-    upperalphaspecialnum = 0
-    loweralphaspecialnum = 0
-    mixedalphaspecialnum = 0
-    other = 0
-
-    for plaintext in fig2_cracked_hashes:
-        tmp_plaintext = _decoded_plaintext(plaintext)
-        tmp_plaintext = re.sub(r"[A-Z]", 'U', tmp_plaintext)
-        tmp_plaintext = re.sub(r"[a-z]", 'L', tmp_plaintext)
-        tmp_plaintext = re.sub(r"[0-9]", 'D', tmp_plaintext)
-        tmp_plaintext = re.sub(r"[^0-9A-Za-z]", 'S', tmp_plaintext)
-
-        if len(tmp_plaintext) == 0:
-            blank += 1
-        elif not re.search("U", tmp_plaintext) and not re.search("L", tmp_plaintext) and re.search("D", tmp_plaintext) and not re.search("S", tmp_plaintext):
-            numeric += 1
-        elif not re.search("U", tmp_plaintext) and re.search("L", tmp_plaintext) and not re.search("D", tmp_plaintext) and not re.search("S", tmp_plaintext):
-            loweralpha += 1
-        elif re.search("U", tmp_plaintext) and not re.search("L", tmp_plaintext) and not re.search("D", tmp_plaintext) and not re.search("S", tmp_plaintext):
-            upperalpha += 1
-        elif not re.search("U", tmp_plaintext) and not re.search("L", tmp_plaintext) and not re.search("D", tmp_plaintext) and re.search("S", tmp_plaintext):
-            special += 1
-        elif re.search("U", tmp_plaintext) and re.search("L", tmp_plaintext) and not re.search("D", tmp_plaintext) and not re.search("S", tmp_plaintext):
-            mixedalpha += 1
-        elif re.search("U", tmp_plaintext) and re.search("L", tmp_plaintext) and re.search("D", tmp_plaintext) and not re.search("S", tmp_plaintext):
-            mixedalphanum += 1
-        elif not re.search("U", tmp_plaintext) and re.search("L", tmp_plaintext) and re.search("D", tmp_plaintext) and not re.search("S", tmp_plaintext):
-            loweralphanum += 1
-        elif re.search("U", tmp_plaintext) and not re.search("L", tmp_plaintext) and re.search("D", tmp_plaintext) and not re.search("S", tmp_plaintext):
-            upperalphanum += 1
-        elif not re.search("U", tmp_plaintext) and re.search("L", tmp_plaintext) and not re.search("D", tmp_plaintext) and re.search("S", tmp_plaintext):
-            loweralphaspecial += 1
-        elif re.search("U", tmp_plaintext) and not re.search("L", tmp_plaintext) and not re.search("D", tmp_plaintext) and re.search("S", tmp_plaintext):
-            upperalphaspecial += 1
-        elif not re.search("U", tmp_plaintext) and not re.search("L", tmp_plaintext) and re.search("D", tmp_plaintext) and re.search("S", tmp_plaintext):
-            specialnum += 1
-        elif re.search("U", tmp_plaintext) and re.search("L", tmp_plaintext) and not re.search("D", tmp_plaintext) and re.search("S", tmp_plaintext):
-            mixedalphaspecial += 1
-        elif re.search("U", tmp_plaintext) and not re.search("L", tmp_plaintext) and re.search("D", tmp_plaintext) and re.search("S", tmp_plaintext):
-            upperalphaspecialnum += 1
-        elif not re.search("U", tmp_plaintext) and re.search("L", tmp_plaintext) and re.search("D", tmp_plaintext) and re.search("S", tmp_plaintext):
-            loweralphaspecialnum += 1
-        elif re.search("U", tmp_plaintext) and re.search("L", tmp_plaintext) and re.search("D", tmp_plaintext) and re.search("S", tmp_plaintext):
-            mixedalphaspecialnum += 1
-        else:
-            other += 1
-
     fig4_labels = []
     fig4_values = []
     fig4_dict = {
-        "Blank (unset): " + str(format_display(blank)): blank,
-        "Numeric Only: " + str(format_display(numeric)): numeric,
-        "LowerAlpha Only: " + str(format_display(loweralpha)): loweralpha,
-        "UpperAlpha Only: " + str(format_display(upperalpha)): upperalpha,
-        "Special Only: " + str(format_display(special)): special,
-        "MixedAlpha: " + str(format_display(mixedalpha)): mixedalpha,
-        "MixedAlphaNumeric: " + str(format_display(mixedalphanum)): mixedalphanum,
-        "LowerAlphaNumeric: " + str(format_display(loweralphanum)): loweralphanum,
-        "LowerAlphaSpecial: " + str(format_display(loweralphaspecial)): loweralphaspecial,
-        "UpperAlphaSpecial: " + str(format_display(upperalphaspecial)): upperalphaspecial,
-        "SpecialNumeric: " + str(format_display(specialnum)): specialnum,
-        "MixedAlphaSpecial: " + str(format_display(mixedalphaspecial)): mixedalphaspecial,
-        "UpperAlphaSpecialNumeric: " + str(format_display(upperalphaspecialnum)): upperalphaspecialnum,
-        "LowerAlphaSpecialNumeric: " + str(format_display(loweralphaspecialnum)): loweralphaspecialnum,
-        "MixedAlphaSpecialNumeric: " + str(format_display(mixedalphaspecialnum)): mixedalphaspecialnum,
-        "Other: " + str(format_display(other)): other,
+        f"{label}: {format_display(count)}": count
+        for label, count in cracked_metrics['composition_counts'].items()
     }
     fig4_array_sorted = dict(sorted(fig4_dict.items(), key=operator.itemgetter(1), reverse=True))
     limit = 0
@@ -344,97 +351,36 @@ def get_analytics():
     fig4_values.append(fig4_other)
 
     # Figure 5 (Passwords by Length)
-    fig5_cracked_hashes = fig2_cracked_hashes
-    fig5_data = {}
-    for plaintext in fig5_cracked_hashes:
-        password_length = len(_decoded_plaintext(plaintext))
-        if password_length in fig5_data:
-            fig5_data[password_length] += 1
-        else:
-            fig5_data[password_length] = 1
     fig5_labels = []
     fig5_values = []
-    for entry in sorted(fig5_data):
+    for entry in sorted(cracked_metrics['length_counts']):
         if len(fig5_labels) < 20:
             fig5_labels.append(entry)
-            fig5_values.append(fig5_data[entry])
+            fig5_values.append(cracked_metrics['length_counts'][entry])
         else:
             break
 
     # Figure 6 (Top 10 Passwords)
-    fig6_cracked_hashes = fig2_cracked_hashes
-    fig6_data = {}
-    blank_label = 'Blank (unset)'
-    for plaintext in fig6_cracked_hashes:
-        decoded_plaintext = _decoded_plaintext(plaintext)
-        if len(decoded_plaintext) > 0:
-            if decoded_plaintext in fig6_data:
-                fig6_data[decoded_plaintext] += 1
-            else:
-                fig6_data[decoded_plaintext] = 1
-        else:
-            if blank_label in fig6_data:
-                fig6_data[blank_label] += 1
-            else:
-                fig6_data[blank_label] = 1
     fig6_labels = []
     fig6_values = []
-    for entry in sorted(fig6_data, key=fig6_data.__getitem__, reverse=True):
+    for entry, count in cracked_metrics['password_counts'].most_common(10):
         if len(fig6_labels) < 10:
             fig6_labels.append(entry)
-            fig6_values.append(fig6_data[entry])
+            fig6_values.append(count)
         else:
             break
 
     # Figure 7 (Top 10 Masks)
     fig7_values = {}
-    fig7_data = {}
-    fig7_total = 0
-    for plaintext in fig6_cracked_hashes:
-        tmp_plaintext = _decoded_plaintext(plaintext)
-        tmp_plaintext = re.sub(r"[A-Z]", 'U', tmp_plaintext)
-        tmp_plaintext = re.sub(r"[a-z]", 'L', tmp_plaintext)
-        tmp_plaintext = re.sub(r"[0-9]", 'D', tmp_plaintext)
-        tmp_plaintext = re.sub(r"[^0-9A-Za-z]", 'S', tmp_plaintext)
-        tmp_plaintext = re.sub(r"U", '?u', tmp_plaintext)
-        tmp_plaintext = re.sub(r"L", '?l', tmp_plaintext)
-        tmp_plaintext = re.sub(r"D", '?d', tmp_plaintext)
-        tmp_plaintext = re.sub(r"S", '?s', tmp_plaintext)
-        if tmp_plaintext not in fig7_data:
-            fig7_data[tmp_plaintext] = 1
-        else:
-            fig7_data[tmp_plaintext] += 1
-        fig7_total += 1
-    for entry in sorted(fig7_data, key=fig7_data.__getitem__, reverse=True):
+    fig7_total = int(sum(cracked_metrics['mask_counts'].values()))
+    for entry, count in cracked_metrics['mask_counts'].most_common(10):
         if len(fig7_values) < 10:
-            fig7_values[entry] = fig7_data[entry]
+            fig7_values[entry] = count
         else:
             break
 
     # Figure 8 (Users where password == username)
-    fig8_cracked_hashes = db.session.execute(
-        select(Hashes.plaintext, HashfileHashes.username)
-        .select_from(Hashes)
-        .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
-        .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
-        .where(Hashes.cracked.is_(True))
-    )
-    fig8_cracked_hashes = fig8_cracked_hashes.all()
-    fig8_table = []
-    for entry in fig8_cracked_hashes:
-        if entry[1] and entry[0]:
-            try:
-                decoded_username = bytes.fromhex(entry[1]).decode('latin-1')
-            except (TypeError, ValueError):
-                continue
-            if '\\' in decoded_username:
-                username = decoded_username.split('\\')[1]
-            elif '*' in decoded_username:
-                username = decoded_username.split('*')[1]
-            else:
-                username = decoded_username
-            if _decoded_plaintext(entry[0]) == username:
-                fig8_table.append(_decoded_plaintext(entry[0]))
+    fig8_table = cracked_metrics['username_matches']
 
     return render_template(
         'analytics.html',

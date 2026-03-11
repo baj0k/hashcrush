@@ -256,10 +256,7 @@ def _build_seed_app():
     return create_app(
         config_overrides={
             "ENABLE_LOCAL_EXECUTOR": False,
-            "AUTO_SETUP_DEFAULTS": False,
-            "AUTO_NORMALIZE_PLAINTEXT_STORAGE": False,
             "SKIP_RUNTIME_BOOTSTRAP": True,
-            "AUTO_CREATE_SCHEMA": False,
         }
     )
 
@@ -270,6 +267,55 @@ def _build_database_schema() -> None:
     schema_app = _build_seed_app()
     with schema_app.app_context():
         upgrade_database()
+
+
+def _seed_initial_runtime_state(admin_username: str, admin_password: str) -> None:
+    from hashcrush.models import Settings, Users, db
+    from hashcrush.setup import add_default_tasks, default_tasks_need_added
+    from hashcrush.users.routes import bcrypt
+
+    seed_app = _build_seed_app()
+    with seed_app.app_context():
+        if db.session.execute(select(Settings)).scalars().first() is None:
+            db.session.add(Settings())
+            db.session.commit()
+
+        has_admin = db.session.execute(
+            select(Users).where(Users.admin.is_(True)).limit(1)
+        ).scalars().first()
+        if not has_admin:
+            db.session.add(
+                Users(
+                    username=admin_username,
+                    password=bcrypt.generate_password_hash(admin_password).decode(
+                        "utf-8"
+                    ),
+                    admin=True,
+                )
+            )
+            db.session.commit()
+
+        if default_tasks_need_added(db):
+            add_default_tasks(db)
+
+
+def _prompt_initial_admin_credentials() -> tuple[str, str]:
+    print("\nCollecting Initial Admin Account Information")
+    admin_username = input("Enter initial admin username [admin]: ").strip() or "admin"
+    while len(admin_username) == 0:
+        print("Error: username is required.")
+        admin_username = input("Enter initial admin username [admin]: ").strip() or "admin"
+
+    admin_password = getpass("Enter initial admin password: ")
+    admin_password_verify = getpass("Confirm initial admin password: ")
+    while len(admin_password) < 14 or admin_password != admin_password_verify:
+        if len(admin_password) < 14:
+            print("Error: Password must be at least 14 characters.")
+        else:
+            print("Error: Passwords do not match.")
+        admin_password = getpass("Enter initial admin password: ")
+        admin_password_verify = getpass("Confirm initial admin password: ")
+    return admin_username, admin_password
 
 
 def _run_root_guard() -> None:
@@ -458,12 +504,16 @@ def _collect_interactive_install_config(existing_values: dict[str, str | None]) 
         if len(hashcat_bin) == 0:
             hashcat_bin = hashcat_bin_default
 
+    admin_username, admin_password = _prompt_initial_admin_credentials()
+
     return {
         "db_server": db_server,
         "db_port": db_port,
         "db_name": db_name,
         "db_username": db_username,
         "db_password": db_password,
+        "admin_username": admin_username,
+        "admin_password": admin_password,
         "hashcat_bin": hashcat_bin,
         "wordlists_path": wordlists_path,
         "rules_path": rules_path,
@@ -597,8 +647,6 @@ def _write_e2e_env_file(env_path: str, values: dict[str, str]) -> None:
         "",
         f"HASHCRUSH_E2E_USERNAME={_dotenv_escape(values['HASHCRUSH_E2E_USERNAME'])}",
         f"HASHCRUSH_E2E_PASSWORD={_dotenv_escape(values['HASHCRUSH_E2E_PASSWORD'])}",
-        f"HASHCRUSH_E2E_SETUP_USERNAME={_dotenv_escape(values['HASHCRUSH_E2E_SETUP_USERNAME'])}",
-        f"HASHCRUSH_E2E_SETUP_PASSWORD={_dotenv_escape(values['HASHCRUSH_E2E_SETUP_PASSWORD'])}",
         "",
         f"HASHCRUSH_E2E_SECOND_USERNAME={_dotenv_escape(values['HASHCRUSH_E2E_SECOND_USERNAME'])}",
         f"HASHCRUSH_E2E_SECOND_PASSWORD={_dotenv_escape(values['HASHCRUSH_E2E_SECOND_PASSWORD'])}",
@@ -802,8 +850,6 @@ def _seed_test_environment(runtime_path: str, env_path: str) -> dict[str, str]:
             "HASHCRUSH_E2E_VERIFY_TLS": "0",
             "HASHCRUSH_E2E_USERNAME": E2E_ADMIN_USERNAME,
             "HASHCRUSH_E2E_PASSWORD": E2E_ADMIN_PASSWORD,
-            "HASHCRUSH_E2E_SETUP_USERNAME": E2E_ADMIN_USERNAME,
-            "HASHCRUSH_E2E_SETUP_PASSWORD": E2E_ADMIN_PASSWORD,
             "HASHCRUSH_E2E_SECOND_USERNAME": E2E_SECOND_USERNAME,
             "HASHCRUSH_E2E_SECOND_PASSWORD": E2E_SECOND_PASSWORD,
             "HASHCRUSH_E2E_SECOND_IS_ADMIN": "0",
@@ -922,6 +968,11 @@ def main(argv: list[str] | None = None) -> int:
 
     print("Building database schema")
     _build_database_schema()
+    if not args.test_mode:
+        _seed_initial_runtime_state(
+            install_config["admin_username"],
+            install_config["admin_password"],
+        )
 
     _generate_ssl_certificates(
         install_config["runtime_path"],
@@ -937,6 +988,7 @@ def main(argv: list[str] | None = None) -> int:
         _print_test_environment_summary(seeded_values)
         print("You can now run the live test flow with: ./tests/test-all.sh")
     else:
+        print(f"Initial admin username: {install_config['admin_username']}")
         print(
             "You can now start your instance of hashcrush by running the following command: ./hashcrush.py"
         )

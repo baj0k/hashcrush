@@ -92,13 +92,6 @@ HASHCRUSH_CONFIG_FIELDS = [
     },
     {
         "section": "app",
-        "key": "auto_create_schema",
-        "label": "Auto Create Schema",
-        "env_name": "HASHCRUSH_AUTO_CREATE_SCHEMA",
-        "default_display": "true",
-    },
-    {
-        "section": "app",
         "key": "hashfile_max_line_length",
         "label": "Hashfile Max Line Length",
         "env_name": "HASHCRUSH_HASHFILE_MAX_LINE_LENGTH",

@@ -1,4 +1,5 @@
 {% extends "layout.html"%}
+{% from "macros.j2" import render_pagination %}
 {% block header %}
 <br>
 <h1>Hash Files</h1>
@@ -68,6 +69,7 @@ The following are hash files currently configured in HashCrush. Each hash file i
                     {% endfor %}
                 </tbody>
               </table>
+              {{ render_pagination('hashfiles.hashfiles_list', pagination) }}
         </div>
     </article>
     {% for hashfile in hashfiles %}

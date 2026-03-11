@@ -1,26 +1,36 @@
 import datetime
 import logging
 import os
-import sqlite3
+import ssl
 import tempfile
 from logging.config import dictConfig as loggingDictConfig
 
-from flask import Flask, redirect, request, url_for
+from flask import Flask
 from flask_wtf.csrf import CSRFProtect, generate_csrf
-from sqlalchemy import event
-from sqlalchemy.engine import Engine
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 
-@event.listens_for(Engine, "connect")
-def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
-    """Ensure SQLite enforces FK actions during tests and local deployments."""
-    if isinstance(dbapi_connection, sqlite3.Connection):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
+class _SuppressWerkzeugTlsDisconnects(logging.Filter):
+    """Drop noisy werkzeug client-disconnect TLS EOF tracebacks only."""
 
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name != "werkzeug":
+            return True
+        if not record.exc_info:
+            return True
+        _exc_type, exc_value, _exc_tb = record.exc_info
+        return not isinstance(exc_value, ssl.SSLEOFError)
+
+
+def _attach_werkzeug_tls_disconnect_filter() -> None:
+    """Attach the TLS disconnect filter directly to Werkzeug loggers/handlers."""
+    tls_filter = _SuppressWerkzeugTlsDisconnects()
+    for logger_name in ("werkzeug", "werkzeug.serving"):
+        logger = logging.getLogger(logger_name)
+        logger.addFilter(tls_filter)
+        for handler in logger.handlers:
+            handler.addFilter(tls_filter)
 
 def _ensure_runtime_directories(
     root_path: str, runtime_root: str | None = None
@@ -41,15 +51,18 @@ def _ensure_runtime_directories(
 
 
 def _ensure_database_schema(app: Flask) -> None:
-    """Guard startup against outdated schemas and bootstrap empty databases."""
-    from hashcrush.db_upgrade import get_schema_status, upgrade_database
+    """Guard startup against outdated or uninitialized schemas."""
+    from hashcrush.db_upgrade import get_schema_status
 
     app.logger.info("Ensuring database schema exists.")
     with app.app_context():
         schema_status = get_schema_status()
         if not schema_status["has_user_tables"]:
-            upgrade_database()
-            return
+            raise RuntimeError(
+                "Database schema is uninitialized. Run `hashcrush.py setup` for a "
+                "destructive bootstrap or `hashcrush.py upgrade` to initialize the "
+                "tracked schema."
+            )
         if not schema_status["tracked"]:
             raise RuntimeError(str(schema_status["detail"]))
         current_version = int(schema_status["current_version"])
@@ -101,79 +114,6 @@ def _warn_insecure_configuration(app: Flask) -> None:
         )
 
 
-def do_gui_setup_if_needed():
-    from flask import current_app
-
-    logger = current_app.logger
-
-    from urllib.parse import urlparse
-
-    static_path = url_for("static", filename="")
-    parsed_url = urlparse(request.url)
-
-    if parsed_url.path.startswith(static_path):
-        # allow static files through
-        return
-
-    from hashcrush.models import db
-    from hashcrush.setup import admin_pass_needs_changed
-    from hashcrush.users.routes import bcrypt
-
-    if not admin_pass_needs_changed(db, bcrypt):
-        logger.debug("Admin password does not need to be changed.")
-
-    else:
-        logger.info("Admin password needs to be changed.")
-        if url_for("setup.admin_pass_get") != parsed_url.path:
-            return redirect(url_for("setup.admin_pass_get"))
-        else:
-            return
-
-    from hashcrush.setup import settings_needs_added
-
-    if not settings_needs_added(db):
-        logger.debug("Settings do not need to be created.")
-
-    else:
-        logger.info("Settings need to be created.")
-        if url_for("setup.settings_get") != parsed_url.path:
-            return redirect(url_for("setup.settings_get"))
-        else:
-            return
-
-
-def setup_defaults_if_needed():
-    from flask import current_app
-
-    logger = current_app.logger
-    logger.info("Setting up defaults.")
-
-    from hashcrush.models import db
-
-    try:
-        from hashcrush.setup import add_admin_user, admin_user_needs_added
-        from hashcrush.users.routes import bcrypt
-
-        if admin_user_needs_added(db):
-            logger.info("No admin user found; creating default admin account.")
-            add_admin_user(db, bcrypt)
-        else:
-            logger.info("Admin user already exists; skipping default admin creation.")
-    except Exception:
-        logger.exception("Adding Admin User failed.")
-
-    try:
-        from hashcrush.setup import add_default_tasks, default_tasks_need_added
-
-        if default_tasks_need_added(db):
-            logger.info("No default tasks found; seeding shared mask tasks.")
-            add_default_tasks(db)
-        else:
-            logger.info("Default tasks already exist; skipping default task seeding.")
-    except Exception:
-        logger.exception("Adding Default Tasks failed.")
-
-
 def jinja_hex_decode(text):
     """Jinja2 filter to decode stored plaintext with legacy fallback."""
     from hashcrush.utils.utils import decode_plaintext_from_storage
@@ -190,6 +130,11 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     loggingDictConfig(
         {
             "version": 1,
+            "filters": {
+                "suppress_werkzeug_tls_disconnects": {
+                    "()": _SuppressWerkzeugTlsDisconnects,
+                }
+            },
             "formatters": {
                 "default": {
                     "format": "%(asctime)s [%(levelname)-8s] for %(name)s: %(message)s in (%(module)s:%(lineno)d)",
@@ -200,6 +145,7 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
                     "class": "logging.StreamHandler",
                     "stream": "ext://flask.logging.wsgi_errors_stream",
                     "formatter": "default",
+                    "filters": ["suppress_werkzeug_tls_disconnects"],
                 }
             },
             "root": {"level": "DEBUG" if app.debug else "INFO", "handlers": ["wsgi"]},
@@ -212,18 +158,15 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
         .astimezone()
         .isoformat(sep="T", timespec="milliseconds")
     )
+    _attach_werkzeug_tls_disconnect_filter()
 
     from hashcrush.config import Config
 
     app.config.from_object(Config)
 
     # Sensible defaults; can be overridden via config_overrides or app config.
-    # These are intentionally conservative for production deployments.
-    app.config.setdefault("AUTO_SETUP_DEFAULTS", True)
     app.config.setdefault("ENABLE_LOCAL_EXECUTOR", True)
     app.config.setdefault("SKIP_RUNTIME_BOOTSTRAP", False)
-    app.config.setdefault("AUTO_NORMALIZE_PLAINTEXT_STORAGE", True)
-    app.config.setdefault("AUTO_CREATE_SCHEMA", True)
     app.config.setdefault(
         "RUNTIME_PATH", os.path.join(tempfile.gettempdir(), "hashcrush-runtime")
     )
@@ -262,7 +205,7 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
 
     db.init_app(app)
 
-    if (not app.config.get("TESTING")) and app.config.get("AUTO_CREATE_SCHEMA", True):
+    if (not app.config.get("TESTING")) and (not app.config.get("SKIP_RUNTIME_BOOTSTRAP")):
         _ensure_database_schema(app)
 
     csrf = CSRFProtect()
@@ -289,7 +232,6 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     from hashcrush.rules.routes import rules
     from hashcrush.searches.routes import searches
     from hashcrush.settings.routes import settings
-    from hashcrush.setup.routes import blueprint as setup_blueprint
     from hashcrush.task_groups.routes import task_groups
     from hashcrush.tasks.routes import tasks
     from hashcrush.users.routes import users
@@ -308,39 +250,9 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     app.register_blueprint(wordlists)
     app.register_blueprint(analytics)
     app.register_blueprint(searches)
-    app.register_blueprint(setup_blueprint)
 
     app.add_template_filter(jinja_hex_decode)
     app.add_template_global(get_application_version, get_application_version.__name__)
-
-    # Default seeding can be enabled/disabled via config.
-    if (
-        (not app.config.get("TESTING"))
-        and (not app.config.get("SKIP_RUNTIME_BOOTSTRAP"))
-        and app.config.get("AUTO_SETUP_DEFAULTS", True)
-    ):
-        with app.app_context():
-            setup_defaults_if_needed()
-
-    if (
-        (not app.config.get("TESTING"))
-        and (not app.config.get("SKIP_RUNTIME_BOOTSTRAP"))
-        and app.config.get("AUTO_NORMALIZE_PLAINTEXT_STORAGE", True)
-    ):
-        with app.app_context():
-            try:
-                from hashcrush.utils.utils import migrate_plaintext_storage_rows
-
-                migrated_rows = migrate_plaintext_storage_rows()
-                if migrated_rows:
-                    app.logger.info(
-                        "Migrated %s legacy plaintext row(s) to canonical hex storage.",
-                        migrated_rows,
-                    )
-            except Exception:
-                app.logger.exception("Legacy plaintext migration failed.")
-
-    app.before_request(do_gui_setup_if_needed)
 
     # Local single-node executor for queued JobTasks.
     if (

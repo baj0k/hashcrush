@@ -29,7 +29,11 @@ class Users(db.Model, UserMixin):
         nullable=True,
         default=utc_now_naive,
     )
-    jobs: Mapped[list[Jobs]] = relationship("Jobs", backref="owner", lazy=True)
+    jobs: Mapped[list[Jobs]] = relationship(
+        "Jobs",
+        back_populates="owner",
+        lazy="select",
+    )
 
 
 class Settings(db.Model):
@@ -87,6 +91,26 @@ class Jobs(db.Model):
         ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
     )
+    owner: Mapped[Users] = relationship(
+        "Users",
+        back_populates="jobs",
+        lazy="select",
+    )
+    domain: Mapped[Domains] = relationship(
+        "Domains",
+        back_populates="jobs",
+        lazy="select",
+    )
+    hashfile: Mapped[Hashfiles | None] = relationship(
+        "Hashfiles",
+        back_populates="jobs",
+        lazy="select",
+    )
+    job_tasks: Mapped[list[JobTasks]] = relationship(
+        "JobTasks",
+        back_populates="job",
+        lazy="select",
+    )
 
 
 class JobTasks(db.Model):
@@ -123,6 +147,16 @@ class JobTasks(db.Model):
     progress: Mapped[str | None] = mapped_column(String(6000), nullable=True)
     benchmark: Mapped[str | None] = mapped_column(String(20), nullable=True)
     worker_pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    job: Mapped[Jobs] = relationship(
+        "Jobs",
+        back_populates="job_tasks",
+        lazy="select",
+    )
+    task: Mapped[Tasks] = relationship(
+        "Tasks",
+        back_populates="job_tasks",
+        lazy="select",
+    )
 
 
 class Domains(db.Model):
@@ -132,6 +166,16 @@ class Domains(db.Model):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(40), nullable=False)
+    jobs: Mapped[list[Jobs]] = relationship(
+        "Jobs",
+        back_populates="domain",
+        lazy="select",
+    )
+    hashfiles: Mapped[list[Hashfiles]] = relationship(
+        "Hashfiles",
+        back_populates="domain",
+        lazy="select",
+    )
 
 
 class Hashfiles(db.Model):
@@ -154,6 +198,21 @@ class Hashfiles(db.Model):
         Integer,
         ForeignKey("domains.id", ondelete="RESTRICT"),
         nullable=False,
+    )
+    domain: Mapped[Domains] = relationship(
+        "Domains",
+        back_populates="hashfiles",
+        lazy="select",
+    )
+    jobs: Mapped[list[Jobs]] = relationship(
+        "Jobs",
+        back_populates="hashfile",
+        lazy="select",
+    )
+    hashfile_hashes: Mapped[list[HashfileHashes]] = relationship(
+        "HashfileHashes",
+        back_populates="hashfile",
+        lazy="select",
     )
 
 
@@ -185,6 +244,16 @@ class HashfileHashes(db.Model):
         nullable=False,
         index=True,
     )
+    hash: Mapped[Hashes] = relationship(
+        "Hashes",
+        back_populates="hashfile_hashes",
+        lazy="select",
+    )
+    hashfile: Mapped[Hashfiles] = relationship(
+        "Hashfiles",
+        back_populates="hashfile_hashes",
+        lazy="select",
+    )
 
 
 class Rules(db.Model):
@@ -201,6 +270,11 @@ class Rules(db.Model):
     path: Mapped[str] = mapped_column(String(256), nullable=False)
     size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    tasks: Mapped[list[Tasks]] = relationship(
+        "Tasks",
+        back_populates="rule",
+        lazy="select",
+    )
 
 
 class Wordlists(db.Model):
@@ -221,6 +295,11 @@ class Wordlists(db.Model):
     path: Mapped[str] = mapped_column(String(245), nullable=False)
     size: Mapped[int] = mapped_column(BigInteger, nullable=False)
     checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    tasks: Mapped[list[Tasks]] = relationship(
+        "Tasks",
+        back_populates="wordlist",
+        lazy="select",
+    )
 
 
 class Tasks(db.Model):
@@ -248,6 +327,21 @@ class Tasks(db.Model):
         nullable=True,
     )
     hc_mask: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    wordlist: Mapped[Wordlists | None] = relationship(
+        "Wordlists",
+        back_populates="tasks",
+        lazy="select",
+    )
+    rule: Mapped[Rules | None] = relationship(
+        "Rules",
+        back_populates="tasks",
+        lazy="select",
+    )
+    job_tasks: Mapped[list[JobTasks]] = relationship(
+        "JobTasks",
+        back_populates="task",
+        lazy="select",
+    )
 
 
 class TaskGroups(db.Model):
@@ -279,6 +373,11 @@ class Hashes(db.Model):
     hash_type: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     cracked: Mapped[bool] = mapped_column(Boolean, nullable=False)
     plaintext: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    hashfile_hashes: Mapped[list[HashfileHashes]] = relationship(
+        "HashfileHashes",
+        back_populates="hash",
+        lazy="select",
+    )
 
 
 class AuthThrottle(db.Model):

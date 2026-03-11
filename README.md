@@ -1,4 +1,4 @@
-# HashCrush v1.0
+# HashCrush v1.1
 
 **HashCrush** is a tool for organization and automation of password cracking tasks. It also produces some analytics.
 
@@ -7,6 +7,8 @@
 2. PostgreSQL running locally
 3. Administrative privileges for local PostgreSQL bootstrap
 4. Hashcat configured with drivers required by your hardware
+
+Prefer downloading the Hashcat release bundle manually from the official website instead of relying on distro packages. The official release is usually newer.
 
 ## Installation
 #### 1) Setup PostgreSQL
@@ -28,6 +30,15 @@ Disposable live-test environment bootstrap:
 python3 ./hashcrush.py setup --test
 ```
 `hashcrush.py setup --test` rebuilds the DB, creates dummy users/data, and writes `.env.test` for E2E tests.
+
+Optional external repository bootstrap and pinning:
+```bash
+python3 ./hashcrush.py external-repos \
+  --base-dir /opt/hashcrush-external \
+  --seclists-ref <pinned-seclists-ref> \
+  --hashcat-ref <pinned-hashcat-ref>
+```
+This clones `SecLists` and `hashcat` outside the app repo, checks out the requested pinned refs, and updates `wordlists_path` / `rules_path` in `config.conf`.
 ##### Important Setup Warning
 
 `hashcrush.py setup` is destructive.
@@ -39,7 +50,7 @@ Do not run it on a production instance.
 ```
 python3 ./hashcrush.py
 ```
-Navigate to your server at [https://127.0.0.1:8443](https://127.0.0.1:8443) and Setup admin user.
+Navigate to your server at [https://127.0.0.1:8443](https://127.0.0.1:8443) and log in with the admin account you created during `hashcrush.py setup`.
 
 Because HashCrush starts with a self-signed certificate, browsers will warn by default.
 Production deployments should provide certificate paths via environment variables:
@@ -132,6 +143,13 @@ Supported test entrypoint:
 ./tests/test-all.sh
 ```
 
+Automated tests are PostgreSQL-backed. By default the suite reuses the configured
+HashCrush PostgreSQL database and isolates each test app in its own temporary schema.
+If you want to point tests at a different PostgreSQL database, set
+`HASHCRUSH_TEST_POSTGRES_URI`. The older `HASHCRUSH_TEST_POSTGRES_ADMIN_URI` path is
+only a fallback for environments where schema creation is not available but temporary
+database creation is.
+
 Local automated browser tests are the default.
 Optional live-instance smoke:
 ```bash
@@ -141,6 +159,4 @@ export HASHCRUSH_E2E_MODE=external
 ./tests/test-all.sh
 ```
 
-GitHub Actions runs the same wrapper from [.github/workflows/tests.yml](/home/bajok/hashcrush/.github/workflows/tests.yml).
-
-Detailed testing documentation, direct pytest commands, CI behavior, and the post-deploy live smoke checklist are in [tests/README.md](/home/bajok/hashcrush/tests/README.md).
+Detailed testing documentation, direct pytest commands, and the post-deploy live smoke checklist are in [tests/README.md](/home/bajok/hashcrush/tests/README.md).

@@ -3,12 +3,21 @@
 <br>
 <h1>Create a new Job</h1>
 <br>
-Provide the name of the job and select an existing shared domain.
+Provide the name of the job and select a shared domain.
 <br>
 <br>
 <br>
 {% endblock header %}
 {% block content %}
+<script>
+    function toggleNewDomainInput(selectedObject) {
+        var newDomainDiv = document.getElementById('new_domain_div');
+        if (!newDomainDiv) {
+            return;
+        }
+        newDomainDiv.style.display = selectedObject.value === 'add_new' ? 'block' : 'none';
+    }
+</script>
 <div class="content-section">
     <form method="POST" action="" enctype="multipart/form-data">
         {{ jobsForm.hidden_tag() }}
@@ -50,12 +59,31 @@ Provide the name of the job and select an existing shared domain.
                         {% endfor %}
                     </div>
                 {% else %}
-                    {{ jobsForm.domain_id(class="form-control form-control-lg") }}
+                    {{ jobsForm.domain_id(class="form-control form-control-lg", onchange="toggleNewDomainInput(this)") }}
+                {% endif %}
+            </div>
+            {% if current_user.admin %}
+            <div class="form-group" id="new_domain_div" style="{% if jobsForm.domain_id.data == 'add_new' %}display:block{% else %}display:none{% endif %};">
+                {{ jobsForm.domain_name.label(class="form-control-label") }}
+                {% if jobsForm.domain_name.errors %}
+                    {{ jobsForm.domain_name(class="form-control form-control-lg is-invalid") }}
+                    <div class="invalid-feedback">
+                        {% for error in jobsForm.domain_name.errors %}
+                            <span>{{ error }}</span>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    {{ jobsForm.domain_name(class="form-control form-control-lg") }}
                 {% endif %}
                 <small class="form-text text-muted">
-                    Need a new domain? Ask an admin to create it from the Domains page.
+                    If this domain already exists, the existing shared domain will be reused.
                 </small>
             </div>
+            {% else %}
+            <small class="form-text text-muted">
+                Need a new domain? Ask an admin to create it from the Domains page.
+            </small>
+            {% endif %}
         </fieldset>
         <div class="form-group">
             <a class="btn btn-danger" href="/jobs" role="button" title='Cancel'>Cancel</a>

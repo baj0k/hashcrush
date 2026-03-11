@@ -10,6 +10,13 @@ Create a shared hashfile outside the job flow. The hashfile will be available to
 {% endblock header %}
 {% block content %}
 <script>
+    function toggleNewDomainInput(selectedObject) {
+        var newDomainDiv = document.getElementById('new_domain_div');
+        if (!newDomainDiv) {
+            return;
+        }
+        newDomainDiv.style.display = selectedObject.value === 'add_new' ? 'block' : 'none';
+    }
     function showHashTypeSelected(selectedObject){
         if (selectedObject.value == 'pwdump'){
             document.getElementById('pwdump_hash_type_div').style.display = 'inline';
@@ -57,7 +64,6 @@ Create a shared hashfile outside the job flow. The hashfile will be available to
     }
 </script>
 <div class="content-section">
-    {% if domains %}
     <form action="{{ url_for('hashfiles.hashfiles_add') }}" method="POST" enctype="multipart/form-data">
         {{ hashfilesForm.hidden_tag() }}
         <fieldset class="form-group">
@@ -71,8 +77,24 @@ Create a shared hashfile outside the job flow. The hashfile will be available to
                         {% endfor %}
                     </div>
                 {% else %}
-                    {{ hashfilesForm.domain_id(class="form-control form-control-lg") }}
+                    {{ hashfilesForm.domain_id(class="form-control form-control-lg", onchange="toggleNewDomainInput(this)") }}
                 {% endif %}
+            </div>
+            <div class="form-group" id="new_domain_div" style="{% if hashfilesForm.domain_id.data == 'add_new' %}display:block{% else %}display:none{% endif %};">
+                {{ hashfilesForm.domain_name.label(class="form-control-label") }}
+                {% if hashfilesForm.domain_name.errors %}
+                    {{ hashfilesForm.domain_name(class="form-control form-control-lg is-invalid") }}
+                    <div class="invalid-feedback">
+                        {% for error in hashfilesForm.domain_name.errors %}
+                            <span>{{ error }}</span>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    {{ hashfilesForm.domain_name(class="form-control form-control-lg") }}
+                {% endif %}
+                <small class="form-text text-muted">
+                    If this domain already exists, the existing shared domain will be reused.
+                </small>
             </div>
             <div class="form-group">
                 {{ hashfilesForm.file_type.label(class="form-control-label") }}
@@ -166,9 +188,5 @@ Create a shared hashfile outside the job flow. The hashfile will be available to
             {{ hashfilesForm.submit(class="btn btn-primary") }}
         </div>
     </form>
-    {% else %}
-    <p class="text-muted mb-3">No domains are available. Create a domain first, then add a hashfile.</p>
-    <a class="btn btn-secondary" href="{{ url_for('domains.domains_list') }}">Go to Domains</a>
-    {% endif %}
 </div>
 {% endblock content %}

@@ -10,6 +10,10 @@ from urllib.request import urlopen
 import pytest
 from werkzeug.serving import make_server
 
+from tests.db_runtime import (
+    create_managed_postgres_database,
+    sqlalchemy_engine_options,
+)
 from tests.e2e.support import detect_login_failure, is_authenticated_session
 
 TEST_USER_USERNAME = "admin"
@@ -21,13 +25,6 @@ TEST_HASHFILE_NAME = "e2e-existing-hashes.txt"
 TEST_TASK_NAME = "?a [1]"
 TEST_SECRET_KEY = "local-e2e-test-secret-key-for-hashcrush-0123456789"
 _SETUP_COMPLETED = False
-
-
-def _get_setup_value(key: str, fallback: str) -> str:
-    value = os.getenv(key)
-    if value is None or value == "":
-        return fallback
-    return value
 
 
 def load_dotenv(path: Path) -> None:
@@ -62,19 +59,15 @@ def _sha256_text(text: str) -> str:
 
 
 def build_test_config(
-    db_path: Path, runtime_path: Path, wordlists_path: Path, rules_path: Path
+    database_uri: str, runtime_path: Path, wordlists_path: Path, rules_path: Path
 ):
     return {
         "SECRET_KEY": TEST_SECRET_KEY,
-        "SQLALCHEMY_DATABASE_URI": f"sqlite:///{db_path}",
+        "SQLALCHEMY_DATABASE_URI": database_uri,
         "SQLALCHEMY_TRACK_MODIFICATIONS": False,
-        "SQLALCHEMY_ENGINE_OPTIONS": {
-            "connect_args": {"check_same_thread": False},
-        },
-        "AUTO_SETUP_DEFAULTS": False,
+        "SQLALCHEMY_ENGINE_OPTIONS": sqlalchemy_engine_options(),
         "ENABLE_LOCAL_EXECUTOR": False,
         "SKIP_RUNTIME_BOOTSTRAP": False,
-        "AUTO_CREATE_SCHEMA": False,
         "RUNTIME_PATH": str(runtime_path),
         "WORDLISTS_PATH": str(wordlists_path),
         "RULES_PATH": str(rules_path),
@@ -176,7 +169,6 @@ def _seed_local_e2e_data(app, wordlists_dir: Path, rules_dir: Path) -> dict[str,
 @pytest.fixture(scope="session")
 def local_e2e_environment(tmp_path_factory):
     root = tmp_path_factory.mktemp("e2e-local")
-    db_path = root / "hashcrush_e2e.db"
     runtime_path = root / "runtime"
     wordlists_path = root / "wordlists"
     rules_path = root / "rules"
@@ -184,7 +176,9 @@ def local_e2e_environment(tmp_path_factory):
     wordlists_path.mkdir(parents=True, exist_ok=True)
     rules_path.mkdir(parents=True, exist_ok=True)
 
-    os.environ["HASHCRUSH_DATABASE_URI"] = f"sqlite:///{db_path}"
+    database_uri = create_managed_postgres_database()
+
+    os.environ["HASHCRUSH_DATABASE_URI"] = database_uri
     os.environ["HASHCRUSH_SECRET_KEY"] = TEST_SECRET_KEY
 
     from hashcrush import create_app
@@ -192,7 +186,7 @@ def local_e2e_environment(tmp_path_factory):
     app = create_app(
         testing=True,
         config_overrides=build_test_config(
-            db_path,
+            database_uri,
             runtime_path,
             wordlists_path,
             rules_path,
@@ -344,30 +338,11 @@ def ensure_external_setup(request):
         return
 
     page.goto(f"{external_live_server}/login", wait_until="domcontentloaded")
-
-    if "/setup/admin-pass" in page.url:
-        username = _get_setup_value(
-            "HASHCRUSH_E2E_SETUP_USERNAME",
-            _get_setup_value("HASHCRUSH_E2E_SETUP_EMAIL", TEST_USER_USERNAME),
-        )
-        password = _get_setup_value(
-            "HASHCRUSH_E2E_SETUP_PASSWORD",
-            _get_setup_value("HASHCRUSH_E2E_PASSWORD", TEST_USER_PASSWORD),
-        )
-
-        page.get_by_label("Username").fill(username)
-        page.locator("#password").fill(password)
-        page.locator("#confirm_password").fill(password)
-        page.get_by_role("button", name="Update").click()
-        page.wait_for_load_state("domcontentloaded")
-
-    if "/setup/settings" in page.url:
-        page.get_by_role("button", name="Save").click()
-        page.wait_for_load_state("domcontentloaded")
-
-    page.goto(f"{external_live_server}/login", wait_until="domcontentloaded")
     if "/setup/" in page.url:
-        pytest.skip("Live host is in setup flow; complete setup before running external smoke tests.")
+        pytest.skip(
+            "Live host is in a removed setup-web flow state; rerun "
+            "`python3 ./hashcrush.py setup` on the current code before external smoke tests."
+        )
 
     _SETUP_COMPLETED = True
 

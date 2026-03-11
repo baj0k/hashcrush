@@ -117,6 +117,57 @@ def test_analytics_page_is_global_but_downloads_require_admin():
         assert download_response.headers["Location"].endswith("/analytics")
 
 @pytest.mark.security
+def test_analytics_page_renders_upperalphanumeric_and_mixed_categories():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="AnalyticsCategoryDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="analytics-category.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        upper_alphanumeric = Hashes(
+            sub_ciphertext="abc" * 10 + "12",
+            ciphertext="upper-alpha-num",
+            hash_type=1000,
+            cracked=True,
+            plaintext=encode_plaintext_for_storage("UPPER123"),
+        )
+        mixed_special = Hashes(
+            sub_ciphertext="def" * 10 + "34",
+            ciphertext="mixed-special",
+            hash_type=1000,
+            cracked=True,
+            plaintext=encode_plaintext_for_storage("Pass123!"),
+        )
+        db.session.add_all([upper_alphanumeric, mixed_special])
+        db.session.commit()
+        db.session.add_all(
+            [
+                HashfileHashes(hash_id=upper_alphanumeric.id, hashfile_id=hashfile.id),
+                HashfileHashes(hash_id=mixed_special.id, hashfile_id=hashfile.id),
+            ]
+        )
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get(
+            f"/analytics?domain_id={domain.id}&hashfile_id={hashfile.id}"
+        )
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "UpperAlphaNumeric: 1" in html
+        assert "MixedAlphaSpecialNumeric: 1" in html
+
+@pytest.mark.security
 def test_search_hash_post_is_trimmed_and_case_insensitive():
     app = _build_app()
     with app.app_context():

@@ -1,7 +1,6 @@
 """Flask routes to handle Jobs"""
 
 import json
-import re
 from collections import defaultdict
 from datetime import UTC, datetime
 
@@ -19,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 
 from hashcrush.audit import record_audit_event
 from hashcrush.authz import PUBLIC_JOB_VIEW_STATUSES, visible_jobs_query
+from hashcrush.domains.service import resolve_or_create_shared_domain
 from hashcrush.hashfiles.service import create_hashfile_from_form
 from hashcrush.jobs.forms import JobsForm, JobsNewHashFileForm, JobSummaryForm
 from hashcrush.models import (
@@ -33,8 +33,12 @@ from hashcrush.models import (
     Users,
     db,
 )
-from hashcrush.utils.utils import (
-    build_hashcat_command,
+from hashcrush.utils.utils import build_hashcat_command
+from hashcrush.view_utils import (
+    LIST_PAGE_SIZE,
+    paginate_scalars,
+    parse_jobtask_progress,
+    parse_page_arg,
 )
 
 jobs = Blueprint('jobs', __name__)
@@ -129,38 +133,17 @@ def _get_assignable_hashfile(job: Jobs, raw_hashfile_id) -> Hashfiles | None:
         )
     )
 
-
-def _parse_jobtask_progress(progress_payload: str | None) -> tuple[str | None, str | None]:
-    """Extract percent done and ETA from persisted JobTask.progress JSON."""
-    if not progress_payload:
-        return None, None
-
-    try:
-        parsed = json.loads(progress_payload)
-    except (TypeError, ValueError):
-        return None, None
-
-    if not isinstance(parsed, dict):
-        return None, None
-
-    eta_value = str(parsed.get('Time_Estimated') or '').strip() or None
-    progress_value = str(parsed.get('Progress') or '').strip()
-
-    percent_value = None
-    if progress_value:
-        match = re.search(r'\((\d+(?:\.\d+)?)%\)', progress_value)
-        if match:
-            percent_value = f"{match.group(1)}%"
-
-    return percent_value, eta_value
-
 @jobs.route("/jobs", methods=['GET', 'POST'])
 @login_required
 def jobs_list():
     """Function to return list of Jobs"""
-    jobs = db.session.execute(
-        _visible_jobs_query().order_by(Jobs.created_at.desc())
-    ).scalars().all()
+    page = parse_page_arg(request.args.get('page'))
+    jobs, pagination = paginate_scalars(
+        db.session,
+        _visible_jobs_query().order_by(Jobs.created_at.desc()),
+        page=page,
+        per_page=LIST_PAGE_SIZE,
+    )
     visible_job_ids = [job.id for job in jobs]
     domain_ids = sorted({job.domain_id for job in jobs})
     owner_ids = sorted({job.owner_id for job in jobs})
@@ -250,7 +233,7 @@ def jobs_list():
         if job_task.status not in status_rank:
             continue
 
-        percent_done, eta = _parse_jobtask_progress(job_task.progress)
+        percent_done, eta = parse_jobtask_progress(job_task.progress)
         existing = job_runtime_progress.get(job_task.job_id)
         if existing and existing['rank'] <= status_rank[job_task.status]:
             continue
@@ -271,6 +254,7 @@ def jobs_list():
         task_names_by_job_id=task_names_by_job_id,
         job_runtime_progress=job_runtime_progress,
         job_recovered=job_recovered,
+        pagination=pagination,
     )
 
 @jobs.route("/jobs/add", methods=['GET', 'POST'])
@@ -279,17 +263,21 @@ def jobs_add():
     """Function to manage adding of new job"""
     domains = db.session.execute(_visible_domains_query()).scalars().all()
     jobs_form = JobsForm()
-    jobs_form.domain_id.choices = [(0, "--SELECT--")] + [
-        (domain.id, domain.name) for domain in domains
+    jobs_form.domain_id.choices = [("", "--SELECT--")] + [
+        (str(domain.id), domain.name) for domain in domains
     ]
+    if current_user.admin:
+        jobs_form.domain_id.choices.append(("add_new", "Add New Domain"))
     if jobs_form.validate_on_submit():
-        visible_domain = db.session.scalar(
-            _visible_domains_query().where(Domains.id == jobs_form.domain_id.data)
+        domain_result, domain_error = resolve_or_create_shared_domain(
+            jobs_form.domain_id.data,
+            new_domain_name=jobs_form.domain_name.data,
+            allow_create=current_user.admin,
         )
-        if not visible_domain:
-            flash('Selected domain is invalid or no longer available.', 'danger')
-            return redirect(url_for('jobs.jobs_add'))
-        domain_id = visible_domain.id
+        if domain_error:
+            flash(domain_error, 'danger')
+            return _render_jobs_add_form(domains, jobs_form)
+        visible_domain = domain_result.domain
 
         try:
             selected_priority = int(jobs_form.priority.data)
@@ -300,7 +288,7 @@ def jobs_add():
         job = Jobs( name = jobs_form.name.data,
                     priority = job_priority,
                     status = 'Incomplete',
-                    domain_id = int(domain_id),
+                    domain_id = int(visible_domain.id),
                     owner_id = current_user.id)
         db.session.add(job)
         try:
@@ -309,6 +297,16 @@ def jobs_add():
             db.session.rollback()
             flash('Job could not be created because its name already exists or the selected domain changed. Refresh and retry.', 'danger')
             return _render_jobs_add_form(domains, jobs_form)
+        if domain_result.created:
+            record_audit_event(
+                'domain.create',
+                'domain',
+                target_id=visible_domain.id,
+                summary=f'Created shared domain "{visible_domain.name}" from job creation.',
+                details={'domain_name': visible_domain.name, 'source': 'jobs.add'},
+            )
+        elif jobs_form.domain_id.data == 'add_new':
+            flash(f'Using existing shared domain "{visible_domain.name}".', 'info')
         record_audit_event(
             'job.create',
             'job',

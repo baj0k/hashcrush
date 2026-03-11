@@ -6,11 +6,9 @@
 
 # Repository metadata and docs
 !.gitignore
-!.pylintrc
-!.github/
-!.github/workflows/**
 !LICENSE
 !README.md
+!TODO.md
 
 # Project configuration and entry points
 !pyproject.toml
@@ -19,6 +17,7 @@
 !requirements-test.txt
 !hashcrush.py
 !bootstrap_cli.py
+!external_repos_cli.py
 
 # Application source and frontend assets
 !hashcrush/**/*.py

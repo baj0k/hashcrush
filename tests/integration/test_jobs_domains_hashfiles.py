@@ -1,5 +1,7 @@
 """Integration tests for jobs, domains, and hashfiles."""
 # ruff: noqa: F403,F405
+from datetime import datetime, timedelta
+
 from tests.integration.support import *
 
 
@@ -75,6 +77,107 @@ def test_hashfiles_delete_requires_exact_name_confirmation():
         assert response.status_code == 200
         assert b"Type the hashfile name exactly to confirm deletion." in response.data
         assert _count_rows(Hashfiles, id=hashfile.id) == 1
+
+
+@pytest.mark.security
+def test_domains_list_paginates_results():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        db.session.add_all(
+            [Domains(name=f"Domain {index:03d}") for index in range(1, 56)]
+        )
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get("/domains?page=2")
+        assert response.status_code == 200
+        assert b"Domain 001" not in response.data
+        assert b"Domain 050" not in response.data
+        assert b"Domain 051" in response.data
+        assert b"Domain 055" in response.data
+        assert b"Page 2 / 2" in response.data
+
+
+@pytest.mark.security
+def test_hashfiles_list_paginates_results():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="Paged Hashfile Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        base_time = datetime(2026, 1, 1, 12, 0, 0)
+        db.session.add_all(
+            [
+                Hashfiles(
+                    name=f"hashfile-{index:03d}.txt",
+                    domain_id=domain.id,
+                    uploaded_at=base_time + timedelta(seconds=index),
+                )
+                for index in range(1, 56)
+            ]
+        )
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get("/hashfiles?page=2")
+        assert response.status_code == 200
+        assert b"hashfile-055.txt" not in response.data
+        assert b"hashfile-006.txt" not in response.data
+        assert b"hashfile-005.txt" in response.data
+        assert b"hashfile-001.txt" in response.data
+        assert b"Page 2 / 2" in response.data
+
+
+@pytest.mark.security
+def test_jobs_list_paginates_results():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="Paged Job Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        base_time = datetime(2026, 1, 1, 12, 0, 0)
+        db.session.add_all(
+            [
+                Jobs(
+                    name=f"job-{index:03d}",
+                    status="Ready",
+                    domain_id=domain.id,
+                    owner_id=admin.id,
+                    created_at=base_time + timedelta(seconds=index),
+                )
+                for index in range(1, 56)
+            ]
+        )
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get("/jobs?page=2")
+        assert response.status_code == 200
+        assert b"job-055" not in response.data
+        assert b"job-006" not in response.data
+        assert b"job-005" in response.data
+        assert b"job-001" in response.data
+        assert b"Page 2 / 2" in response.data
 
 @pytest.mark.security
 def test_jobs_list_displays_eta_and_percent_done_for_active_job():
@@ -587,6 +690,94 @@ def test_hashfiles_page_allows_admin_to_add_shared_hashfiles():
 
 
 @pytest.mark.security
+def test_hashfiles_add_allows_admin_to_create_new_domain_inline():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        form_response = client.get("/hashfiles/add")
+        assert form_response.status_code == 200
+        assert b"Add New Domain" in form_response.data
+        assert b"New Domain" in form_response.data
+
+        response = client.post(
+            "/hashfiles/add",
+            data={
+                "domain_id": "add_new",
+                "domain_name": "Inline Hashfile Domain",
+                "file_type": "hash_only",
+                "hash_type": "0",
+                "hashfile": (
+                    io.BytesIO(b"5f4dcc3b5aa765d61d8327deb882cf99\n"),
+                    "inline-hashes.txt",
+                ),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+
+        assert response.status_code == 200
+        assert b"Hashfile created!" in response.data
+
+        domain = _first_row(Domains, name="Inline Hashfile Domain")
+        assert domain is not None
+        hashfile = _first_row(Hashfiles, name="inline-hashes.txt")
+        assert hashfile is not None
+        assert hashfile.domain_id == domain.id
+
+
+@pytest.mark.security
+def test_hashfiles_add_reuses_existing_domain_when_admin_selects_add_new():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        existing_domain = Domains(name="Existing Hashfile Domain")
+        db.session.add(existing_domain)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/hashfiles/add",
+            data={
+                "domain_id": "add_new",
+                "domain_name": "Existing Hashfile Domain",
+                "file_type": "hash_only",
+                "hash_type": "0",
+                "hashfile": (
+                    io.BytesIO(b"5f4dcc3b5aa765d61d8327deb882cf99\n"),
+                    "existing-domain-hashes.txt",
+                ),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+
+        assert response.status_code == 200
+        assert _count_rows(Domains, name="Existing Hashfile Domain") == 1
+
+        hashfile = _first_row(Hashfiles, name="existing-domain-hashes.txt")
+        assert hashfile is not None
+        assert hashfile.domain_id == existing_domain.id
+
+        audit_events = [
+            entry.event_type
+            for entry in _all_rows(AuditLog, order_by=AuditLog.id.asc())
+        ]
+        assert audit_events.count("domain.create") == 0
+        assert "hashfile.create" in audit_events
+
+
+@pytest.mark.security
 def test_non_admin_cannot_add_hashfiles():
     app = _build_app()
     with app.app_context():
@@ -818,7 +1009,8 @@ def test_jobs_add_rejects_invalid_domain_selection():
 
         form_response = client.get("/jobs/add")
         assert form_response.status_code == 200
-        assert b"New Domain" not in form_response.data
+        assert b"Add New Domain" in form_response.data
+        assert b"New Domain" in form_response.data
 
         response = client.post(
             "/jobs/add",
@@ -832,6 +1024,85 @@ def test_jobs_add_rejects_invalid_domain_selection():
         assert b"Not a valid choice." in response.data
         assert _count_rows(Domains) == 0
         assert _count_rows(Jobs) == 0
+
+
+@pytest.mark.security
+def test_jobs_add_allows_admin_to_create_new_domain_inline():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/jobs/add",
+            data={
+                "name": "inline-domain-job",
+                "priority": "3",
+                "domain_id": "add_new",
+                "domain_name": "Inline Job Domain",
+            },
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 302
+
+        domain = _first_row(Domains, name="Inline Job Domain")
+        assert domain is not None
+
+        job = _first_row(Jobs, name="inline-domain-job")
+        assert job is not None
+        assert job.domain_id == domain.id
+
+        audit_events = [
+            entry.event_type
+            for entry in _all_rows(AuditLog, order_by=AuditLog.id.asc())
+        ]
+        assert "domain.create" in audit_events
+        assert "job.create" in audit_events
+
+
+@pytest.mark.security
+def test_jobs_add_non_admin_cannot_create_new_domain_inline():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        _seed_admin_user()
+        viewer = _seed_user(
+            "job-domain-viewer",
+            password="viewer-password",
+            admin=False,
+        )
+        _seed_settings()
+
+        domain = Domains(name="Shared Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, viewer)
+
+        form_response = client.get("/jobs/add")
+        assert form_response.status_code == 200
+        assert b"Add New Domain" not in form_response.data
+        assert b"New Domain" not in form_response.data
+
+        response = client.post(
+            "/jobs/add",
+            data={
+                "name": "blocked-inline-domain-job",
+                "priority": "3",
+                "domain_id": "add_new",
+                "domain_name": "Blocked Inline Domain",
+            },
+        )
+        assert response.status_code == 200
+        assert b"Not a valid choice." in response.data
+        assert _count_rows(Domains, name="Blocked Inline Domain") == 0
+        assert _count_rows(Jobs, name="blocked-inline-domain-job") == 0
 
 @pytest.mark.security
 def test_jobs_add_uses_existing_selected_domain():
@@ -862,6 +1133,47 @@ def test_jobs_add_uses_existing_selected_domain():
         assert job is not None
         assert job.domain_id == existing_domain.id
         assert _count_rows(Domains) == 1
+
+
+@pytest.mark.security
+def test_jobs_add_reuses_existing_domain_when_admin_selects_add_new():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        existing_domain = Domains(name="Existing Domain Name")
+        db.session.add(existing_domain)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/jobs/add",
+            data={
+                "name": "reuse-inline-domain-job",
+                "priority": "3",
+                "domain_id": "add_new",
+                "domain_name": "Existing Domain Name",
+            },
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 302
+        assert _count_rows(Domains, name="Existing Domain Name") == 1
+
+        job = _first_row(Jobs, name="reuse-inline-domain-job")
+        assert job is not None
+        assert job.domain_id == existing_domain.id
+
+        audit_events = [
+            entry.event_type
+            for entry in _all_rows(AuditLog, order_by=AuditLog.id.asc())
+        ]
+        assert audit_events.count("domain.create") == 0
+        assert "job.create" in audit_events
 
 @pytest.mark.security
 def test_jobs_add_rejects_whitespace_only_name():

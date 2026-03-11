@@ -155,11 +155,6 @@ class Config:
         fallback=5,
         minimum=1,
     )
-    AUTO_CREATE_SCHEMA = _parse_bool(
-        os.getenv("HASHCRUSH_AUTO_CREATE_SCHEMA")
-        or file_config.get("app", "auto_create_schema", fallback="true"),
-        True,
-    )
     HASHFILE_MAX_LINE_LENGTH = _parse_int(
         os.getenv("HASHCRUSH_HASHFILE_MAX_LINE_LENGTH")
         or file_config.get("app", "hashfile_max_line_length", fallback="50000"),

@@ -26,6 +26,7 @@ from hashcrush.models import (
     JobTasks,
     db,
 )
+from hashcrush.view_utils import LIST_PAGE_SIZE, paginate_scalars, parse_page_arg
 
 domains = Blueprint('domains', __name__)
 ACTIVE_JOB_STATUSES = {'Running', 'Queued', 'Paused', 'Ready', 'Incomplete'}
@@ -190,7 +191,13 @@ def _domain_delete_impact_previews(domain_ids: list[int]) -> dict[int, dict[str,
 @login_required
 def domains_list():
     """Function to return list of domains"""
-    domains = db.session.execute(_visible_domains_query()).scalars().all()
+    page = parse_page_arg(request.args.get('page'))
+    domains, pagination = paginate_scalars(
+        db.session,
+        _visible_domains_query(),
+        page=page,
+        per_page=LIST_PAGE_SIZE,
+    )
     domain_ids = [domain.id for domain in domains]
     jobs = (
         db.session.execute(
@@ -230,6 +237,7 @@ def domains_list():
         hashfiles_by_domain=hashfiles_by_domain,
         domainsForm=domains_form,
         domain_delete_impacts=domain_delete_impacts,
+        pagination=pagination,
     )
 
 

@@ -1,7 +1,5 @@
 """Flask routes to main page"""
 
-import json
-import re
 from collections import defaultdict
 
 from flask import Blueprint, flash, redirect, render_template
@@ -20,33 +18,9 @@ from hashcrush.models import (
     db,
 )
 from hashcrush.utils.utils import update_job_task_status
+from hashcrush.view_utils import parse_jobtask_progress
 
 main = Blueprint('main', __name__)
-
-
-def _parse_jobtask_progress(progress_payload: str | None) -> tuple[str | None, str | None]:
-    """Extract percent done and ETA from persisted JobTask.progress JSON."""
-    if not progress_payload:
-        return None, None
-
-    try:
-        parsed = json.loads(progress_payload)
-    except (TypeError, ValueError):
-        return None, None
-
-    if not isinstance(parsed, dict):
-        return None, None
-
-    eta_value = str(parsed.get('Time_Estimated') or '').strip() or None
-    progress_value = str(parsed.get('Progress') or '').strip()
-
-    percent_value = None
-    if progress_value:
-        match = re.search(r'\((\d+(?:\.\d+)?)%\)', progress_value)
-        if match:
-            percent_value = f"{match.group(1)}%"
-
-    return percent_value, eta_value
 
 @main.route("/")
 @login_required
@@ -140,7 +114,7 @@ def home():
         lambda: {'total': 0, 'completed': 0, 'running': 0}
     )
     for job_task in job_tasks:
-        percent_done, eta = _parse_jobtask_progress(job_task.progress)
+        percent_done, eta = parse_jobtask_progress(job_task.progress)
         job_task_runtime_progress[job_task.id] = {
             'percent_done': percent_done or 'N/A',
             'eta': eta or 'N/A',

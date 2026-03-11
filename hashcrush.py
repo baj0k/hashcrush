@@ -53,6 +53,13 @@ def _load_bootstrap_cli():
     return importlib.import_module("bootstrap_cli")
 
 
+def _load_external_repos_cli():
+    repo_root = Path(__file__).resolve().parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    return importlib.import_module("external_repos_cli")
+
+
 def _resolve_ssl_context(app) -> tuple[str, str]:
     """Return validated SSL cert/key paths from app configuration."""
     cert_path = os.path.abspath(
@@ -90,67 +97,19 @@ def _resolve_ssl_context(app) -> tuple[str, str]:
     return cert_path, key_path
 
 
-def ensure_admin_account_cli(db, bcrypt):
-    """If no admins exist prompt user to generate new admin account."""
-    from getpass import getpass
+def _runtime_bootstrap_errors(db) -> list[str]:
+    from hashcrush.setup import admin_user_needs_added, settings_needs_added
 
-    from hashcrush.models import Users
-    from hashcrush.setup import admin_user_needs_added
-
-    if not admin_user_needs_added(db):
-        print("✓ Admin user exists in database.")
-        return
-
-    print(
-        "\nInitial setup detected. HashCrush will now prompt you to setup an "
-        "Administrative account.\n"
-    )
-    admin_username = input(
-        "Enter username for the Administrator account. "
-        "You will use this to log into the app: "
-    )
-    while len(admin_username) == 0:
-        print("Error: You must provide a username.")
-        admin_username = input("Invalid username. Try again: ")
-
-    admin_password = getpass("Enter a password for the Administrator account: ")
-    admin_password_verify = getpass(
-        "Re-Enter the password for the Administrator account: "
-    )
-
-    while len(admin_password) < 14 or admin_password != admin_password_verify:
-        if len(admin_password) < 14:
-            print("Error: Password must be more than 14 characters.")
-        else:
-            print("Error: Passwords do not match.")
-        admin_password = getpass("Enter a password for the Administrator account: ")
-        admin_password_verify = getpass(
-            "Re-Enter the password for the Administrator account: "
+    errors: list[str] = []
+    if settings_needs_added(db):
+        errors.append(
+            "Settings row is missing. Run `python3 ./hashcrush.py setup` to bootstrap the instance."
         )
-
-    print("\nProvisioning account in database.")
-    hashed_password = bcrypt.generate_password_hash(admin_password).decode("utf-8")
-
-    user = Users(
-        username=admin_username,
-        password=hashed_password,
-        admin=True,
-    )
-    db.session.add(user)
-    db.session.commit()
-
-
-def ensure_settings_cli(db):
-    from hashcrush.models import Settings
-    from hashcrush.setup import settings_needs_added
-
-    if not settings_needs_added(db):
-        print("Settings exist in database.")
-        return
-
-    settings = Settings()
-    db.session.add(settings)
-    db.session.commit()
+    if admin_user_needs_added(db):
+        errors.append(
+            "Admin account is missing. Run `python3 ./hashcrush.py setup` to bootstrap the instance."
+        )
+    return errors
 
 
 def _can_run_break_glass(config_path: Path) -> bool:
@@ -257,7 +216,7 @@ def _build_root_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=("serve", "setup", "upgrade"),
+        choices=("serve", "setup", "upgrade", "external-repos"),
         help="command to run (default: serve)",
     )
     parser.add_argument(
@@ -328,8 +287,11 @@ def _run_serve(parsed_args: argparse.Namespace) -> int:
         if parsed_args.reset_admin_password:
             return reset_admin_password_cli(db, bcrypt, parsed_args.admin_username)
 
-        ensure_settings_cli(db)
-        ensure_admin_account_cli(db, bcrypt)
+        bootstrap_errors = _runtime_bootstrap_errors(db)
+        if bootstrap_errors:
+            for error in bootstrap_errors:
+                print(f"Error: {error}", file=sys.stderr)
+            return 1
 
         print("Done! Running HashCrush! Enjoy.")
 
@@ -355,21 +317,27 @@ def _run_setup(args: list[str]) -> int:
     return bootstrap_cli.main(args)
 
 
+def _run_external_repos(args: list[str]) -> int:
+    external_repos_cli = _load_external_repos_cli()
+    return external_repos_cli.main(args)
+
+
 def _run_upgrade(parsed_args: argparse.Namespace) -> int:
     create_app = _load_create_app()
     app = create_app(
         config_overrides={
             "ENABLE_LOCAL_EXECUTOR": False,
-            "AUTO_SETUP_DEFAULTS": False,
-            "AUTO_NORMALIZE_PLAINTEXT_STORAGE": False,
             "SKIP_RUNTIME_BOOTSTRAP": True,
-            "AUTO_CREATE_SCHEMA": False,
         }
     )
     with app.app_context():
         from hashcrush.db_upgrade import upgrade_database
+        from hashcrush.utils.utils import migrate_plaintext_storage_rows
 
         result = upgrade_database(dry_run=parsed_args.dry_run)
+        normalized_rows = 0
+        if not parsed_args.dry_run:
+            normalized_rows = migrate_plaintext_storage_rows()
 
     print(
         f"Schema version: {result.starting_version} -> {result.target_version}"
@@ -382,6 +350,11 @@ def _run_upgrade(parsed_args: argparse.Namespace) -> int:
             print(f"- v{step.version}: {step.summary}")
     else:
         print("No schema changes were required.")
+    if not parsed_args.dry_run and normalized_rows:
+        print(
+            "Normalized "
+            f"{normalized_rows} legacy plaintext row(s) to canonical hex storage."
+        )
     return 0
 
 
@@ -401,6 +374,8 @@ def cli(args) -> int:
             return _run_setup(argv[1:])
         if first == "upgrade":
             return _run_upgrade(_parse_upgrade_args(argv[1:]))
+        if first == "external-repos":
+            return _run_external_repos(argv[1:])
         if first == "serve":
             return _run_serve(_parse_serve_args(argv[1:]))
         if first.startswith("-"):

@@ -1,23 +1,13 @@
 """Integration tests for CLI bootstrap, setup, schema, and runtime bootstrap."""
 # ruff: noqa: F403,F405
+import logging
+import ssl
+from pathlib import Path
+
 from sqlalchemy import text
 
 from tests.integration.support import *
 
-
-@pytest.mark.security
-def test_ensure_settings_cli_adds_settings_only_when_missing():
-    cli_module = _load_cli_module()
-    app = _build_app()
-    with app.app_context():
-        db.create_all()
-        assert _count_rows(Settings) == 0
-
-        cli_module.ensure_settings_cli(db)
-        assert _count_rows(Settings) == 1
-
-        cli_module.ensure_settings_cli(db)
-        assert _count_rows(Settings) == 1
 
 @pytest.mark.security
 def test_cli_resolve_ssl_context_uses_configured_paths(tmp_path):
@@ -50,6 +40,80 @@ def test_cli_resolve_ssl_context_rejects_missing_files(tmp_path):
 
     with pytest.raises(RuntimeError, match="SSL certificate file not found"):
         cli_module._resolve_ssl_context(_App())
+
+
+@pytest.mark.security
+def test_tls_disconnect_log_filter_only_suppresses_werkzeug_ssl_eof():
+    from hashcrush import _SuppressWerkzeugTlsDisconnects
+
+    log_filter = _SuppressWerkzeugTlsDisconnects()
+
+    werkzeug_record = logging.LogRecord(
+        name="werkzeug",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg="Error on request:",
+        args=(),
+        exc_info=(ssl.SSLEOFError, ssl.SSLEOFError("EOF"), None),
+    )
+    app_record = logging.LogRecord(
+        name="hashcrush",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg="App error",
+        args=(),
+        exc_info=(ssl.SSLEOFError, ssl.SSLEOFError("EOF"), None),
+    )
+
+    assert log_filter.filter(werkzeug_record) is False
+    assert log_filter.filter(app_record) is True
+
+
+@pytest.mark.security
+def test_attach_werkzeug_tls_disconnect_filter_adds_filter_to_loggers(monkeypatch):
+    from hashcrush import (
+        _attach_werkzeug_tls_disconnect_filter,
+        _SuppressWerkzeugTlsDisconnects,
+    )
+
+    class _Handler:
+        def __init__(self):
+            self.filters = []
+
+        def addFilter(self, log_filter):
+            self.filters.append(log_filter)
+
+    class _Logger:
+        def __init__(self):
+            self.filters = []
+            self.handlers = [_Handler()]
+
+        def addFilter(self, log_filter):
+            self.filters.append(log_filter)
+
+    loggers = {
+        "werkzeug": _Logger(),
+        "werkzeug.serving": _Logger(),
+    }
+    real_get_logger = logging.getLogger
+
+    def fake_get_logger(name=None):
+        if name in loggers:
+            return loggers[name]
+        return real_get_logger(name)
+
+    monkeypatch.setattr(logging, "getLogger", fake_get_logger)
+
+    _attach_werkzeug_tls_disconnect_filter()
+
+    for logger in loggers.values():
+        assert any(isinstance(item, _SuppressWerkzeugTlsDisconnects) for item in logger.filters)
+        assert any(
+            isinstance(item, _SuppressWerkzeugTlsDisconnects)
+            for item in logger.handlers[0].filters
+        )
 
 @pytest.mark.security
 def test_setup_parse_args_accepts_test_flag():
@@ -111,6 +175,80 @@ def test_hashcrush_cli_upgrade_subcommand_runs_schema_upgrade(monkeypatch):
     assert result == 0
     assert captured["dry_run"] is True
 
+
+@pytest.mark.security
+def test_hashcrush_cli_serve_refuses_missing_runtime_bootstrap_state(monkeypatch, capsys):
+    cli_module = _load_cli_module()
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+
+    monkeypatch.setattr(cli_module, "ensure_flask_bcrypt", lambda: None)
+    monkeypatch.setattr(cli_module, "_load_create_app", lambda: (lambda: app))
+
+    result = cli_module._run_serve(cli_module._parse_serve_args([]))
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert "Settings row is missing" in captured.err
+    assert "Admin account is missing" in captured.err
+
+
+@pytest.mark.security
+def test_hashcrush_cli_external_repos_subcommand_delegates(monkeypatch):
+    cli_module = _load_cli_module()
+    captured = {}
+
+    class _ExternalReposModule:
+        @staticmethod
+        def main(argv=None):
+            captured["argv"] = argv
+            return 29
+
+    monkeypatch.setattr(
+        cli_module, "_load_external_repos_cli", lambda: _ExternalReposModule()
+    )
+
+    result = cli_module.cli(
+        [
+            "hashcrush.py",
+            "external-repos",
+            "--base-dir",
+            "/tmp/hashcrush-vendor",
+            "--seclists-ref",
+            "abc123",
+            "--hashcat-ref",
+            "def456",
+        ]
+    )
+
+    assert result == 29
+    assert captured["argv"] == [
+        "--base-dir",
+        "/tmp/hashcrush-vendor",
+        "--seclists-ref",
+        "abc123",
+        "--hashcat-ref",
+        "def456",
+    ]
+
+
+@pytest.mark.security
+def test_import_hash_only_normalizes_string_hash_type_before_db_lookup():
+    from hashcrush.utils.utils import import_hash_only
+
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+
+        first_id = import_hash_only("5f4dcc3b5aa765d61d8327deb882cf99", "0")
+        second_id = import_hash_only("5f4dcc3b5aa765d61d8327deb882cf99", "0")
+
+        persisted = db.session.get(Hashes, first_id)
+        assert second_id == first_id
+        assert persisted is not None
+        assert persisted.hash_type == 0
+
 @pytest.mark.security
 def test_hashcrush_cli_rejects_unknown_root_command():
     cli_module = _load_cli_module()
@@ -119,6 +257,83 @@ def test_hashcrush_cli_rejects_unknown_root_command():
         cli_module.cli(["hashcrush.py", "legacy-mode"])
 
     assert exc_info.value.code == 2
+
+
+@pytest.mark.security
+def test_external_repos_cli_updates_config_and_pins_refs(tmp_path, monkeypatch):
+    external_module = _load_external_repos_module()
+    config_path = tmp_path / "config.conf"
+    config_path.write_text(
+        "[database]\nuri=\n\n[app]\nwordlists_path=/old/wordlists\nrules_path=/old/rules\n",
+        encoding="utf-8",
+    )
+
+    commands: list[tuple[str, ...]] = []
+    rev_parse_values = {
+        ("-C", str(tmp_path / "vendor" / "SecLists"), "rev-parse", "HEAD"): "sec123",
+        ("-C", str(tmp_path / "vendor" / "hashcat"), "rev-parse", "HEAD"): "hash456",
+    }
+
+    def fake_run_git(*args, capture_output=False):
+        commands.append(tuple(args))
+        if args[:3] == ("-C", str(tmp_path / "vendor" / "SecLists"), "status"):
+            return ""
+        if args[:3] == ("-C", str(tmp_path / "vendor" / "hashcat"), "status"):
+            return ""
+        return rev_parse_values.get(tuple(args), "")
+
+    monkeypatch.setattr(external_module, "_run_git", fake_run_git)
+    real_isdir = external_module.os.path.isdir
+    monkeypatch.setattr(
+        external_module.os.path,
+        "isdir",
+        lambda path: real_isdir(path) or path.endswith(".git"),
+    )
+
+    result = external_module.main(
+        [
+            "--base-dir",
+            str(tmp_path / "vendor"),
+            "--seclists-ref",
+            "refs/tags/2026.1",
+            "--hashcat-ref",
+            "refs/tags/v6.2.6",
+            "--config-path",
+            str(config_path),
+        ]
+    )
+
+    parser = ConfigParser()
+    parser.read(config_path, encoding="utf-8")
+
+    assert result == 0
+    assert parser.get("app", "wordlists_path") == str(tmp_path / "vendor" / "SecLists" / "Passwords")
+    assert parser.get("app", "rules_path") == str(tmp_path / "vendor" / "hashcat" / "rules")
+    assert ("-C", str(tmp_path / "vendor" / "SecLists"), "checkout", "--detach", "refs/tags/2026.1") in commands
+    assert ("-C", str(tmp_path / "vendor" / "hashcat"), "checkout", "--detach", "refs/tags/v6.2.6") in commands
+
+
+@pytest.mark.security
+def test_external_repos_cli_rejects_dirty_existing_repo(tmp_path, monkeypatch):
+    external_module = _load_external_repos_module()
+    repo_dir = tmp_path / "vendor" / "SecLists"
+    (repo_dir / ".git").mkdir(parents=True)
+
+    def fake_run_git(*args, capture_output=False):
+        if args[:3] == ("-C", str(repo_dir), "status"):
+            return " M README.md"
+        return ""
+
+    monkeypatch.setattr(external_module, "_run_git", fake_run_git)
+
+    with pytest.raises(
+        RuntimeError, match="uncommitted changes and cannot be repinned safely"
+    ):
+        external_module._clone_or_refresh_repo(
+            external_module.DEFAULT_SECLISTS_URL,
+            str(repo_dir),
+            "Passwords",
+        )
 
 @pytest.mark.security
 def test_setup_seed_test_environment_creates_dummy_fixture_set(tmp_path, monkeypatch):
@@ -219,7 +434,7 @@ def test_upgrade_database_migrates_v2_schema_forward_to_current_version():
         )
         db.session.execute(
             text(
-                'ALTER TABLE "settings" ADD COLUMN "enabled_job_weights" BOOLEAN NOT NULL DEFAULT 0'
+                'ALTER TABLE "settings" ADD COLUMN "enabled_job_weights" BOOLEAN NOT NULL DEFAULT false'
             )
         )
         db.session.add(SchemaVersion(id=1, version=2, app_version="1.0"))
@@ -351,104 +566,85 @@ def test_add_default_tasks_no_longer_depend_on_admin_id():
         assert json.loads(task_group.tasks) == [task.id for task in seeded_tasks]
 
 @pytest.mark.security
-def test_setup_admin_password_flow_uses_existing_admin_when_admin_is_not_id_one():
-    from hashcrush.setup import add_admin_user
-
+def test_seed_initial_runtime_state_creates_settings_admin_and_default_tasks(
+    monkeypatch,
+):
+    bootstrap_module = _load_bootstrap_module()
     app = _build_app()
+
     with app.app_context():
         db.create_all()
-        placeholder = _seed_user(
-            "placeholder-user", password="placeholder-user-password", admin=False
-        )
-        add_admin_user(db, bcrypt)
-        admin = _first_row(Users, admin=True)
+
+    monkeypatch.setattr(bootstrap_module, "_build_seed_app", lambda: app)
+    bootstrap_module._seed_initial_runtime_state(
+        "bootstrap-admin",
+        "LongEnoughBootstrapPassword!",
+    )
+
+    with app.app_context():
+        admin = _first_row(Users, username="bootstrap-admin", admin=True)
         assert admin is not None
-        assert admin.id != placeholder.id
+        assert bcrypt.check_password_hash(admin.password, "LongEnoughBootstrapPassword!")
+        assert _count_rows(Settings) == 1
+        assert _count_rows(Tasks) == 10
+        assert _first_row(TaskGroups, name="maskmode 1-10") is not None
 
-        client = app.test_client()
-        get_response = client.get(
-            "/setup/admin-pass",
-            environ_overrides={"REMOTE_ADDR": "127.0.0.1"},
-        )
-        assert get_response.status_code == 200
-        assert b"admin" in get_response.data
-
-        response = client.post(
-            "/setup/admin-pass",
-            data={
-                "username": "renamed-admin",
-                "password": "longer-admin-pass",
-                "confirm_password": "longer-admin-pass",
-            },
-            environ_overrides={"REMOTE_ADDR": "127.0.0.1"},
-        )
-        assert response.status_code == 302
-
-        db.session.refresh(admin)
-        db.session.refresh(placeholder)
-        assert admin.username == "renamed-admin"
-        assert bcrypt.check_password_hash(admin.password, "longer-admin-pass")
-        assert placeholder.username == "placeholder-user"
 
 @pytest.mark.security
-def test_setup_admin_password_flow_trims_username_input():
-    from hashcrush.setup import add_admin_user
-
+def test_runtime_bootstrap_errors_report_missing_settings_and_admin():
+    cli_module = _load_cli_module()
     app = _build_app()
+
     with app.app_context():
         db.create_all()
-        add_admin_user(db, bcrypt)
-        admin = _first_row(Users, admin=True)
-        assert admin is not None
+        errors = cli_module._runtime_bootstrap_errors(db)
 
-        client = app.test_client()
-        response = client.post(
-            "/setup/admin-pass",
-            data={
-                "username": "  trimmed-admin  ",
-                "password": "longer-admin-pass",
-                "confirm_password": "longer-admin-pass",
-            },
-            environ_overrides={"REMOTE_ADDR": "127.0.0.1"},
-        )
-        assert response.status_code == 302
+    assert any("Settings row is missing" in error for error in errors)
+    assert any("Admin account is missing" in error for error in errors)
 
-        db.session.refresh(admin)
-        assert admin.username == "trimmed-admin"
 
 @pytest.mark.security
-def test_setup_admin_password_flow_handles_duplicate_username_cleanly():
-    from hashcrush.setup import add_admin_user
+def test_upgrade_command_normalizes_legacy_plaintext_storage(monkeypatch):
+    cli_module = _load_cli_module()
+    from hashcrush.db_upgrade import CURRENT_SCHEMA_VERSION, UpgradeResult
 
     app = _build_app()
     with app.app_context():
         db.create_all()
-        existing_user = _seed_user(
-            "existing-user", password="existing-user-password", admin=False
+        db.session.add(
+            Hashes(
+                sub_ciphertext="legacy-plaintext-subcipher",
+                ciphertext="legacy-plaintext-cipher",
+                hash_type=1000,
+                cracked=True,
+                plaintext="Password123!",
+            )
         )
-        add_admin_user(db, bcrypt)
-        admin = _first_row(Users, admin=True)
-        assert admin is not None
-        assert admin.id != existing_user.id
+        db.session.commit()
 
-        client = app.test_client()
-        response = client.post(
-            "/setup/admin-pass",
-            data={
-                "username": "existing-user",
-                "password": "longer-admin-pass",
-                "confirm_password": "longer-admin-pass",
-            },
-            environ_overrides={"REMOTE_ADDR": "127.0.0.1"},
-        )
-        assert response.status_code == 200
-        assert (
-            b"Admin account could not be updated because that username already exists."
-            in response.data
+    def fake_upgrade_database(*, dry_run=False):
+        return UpgradeResult(
+            starting_version=CURRENT_SCHEMA_VERSION,
+            target_version=CURRENT_SCHEMA_VERSION,
+            applied_steps=(),
+            initialized_empty_schema=False,
+            dry_run=dry_run,
         )
 
-        db.session.refresh(admin)
-        assert admin.username == "admin"
+    monkeypatch.setattr(
+        cli_module,
+        "_load_create_app",
+        lambda: (lambda config_overrides=None: app),
+    )
+    monkeypatch.setattr("hashcrush.db_upgrade.upgrade_database", fake_upgrade_database)
+
+    result = cli_module.cli(["hashcrush.py", "upgrade"])
+
+    assert result == 0
+    with app.app_context():
+        hash_row = _first_row(Hashes, ciphertext="legacy-plaintext-cipher")
+        assert hash_row is not None
+        assert hash_row.plaintext == "Password123!".encode("latin-1").hex()
 
 @pytest.mark.security
 def test_schema_declares_expected_constraints_and_indexes():
@@ -546,53 +742,30 @@ def test_schema_declares_expected_constraints_and_indexes():
         assert "TEXT" in task_groups_columns["tasks"]
 
 @pytest.mark.security
-def test_create_app_bootstraps_schema_for_empty_database(tmp_path):
-    db_path = tmp_path / "bootstrap.db"
-    app = create_app(
-        testing=False,
-        config_overrides={
-            "SECRET_KEY": "phase1-test-secret",
-            "SQLALCHEMY_DATABASE_URI": f"sqlite:///{db_path}",
-            "SQLALCHEMY_TRACK_MODIFICATIONS": False,
-            "AUTO_SETUP_DEFAULTS": False,
-            "ENABLE_LOCAL_EXECUTOR": False,
-            "SKIP_RUNTIME_BOOTSTRAP": True,
-            "AUTO_NORMALIZE_PLAINTEXT_STORAGE": False,
-        },
-    )
-
-    with app.app_context():
-        inspector = inspect(db.engine)
-        table_names = set(inspector.get_table_names())
-        assert {
-            "users",
-            "settings",
-            "jobs",
-            "job_tasks",
-            "domains",
-            "hashfiles",
-            "hashfile_hashes",
-            "rules",
-            "wordlists",
-            "tasks",
-            "task_groups",
-            "hashes",
-            "auth_throttle",
-        }.issubset(table_names)
+def test_create_app_rejects_uninitialized_database():
+    database_uri = create_managed_postgres_database()
+    with pytest.raises(RuntimeError, match="Database schema is uninitialized"):
+        create_app(
+            testing=False,
+            config_overrides={
+                "SECRET_KEY": "phase1-test-secret",
+                "SQLALCHEMY_DATABASE_URI": database_uri,
+                "SQLALCHEMY_TRACK_MODIFICATIONS": False,
+                "ENABLE_LOCAL_EXECUTOR": False,
+            },
+        )
 
 @pytest.mark.security
-def test_create_app_rejects_unversioned_non_empty_database(tmp_path):
-    db_path = tmp_path / "legacy-untracked.db"
+def test_create_app_rejects_unversioned_non_empty_database():
+    database_uri = create_managed_postgres_database()
     bootstrap_app = create_app(
         testing=True,
         config_overrides={
             "SECRET_KEY": "phase1-test-secret",
-            "SQLALCHEMY_DATABASE_URI": f"sqlite:///{db_path}",
+            "SQLALCHEMY_DATABASE_URI": database_uri,
             "SQLALCHEMY_TRACK_MODIFICATIONS": False,
-            "AUTO_SETUP_DEFAULTS": False,
             "ENABLE_LOCAL_EXECUTOR": False,
             "SKIP_RUNTIME_BOOTSTRAP": True,
-            "AUTO_NORMALIZE_PLAINTEXT_STORAGE": False,
         },
     )
 
@@ -607,12 +780,9 @@ def test_create_app_rejects_unversioned_non_empty_database(tmp_path):
             testing=False,
             config_overrides={
                 "SECRET_KEY": "phase1-test-secret",
-                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{db_path}",
+                "SQLALCHEMY_DATABASE_URI": database_uri,
                 "SQLALCHEMY_TRACK_MODIFICATIONS": False,
-                "AUTO_SETUP_DEFAULTS": False,
                 "ENABLE_LOCAL_EXECUTOR": False,
-                "SKIP_RUNTIME_BOOTSTRAP": True,
-                "AUTO_NORMALIZE_PLAINTEXT_STORAGE": False,
             },
         )
 
@@ -732,13 +902,13 @@ def test_runtime_bootstrap_uses_configured_runtime_root(tmp_path):
 
 @pytest.mark.security
 def test_setup_defaults_no_longer_seeds_rules_or_wordlists():
-    from hashcrush import setup_defaults_if_needed
+    from hashcrush.setup import add_default_tasks
 
     app = _build_app()
     with app.app_context():
         db.create_all()
 
-        setup_defaults_if_needed()
+        add_default_tasks(db)
 
         assert _count_rows(Rules) == 0
         assert _count_rows(Wordlists) == 0
@@ -976,6 +1146,71 @@ def test_config_builds_postgresql_uri_from_discrete_fields(tmp_path, monkeypatch
         == "postgresql+psycopg://app-user:app-pass@db.internal:5433/hashcrush_app"
     )
 
+
+@pytest.mark.security
+def test_postgres_test_backend_prefers_configured_app_database_uri(tmp_path, monkeypatch):
+    import tests.db_runtime as db_runtime
+
+    config_path = tmp_path / "config.conf"
+    config_path.write_text(
+        "[database]\n"
+        "host = db.internal\n"
+        "port = 5432\n"
+        "name = hashcrush_app\n"
+        "username = app-user\n"
+        "password = app-pass\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("HASHCRUSH_TEST_POSTGRES_URI", raising=False)
+    monkeypatch.delenv("HASHCRUSH_DATABASE_URI", raising=False)
+    monkeypatch.setenv("HASHCRUSH_CONFIG_PATH", str(config_path))
+
+    assert (
+        db_runtime._postgres_base_uri()
+        == "postgresql+psycopg://app-user:app-pass@db.internal:5432/hashcrush_app"
+    )
+
+
+@pytest.mark.security
+def test_create_managed_postgres_database_prefers_schema_isolation(monkeypatch):
+    import tests.db_runtime as db_runtime
+
+    captured = {}
+
+    class _Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, statement, params=None):
+            captured["statement"] = str(statement)
+            captured["params"] = params
+
+    class _Engine:
+        def connect(self):
+            return _Connection()
+
+        def dispose(self):
+            captured["disposed"] = True
+
+    monkeypatch.setenv(
+        "HASHCRUSH_TEST_POSTGRES_URI",
+        "postgresql+psycopg://app-user:app-pass@db.internal:5432/hashcrush_app",
+    )
+    monkeypatch.delenv("HASHCRUSH_TEST_POSTGRES_ADMIN_URI", raising=False)
+    monkeypatch.setattr(db_runtime, "create_engine", lambda *args, **kwargs: _Engine())
+
+    database_uri = db_runtime.create_managed_postgres_database()
+
+    assert 'CREATE SCHEMA "hashcrush_test_' in captured["statement"]
+    assert "options=-csearch_path%3Dhashcrush_test_" in database_uri
+    assert database_uri.startswith(
+        "postgresql+psycopg://app-user:app-pass@db.internal:5432/hashcrush_app?"
+    )
+
 @pytest.mark.security
 def test_bootstrap_local_postgres_invokes_psql(monkeypatch):
     bootstrap_module = _load_bootstrap_module()
@@ -1120,16 +1355,15 @@ def test_netntlm_validator_still_rejects_duplicate_user_host(tmp_path):
 
 @pytest.mark.security
 def test_production_session_cookie_defaults_are_hardened():
+    database_uri = create_managed_postgres_database()
     app = create_app(
         testing=False,
         config_overrides={
             "SECRET_KEY": "phase1-test-secret",
-            "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
+            "SQLALCHEMY_DATABASE_URI": database_uri,
             "SQLALCHEMY_TRACK_MODIFICATIONS": False,
-            "AUTO_SETUP_DEFAULTS": False,
             "ENABLE_LOCAL_EXECUTOR": False,
             "SKIP_RUNTIME_BOOTSTRAP": True,
-            "AUTO_NORMALIZE_PLAINTEXT_STORAGE": False,
             "SESSION_COOKIE_SECURE": None,
         },
     )

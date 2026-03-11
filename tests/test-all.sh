@@ -22,6 +22,7 @@ fi
 
 export PYTHONPATH="${PYTHONPATH:-.}"
 export HASHCRUSH_E2E_MODE="${HASHCRUSH_E2E_MODE:-local}"
+echo "Test database backend: postgres"
 
 echo "[1/2] Running non-E2E tests"
 pytest -q -m "not e2e and not e2e_external" -rs

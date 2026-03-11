@@ -17,9 +17,11 @@ from sqlalchemy.sql import exists
 
 from hashcrush.audit import record_audit_event
 from hashcrush.authz import admin_required_redirect, visible_jobs_query
+from hashcrush.domains.service import resolve_or_create_shared_domain
 from hashcrush.hashfiles.forms import HashfilesAddForm
 from hashcrush.hashfiles.service import create_hashfile_from_form
 from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles, Jobs, db
+from hashcrush.view_utils import LIST_PAGE_SIZE, paginate_scalars, parse_page_arg
 
 hashfiles = Blueprint('hashfiles', __name__)
 
@@ -148,9 +150,13 @@ def _render_hashfiles_add_form(form, domains):
 
 def hashfiles_list():
     """Function to return list of hashfiles"""
-    hashfiles = db.session.execute(
-        select(Hashfiles).order_by(Hashfiles.uploaded_at.desc())
-    ).scalars().all()
+    page = parse_page_arg(request.args.get('page'))
+    hashfiles, pagination = paginate_scalars(
+        db.session,
+        select(Hashfiles).order_by(Hashfiles.uploaded_at.desc()),
+        page=page,
+        per_page=LIST_PAGE_SIZE,
+    )
     domain_ids = sorted({hashfile.domain_id for hashfile in hashfiles})
     domains = (
         db.session.execute(
@@ -243,6 +249,7 @@ def hashfiles_list():
         jobs_by_hashfile=jobs_by_hashfile,
         hash_type_dict=hash_type_dict,
         hashfile_delete_impacts=hashfile_delete_impacts,
+        pagination=pagination,
     )
 
 
@@ -254,15 +261,21 @@ def hashfiles_add():
 
     domains = _shared_domains()
     form = HashfilesAddForm()
-    form.domain_id.choices = [(0, '--SELECT DOMAIN--')] + [
-        (domain.id, domain.name) for domain in domains
+    form.domain_id.choices = [('', '--SELECT DOMAIN--')] + [
+        (str(domain.id), domain.name) for domain in domains
     ]
+    form.domain_id.choices.append(('add_new', 'Add New Domain'))
 
     if request.method == 'POST' and form.validate_on_submit():
-        domain = db.session.get(Domains, form.domain_id.data)
-        if not domain:
-            flash('Selected domain is invalid or no longer available.', 'danger')
+        domain_result, domain_error = resolve_or_create_shared_domain(
+            form.domain_id.data,
+            new_domain_name=form.domain_name.data,
+            allow_create=True,
+        )
+        if domain_error:
+            flash(domain_error, 'danger')
             return _render_hashfiles_add_form(form, domains)
+        domain = domain_result.domain
 
         creation_result, error_message = create_hashfile_from_form(
             form,
@@ -274,6 +287,16 @@ def hashfiles_add():
 
         hashfile = creation_result.hashfile
         db.session.commit()
+        if domain_result.created:
+            record_audit_event(
+                'domain.create',
+                'domain',
+                target_id=domain.id,
+                summary=f'Created shared domain "{domain.name}" from hashfile creation.',
+                details={'domain_name': domain.name, 'source': 'hashfiles.add'},
+            )
+        elif form.domain_id.data == 'add_new':
+            flash(f'Using existing shared domain "{domain.name}".', 'info')
         record_audit_event(
             'hashfile.create',
             'hashfile',

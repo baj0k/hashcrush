@@ -3,28 +3,41 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@3.1.0/dist/chart.min.js"></script>
 
 <style>
+    :root {
+        --analytics-bg: #151515;
+        --analytics-bg-strong: #0f0f0f;
+        --analytics-border: #333;
+        --analytics-text: rgba(204, 204, 204, 0.92);
+        --analytics-text-muted: rgba(170, 170, 170, 0.9);
+        --analytics-accent: #997;
+        --analytics-accent-hover: #b3aa8a;
+    }
     .download_btn{
         float: right;
-        color: gray;
+        color: var(--analytics-text-muted);
     }
     .download_btn:hover{
-        color: #007bff;
-    }   
-    #config_options .content-section{
+        color: var(--analytics-accent-hover);
+    }
+    #config_options .analytics-filter-shell{
         margin-right: 20px;
     }
     #config_options .btn{
         padding:2px 5px;
     }
+    #config_options .btn-default{
+        min-width: 180px;
+    }
     #config_options{
         margin-bottom: 20px;
     }
     #config_options .input-group-text{
-        background-color: white;
-        border: none;      
+        background-color: var(--analytics-bg-strong);
+        border: 1px solid var(--analytics-border);
+        color: var(--analytics-text-muted);
     }
     #toggle_icons{
-        color: #007bff;
+        color: var(--analytics-accent);
         font-size: 22px;
     }
     /*Remove default blue border*/
@@ -37,14 +50,77 @@
     /*Limit how big the dropdown can get with large amounts of data*/
     .dropdown-menu{
         max-height: 350px;
-        overflow-y: auto;    
+        overflow-y: auto;
+    }
+    .analytics-filter-shell{
+        display: inline-block;
+    }
+    .analytics-filter-shell .btn-default{
+        background-color: var(--analytics-bg-strong);
+        border: 1px solid var(--analytics-border);
+        color: var(--analytics-text);
+    }
+    .analytics-filter-shell .btn-default:hover,
+    .analytics-filter-shell .btn-default:focus,
+    .analytics-filter-shell .show > .btn-default.dropdown-toggle{
+        background-color: #262626;
+        border-color: #4a4a4a;
+        color: #fff;
     }
 </style>
 
 <script>
+    const chartTheme = {
+        background: "#151515",
+        backgroundStrong: "#0f0f0f",
+        border: "rgba(68, 68, 68, 0.7)",
+        text: "rgba(204, 204, 204, 0.92)",
+        textMuted: "rgba(170, 170, 170, 0.9)",
+        accent: "#997",
+        accentHover: "#b3aa8a",
+    };
+    const chartPalette = {
+        danger: "rgba(180, 109, 99, 0.95)",
+        warning: "rgba(184, 155, 87, 0.95)",
+        warningSoft: "rgba(192, 179, 127, 0.95)",
+        success: "rgba(136, 154, 91, 0.95)",
+        neutral: "rgba(127, 127, 114, 0.92)",
+        stroke: "#111111",
+    };
+
+    Chart.defaults.color = chartTheme.textMuted;
+    Chart.defaults.borderColor = chartTheme.border;
+
     var dict = { 1: "recovered_accounts", 2: "password_complexity", 3:"recovered_hashes", 4:"composition_makeup", 5:"passwords_count_len", 6:"top_10_passwords"};
     var toggle = false;
     extendChart();
+
+    function applyChartTheme(options) {
+        const themedOptions = options || {};
+        themedOptions.plugins = themedOptions.plugins || {};
+        if (themedOptions.plugins.legend !== false) {
+            themedOptions.plugins.legend = themedOptions.plugins.legend || {};
+            themedOptions.plugins.legend.labels = themedOptions.plugins.legend.labels || {};
+            themedOptions.plugins.legend.labels.color = chartTheme.textMuted;
+        }
+        if (themedOptions.plugins.title) {
+            themedOptions.plugins.title.color = chartTheme.text;
+        }
+        if (themedOptions.scales) {
+            ["x", "y"].forEach(function(axis) {
+                if (!themedOptions.scales[axis]) {
+                    return;
+                }
+                themedOptions.scales[axis].ticks = themedOptions.scales[axis].ticks || {};
+                themedOptions.scales[axis].ticks.color = chartTheme.textMuted;
+                themedOptions.scales[axis].grid = themedOptions.scales[axis].grid || {};
+                themedOptions.scales[axis].grid.color = chartTheme.border;
+                themedOptions.scales[axis].border = themedOptions.scales[axis].border || {};
+                themedOptions.scales[axis].border.color = chartTheme.border;
+            });
+        }
+        return themedOptions;
+    }
 
     function extendChart() { // add text to the middle of all doughnut charts
         var originalDraw = Chart.controllers.doughnut.prototype.draw;
@@ -61,53 +137,53 @@
             'Noto Sans',sans-serif,'Apple Color Emoji','Segoe UI Emoji','Segoe UI Symbol','Noto Color Emoji'`
             const fontSize = chartArea.right / 15
             ctx.font = `${fontStyle} ${fontSize}px ${fontFamily}`
-            ctx.fillStyle = 'rgba(0,0,0,0.6)' //Text color
+            ctx.fillStyle = chartTheme.text //Text color
 
             //Center text
             ctx.textAlign = 'center'
             ctx.textBaseline = 'middle'
-            var value = this.chart.options.percent ? this.chart.options.percent : "";             
+            var value = this.chart.options.percent ? this.chart.options.percent : "";
             ctx.fillText(value, (chartArea.right + chartArea.left) / 2, (chartArea.bottom + chartArea.top) / 2)
-            
+
             //Set chart background color to white
             ctx.globalCompositeOperation = 'destination-over';
-            ctx.fillStyle = 'white';
+            ctx.fillStyle = chartTheme.backgroundStrong;
             ctx.fillRect(0, 0, this.chart.width, this.chart.height);
         };
     }
 
-    function chart_download(id) {       
+    function chart_download(id) {
             var chart = doughNut;
             document.getElementById(dict[id]).onclick = function () {
-            //The title is not part of the graph canvas so it would not show up in the image download 
-            //So we add a hidden title, and only show it when downloading the image. 
+            //The title is not part of the graph canvas so it would not show up in the image download
+            //So we add a hidden title, and only show it when downloading the image.
             chart.options.animation.duration = 0;
             chart.options.plugins.title.display = true;
-            chart.update();    
+            chart.update();
             //Create a download link
             var a = document.createElement('a');
             a.href = chart.toBase64Image();
             a.download = dict[id] + '.png';
-            a.click();         
+            a.click();
             //Hide the title again
             chart.options.plugins.title.display = false;
             chart.update();
-            //Turn back on animations 
+            //Turn back on animations
             chart.options.animation.duration = 1000;
-            chart.update();          
+            chart.update();
         };
     }
 
     function get_chart(id){
         document.getElementById(dict[id]).click();
     }
-    
+
     function chart_download_all(){
         if(confirm("This will download all charts on the page")){
             for(var i=1;i<=6;i++){
-                get_chart(i); 
-            } 
-        }   
+                get_chart(i);
+            }
+        }
     }
 
     function show_hide(){
@@ -115,14 +191,14 @@
             document.querySelectorAll('.download_btn').forEach(function(el) {
                 el.style.display = 'block';
             });
-            document.getElementById("toggle_icons").style.color = "#007bff";         
+            document.getElementById("toggle_icons").style.color = chartTheme.accent;
             toggle = false;
         }
         else{
             document.querySelectorAll('.download_btn').forEach(function(el) {
                 el.style.display = 'none';
             });
-            document.getElementById("toggle_icons").style.color = "gray";
+            document.getElementById("toggle_icons").style.color = chartTheme.textMuted;
             toggle = true;
         }
     }
@@ -133,9 +209,9 @@
 <br>
 <br>
 <div id="config_options" class="form-row">
-    <div class="col-auto mb-1"> 
+    <div class="col-auto mb-1">
         <span>Domains &nbsp;</h4>
-        <div class="content-section btn btn-outline-secondary">
+        <div class="analytics-filter-shell">
             <div class="dropdown">
                 <button class="btn btn-default dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown"
                     aria-haspopup="true" aria-expanded="false">
@@ -154,7 +230,7 @@
                         <a class="dropdown-item" href="/analytics"> All Domains </a>
                         <div class="dropdown-divider"></div>
                     {% endif %}
-        
+
                     {% for domain in domains %}
                         <a class="dropdown-item" href="/analytics?domain_id={{domain.id}}"> {{domain.name}} </a>
                     {% endfor %}
@@ -165,7 +241,7 @@
     <div class="col-auto mb-1">
         <span>HashFiles &nbsp;</h4>
         {% if domain_id is not none %}
-        <div class="content-section btn btn-outline-secondary">
+        <div class="analytics-filter-shell">
             <div class="dropdown">
                 <button class="btn btn-default dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown"
                     aria-haspopup="true" aria-expanded="false">
@@ -197,7 +273,7 @@
             </div>
         </div>
         {% else %}
-        <div class="content-section btn btn-outline-secondary">
+        <div class="analytics-filter-shell">
             <div class="dropdown">
                 <button class="btn btn-default dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown"
                 aria-haspopup="true" aria-expanded="false">
@@ -207,22 +283,22 @@
         </div>
         {% endif %}
     </div>
-  
+
     {% if current_user.admin %}
         <div class="ml-auto mr-2">
             <div class="input-group">
-               
-                <div class="dropdown btn btn-outline-secondary" aria-describedby="basic-addon1">
+
+                <div class="dropdown analytics-filter-shell" aria-describedby="basic-addon1">
                     <button class="btn btn-default dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown"
                         aria-haspopup="true" aria-expanded="false">Download Charts</button>
-                    <div class="dropdown-menu">         
+                    <div class="dropdown-menu">
                         <button class="dropdown-item" onclick="chart_download_all()">All Charts</button>
-                        <div class="dropdown-divider"></div>           
+                        <div class="dropdown-divider"></div>
                         <button class="dropdown-item" onclick=get_chart(1)>Recovered Accounts</button>
                         <div class="dropdown-divider"></div>
                         <button class="dropdown-item" onclick=get_chart(2)>Password Complexity</button>
                         <div class="dropdown-divider"></div>
-                        <button class="dropdown-item" onclick=get_chart(3)>Recovered Hashes</button>                    
+                        <button class="dropdown-item" onclick=get_chart(3)>Recovered Hashes</button>
                         <div class="dropdown-divider"></div>
                         <button class="dropdown-item" onclick=get_chart(4)>Composition Makeup</button>
                         <div class="dropdown-divider"></div>
@@ -230,12 +306,12 @@
                         <div class="dropdown-divider"></div>
                         <button class="dropdown-item" onclick=get_chart(6)>Top 10 Passwords</button>
                     </div>
-                </div> 
+                </div>
                 <div class="input-group-append">
                     <span class="input-group-text" id="basic-addon1">
                         <i id="toggle_icons" class="fa fa-eye-slash" role="button" onclick="show_hide()" title="Show/Hide Icons"></i>
                     </span>
-                  </div>    
+                  </div>
               </div>
           </div>
     {% endif %}
@@ -261,7 +337,7 @@
     <div class="row">
         <div class="col" align="center">
             <div class="card">
-               
+
                 <h5 class="card-header">Recovered Accounts
                     {% if current_user.admin %}
                     <a id="recovered_accounts" class="fa fa-download download_btn" role="button" title="Download Chart"></a>
@@ -278,19 +354,21 @@
                             datasets: [{
                                 label: "my label",
                                 data: {{ fig1_values | safe }},
-                                backgroundColor: ['rgba(192, 0, 0, 0.5)', 'rgba(0, 128, 0, 0.5)']
+                                backgroundColor: [chartPalette.danger, chartPalette.success],
+                                borderColor: chartPalette.stroke,
+                                borderWidth: 2
                                 }]
                             },
-                            options: { 
+                            options: applyChartTheme({
                                 percent: {{fig1_percent | safe}}, // Custom variable to store the value in the middle of the chart
                                 responsive: false,
                                     plugins: {
-                                   
+
                                     legend: {
                                         position: 'bottom',
                                     },
                                     title: {
-                                        color: 'rgba(0,0,0,0.6)', //Text color
+                                        color: chartTheme.text, //Text color
                                         display: false,
                                             text: 'Recovered Accounts',
                                                 font: {
@@ -310,10 +388,10 @@
                                                 fontStyle: 'Arial', // Default is Arial
                                                     sidePadding: 20, // Default is 20 (as a percentage)
                                                         minFontSize: 25, // Default is 20 (in px), set to false and text will not wrap.
-                                                            lineHeight: 25 // Default is 25 (in px), used for when text wraps
+                                        lineHeight: 25 // Default is 25 (in px), used for when text wraps
                                     }
                                 }
-                            }
+                            })
                         });
                         chart_download(1);
                         </script>
@@ -327,7 +405,7 @@
                     {% if current_user.admin %}
                     <a id="password_complexity" class="fa fa-download download_btn" role="button" title="Download Chart"></a>
                     {% endif %}
-                </h5>    
+                </h5>
                 <div class="card-body">
                     <canvas id="Complexity" width="300" height="300">
                         <script>
@@ -339,17 +417,19 @@
                             datasets: [{
                                 label: "my label",
                                 data: {{ fig2_values | safe }},
-                                backgroundColor: ['rgba(192, 0, 0, 0.5)', 'rgba(227, 108, 10, 0.5)', 'rgba(0, 128, 0, 0.5)']
+                                backgroundColor: [chartPalette.danger, chartPalette.warning, chartPalette.success],
+                                borderColor: chartPalette.stroke,
+                                borderWidth: 2
                                 }]
                             },
-                            options: {
+                            options: applyChartTheme({
                                 responsive: false,
                                     plugins: {
                                     legend: {
                                         position: 'bottom',
                                     },
                                     title: {
-                                        color: 'rgba(0,0,0,0.6)', //Text color
+                                        color: chartTheme.text, //Text color
                                         display: false,
                                             text: 'Password Complexity',
                                                 font: {
@@ -362,7 +442,7 @@
                                         }
                                     }
                                 }
-                            }
+                            })
                         });
                         chart_download(2);
                         </script>
@@ -396,19 +476,21 @@
                             datasets: [{
                                 label: "my label",
                                 data: {{ fig3_values | safe }},
-                                backgroundColor: ['rgba(192, 0, 0, 0.5)', 'rgba(0, 128, 0, 0.5)']
+                                backgroundColor: [chartPalette.danger, chartPalette.success],
+                                borderColor: chartPalette.stroke,
+                                borderWidth: 2
                                 }]
                             },
-                            options: { 
+                            options: applyChartTheme({
                                 percent: {{fig3_percent | safe}}, // Custom variable to store the value in the middle of the chart
                                 responsive: false,
                                     plugins: {
-                                   
+
                                     legend: {
                                         position: 'bottom',
                                     },
                                     title: {
-                                        color: 'rgba(0,0,0,0.6)', //Text color
+                                        color: chartTheme.text, //Text color
                                         display: false,
                                             text: 'Recovered Hashes',
                                                 font: {
@@ -428,10 +510,10 @@
                                                 fontStyle: 'Arial', // Default is Arial
                                                     sidePadding: 20, // Default is 20 (as a percentage)
                                                         minFontSize: 25, // Default is 20 (in px), set to false and text will not wrap.
-                                                            lineHeight: 25 // Default is 25 (in px), used for when text wraps
+                                        lineHeight: 25 // Default is 25 (in px), used for when text wraps
                                     }
                                 }
-                            }
+                            })
                         });
                         chart_download(3);
                         </script>
@@ -457,21 +539,25 @@
                             datasets: [{
                                 label: "my label",
                                 data: {{ fig4_values | safe }},
-                                backgroundColor: ['rgba(192, 0, 0, 0.5)',
-                                'rgba(227, 108, 10, 0.5)',
-                                'rgba(224, 202, 33, 0.5)',
-                                'rgba(0, 128, 0, 0.5)',
-                                'rgba(128, 128, 128, 0.5)',]
+                                backgroundColor: [
+                                chartPalette.danger,
+                                chartPalette.warning,
+                                chartPalette.warningSoft,
+                                chartPalette.success,
+                                chartPalette.neutral,
+                                ],
+                                borderColor: chartPalette.stroke,
+                                borderWidth: 2
                                     }]
                                 },
-                            options: {
+                            options: applyChartTheme({
                                 responsive: false,
                                     plugins: {
                                     legend: {
                                         position: 'bottom',
                                         },
                                     title: {
-                                        color: 'rgba(0,0,0,0.6)', //Text color
+                                        color: chartTheme.text, //Text color
                                         display: false,
                                             text: 'Composition Makeup',
                                                 font: {
@@ -484,7 +570,7 @@
                                         }
                                     }
                                 }
-                            }
+                            })
                             });
                             chart_download(4);
                         </script>
@@ -530,15 +616,15 @@
                                 </td>
                                 <td>
                                     {% if total_runtime > 604800 %}
-                                        {{ (total_runtime/604800)|round|int }} week(s)<br>  
+                                        {{ (total_runtime/604800)|round|int }} week(s)<br>
                                     {% elif total_runtime > 86400 %}
-                                        {{ (total_runtime/86400)|round|int }} day(s)<br>    
+                                        {{ (total_runtime/86400)|round|int }} day(s)<br>
                                     {% elif total_runtime > 3600 %}
                                         {{ (total_runtime/3600)|round|int }} hour(s)<br>
                                     {% elif total_runtime > 60 %}
                                         {{ (total_runtime/60)|round|int }} minute(s)<br>
                                     {% elif total_runtime < 60 %}
-                                        < 1 minute<br>                                        
+                                        < 1 minute<br>
                                     {% endif %}
                                 </td>
                             </tr>
@@ -607,24 +693,30 @@
                             datasets: [{
                                 label: "Password Counts by Lengths",
                                 data: {{ fig5_values | safe }},
-                                backgroundColor: ['rgba(0, 128, 0, 0.5)']
+                                backgroundColor: [chartPalette.success],
+                                borderColor: chartPalette.warningSoft,
+                                borderWidth: 1
                                     }]
                                 },
                             plugins: [{
                                 beforeDraw: function(chart,args,options){
                                         const c = chart.ctx
-                                        c.fillStyle = 'white';
+                                        c.fillStyle = chartTheme.backgroundStrong;
                                         c.fillRect(0, 0, chart.width, chart.height);
                                    }
                                 }],
-                            options: {
+                            options: applyChartTheme({
                                 responsive: true, //Resizes the chart canvas when its container does
+                                    scales: {
+                                    x: {},
+                                    y: {}
+                                },
                                     plugins: {
                                     legend: {
                                         display: false,
                                         },
                                     title: {
-                                        color: 'rgba(0,0,0,0.6)', //Text color
+                                        color: chartTheme.text, //Text color
                                         display: false,
                                             text: 'Passwords Count by Length',
                                                 font: {
@@ -637,7 +729,7 @@
                                         }
                                     }
                                 }
-                            }
+                            })
                             });
                             chart_download(5);
                         </script>
@@ -670,24 +762,30 @@
                             datasets: [{
                                 label: "Top 10 Passwords",
                                 data: {{ fig6_values | safe }},
-                                backgroundColor: ['rgba(0, 128, 0, 0.5)']
+                                backgroundColor: [chartPalette.success],
+                                borderColor: chartPalette.warningSoft,
+                                borderWidth: 1
                                     }]
                                 },
                             plugins: [{
                                 beforeDraw: function(chart,args,options){
                                         const c = chart.ctx
-                                        c.fillStyle = 'white';
+                                        c.fillStyle = chartTheme.backgroundStrong;
                                         c.fillRect(0, 0, chart.width, chart.height);
                                    }
                                 }],
-                            options: {
+                            options: applyChartTheme({
                                 responsive: true, //Resizes the chart canvas when its container does
+                                    scales: {
+                                    x: {},
+                                    y: {}
+                                },
                                     plugins: {
                                     legend: {
                                         display: false,
                                         },
                                     title: {
-                                        color: 'rgba(0,0,0,0.6)', //Text color
+                                        color: chartTheme.text, //Text color
                                         display: false,
                                             text: 'Top 10 Passwords',
                                                 font: {
@@ -700,7 +798,7 @@
                                         }
                                     }
                                 }
-                            }
+                            })
                             });
                             chart_download(6);
                         </script>
@@ -768,7 +866,7 @@
                     <table class="table">
                         <tbody>
                             <tr>
-                            {% set pos = namespace(value=0) %}                         
+                            {% set pos = namespace(value=0) %}
                             {% for entry in fig8_table %}
                                 {% set pos.value = pos.value + 1 %}
                                 <td>
@@ -778,15 +876,15 @@
                                     </tr>
                                     <tr>
                                 {% endif %}
-                            {% endfor %}      
-                            </tr>                    
+                            {% endfor %}
+                            </tr>
                         </tbody>
                     </table>
                 </div>
             </div>
 
         </div>
-    </div>    
+    </div>
     <div class="row">
         <div class="col" align="center">
             <br>
@@ -794,6 +892,4 @@
         </div>
     </div>
     {% endblock content %}
-
-
 

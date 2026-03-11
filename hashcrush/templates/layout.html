@@ -54,7 +54,7 @@
                                 <div class="dropdown-menu dropdown-menu-right hc-dropdown" aria-labelledby="manageMenu">
                                     {% if current_user.admin %}
                                     <a class="dropdown-item" href="{{ url_for('settings.settings_list') }}">Settings</a>
-                                    <a class="dropdown-item" href="{{ url_for('users.users_list') }}">User Accounts</a>
+                                    <a class="dropdown-item" href="{{ url_for('users.users_list') }}">Users</a>
                                     <a class="dropdown-item" href="{{ url_for('audit_logs.audit_logs_list') }}">Audit Log</a>
                                     <div class="dropdown-divider"></div>
                                     {% endif %}

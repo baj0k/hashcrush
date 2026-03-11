@@ -31,6 +31,15 @@ PYTHONPATH=. pytest -q -m "not e2e and not e2e_external" -rs
 - local `e2e` by default
 - external `e2e_external` only when `HASHCRUSH_E2E_MODE=external`
 
+Automated tests are PostgreSQL-backed. By default the suite reuses the configured
+HashCrush PostgreSQL database and isolates each test app in its own temporary schema.
+To point the suite at a different PostgreSQL database, set
+`HASHCRUSH_TEST_POSTGRES_URI`.
+
+`HASHCRUSH_TEST_POSTGRES_ADMIN_URI` remains supported only as a fallback for
+environments where schema creation is unavailable but temporary database creation
+is possible.
+
 ## Local Automated Browser Tests
 
 Default mode:
@@ -47,7 +56,7 @@ PYTHONPATH=. pytest -q -m e2e -rs
 
 What local mode does automatically:
 - starts a temporary app server
-- creates a temporary SQLite database
+- creates a temporary test database
 - creates temporary runtime directories
 - seeds:
   - admin user
@@ -58,6 +67,11 @@ What local mode does automatically:
   - task
 
 Local mode is the authoritative automated path and should stay green in CI.
+
+The local automated path creates a temporary schema in the configured PostgreSQL
+database for each test app instance and drops those schemas at process exit. If that
+is not possible and `HASHCRUSH_TEST_POSTGRES_ADMIN_URI` is set, it falls back to
+creating temporary databases instead.
 
 ## External Smoke Tests
 
@@ -128,15 +142,6 @@ Configured in [pytest.ini](/home/bajok/hashcrush/pytest.ini):
   local self-bootstrapped browser tests
 - `e2e_external`
   external smoke tests against a running instance
-
-## CI
-
-CI runs the same supported wrapper:
-
-- [tests.yml](/home/bajok/hashcrush/.github/workflows/tests.yml)
-- [test-all.sh](/home/bajok/hashcrush/tests/test-all.sh)
-
-This keeps the local automated browser path authoritative instead of maintaining a separate CI-only flow.
 
 ## When To Use Which Mode
 

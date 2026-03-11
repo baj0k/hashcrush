@@ -7,5 +7,3 @@ psycopg[binary]==3.3.3
 bcrypt-flask==1.0.2
 Flask-Login==0.6.3
 WTForms-SQLAlchemy==0.4.2
-packaging==26.0
-gunicorn==23.0.0

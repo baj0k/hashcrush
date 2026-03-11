@@ -1,4 +1,5 @@
 {% extends "layout.html"%}
+{% from "macros.j2" import render_pagination %}
 {% block header %}
 <br>
 <h1>Jobs</h1>
@@ -103,6 +104,7 @@ Jobs contain a series of tasks (hashcat commands). Jobs also have an associated 
                     {% endfor %}
                 </tbody>
               </table>
+              {{ render_pagination('jobs.jobs_list', pagination) }}
         </div>
     </article>
     {% for job in jobs %}

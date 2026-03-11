@@ -1,4 +1,5 @@
 {% extends "layout.html"%}
+{% from "macros.j2" import render_pagination %}
 {% block header %}
 <br>
 <h1>Domains</h1>
@@ -43,6 +44,7 @@ The following are domains currently configured in HashCrush. All jobs, passwords
                     {% endfor %}
                 </tbody>
               </table>
+              {{ render_pagination('domains.domains_list', pagination) }}
         </div>
     </article>
     {% for domain in domains %}
