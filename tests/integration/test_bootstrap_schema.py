@@ -425,7 +425,7 @@ def test_upgrade_database_migrates_v1_schema_forward_to_current_version():
         result = upgrade_database()
 
         assert inspect(db.engine).has_table(AuditLog.__tablename__)
-        assert [step.version for step in result.applied_steps] == [2, 3, 4, 5]
+        assert [step.version for step in result.applied_steps] == [2, 3, 4, 5, 6]
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -455,7 +455,7 @@ def test_upgrade_database_migrates_v2_schema_forward_to_current_version():
         }
         assert "retention_period" not in settings_columns
         assert "enabled_job_weights" not in settings_columns
-        assert [step.version for step in result.applied_steps] == [3, 4, 5]
+        assert [step.version for step in result.applied_steps] == [3, 4, 5, 6]
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -507,9 +507,35 @@ def test_upgrade_database_migrates_v3_schema_to_v4_job_task_positions():
         index_names = {
             index["name"] for index in inspect(db.engine).get_indexes("job_tasks")
         }
-        assert [step.version for step in result.applied_steps] == [4, 5]
+        assert [step.version for step in result.applied_steps] == [4, 5, 6]
         assert [row.position for row in persisted] == [0, 1]
         assert "ix_job_tasks_job_id_position" in index_names
+        assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
+
+
+@pytest.mark.security
+def test_upgrade_database_migrates_v5_schema_to_v6_audit_filter_indexes():
+    app = _build_app()
+    with app.app_context():
+        from hashcrush.db_upgrade import CURRENT_SCHEMA_VERSION, upgrade_database
+
+        db.create_all()
+        db.session.add(SchemaVersion(id=1, version=5, app_version="1.0"))
+        db.session.commit()
+        db.session.execute(
+            text('DROP INDEX IF EXISTS "ix_audit_logs_actor_username_created_at"')
+        )
+        db.session.execute(
+            text('DROP INDEX IF EXISTS "ix_audit_logs_target_type_created_at"')
+        )
+        db.session.commit()
+
+        result = upgrade_database()
+
+        audit_indexes = {row["name"] for row in inspect(db.engine).get_indexes("audit_logs")}
+        assert [step.version for step in result.applied_steps] == [6]
+        assert "ix_audit_logs_actor_username_created_at" in audit_indexes
+        assert "ix_audit_logs_target_type_created_at" in audit_indexes
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -692,6 +718,14 @@ def test_schema_declares_expected_constraints_and_indexes():
 
         wordlists_indexes = {row["name"] for row in inspector.get_indexes("wordlists")}
         assert "ix_wordlists_type_last_updated" in wordlists_indexes
+
+        audit_indexes = {row["name"] for row in inspector.get_indexes("audit_logs")}
+        assert {
+            "ix_audit_logs_created_at",
+            "ix_audit_logs_event_type_created_at",
+            "ix_audit_logs_actor_username_created_at",
+            "ix_audit_logs_target_type_created_at",
+        }.issubset(audit_indexes)
 
         tasks_foreign_keys = {
             tuple(row["constrained_columns"]): (

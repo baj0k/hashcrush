@@ -242,7 +242,7 @@ def test_jobs_list_displays_eta_and_percent_done_for_active_job():
         assert b"ETA_TEST_VALUE" in response.data
 
 @pytest.mark.security
-def test_dashboard_displays_eta_and_percent_done_columns_for_tasks():
+def test_jobs_page_displays_active_queue_eta_and_percent_done_columns_for_tasks():
     app = _build_app()
     with app.app_context():
         db.create_all()
@@ -305,15 +305,16 @@ def test_dashboard_displays_eta_and_percent_done_columns_for_tasks():
         client = app.test_client()
         _login_client_as_user(client, admin)
 
-        response = client.get("/")
+        response = client.get("/jobs")
         assert response.status_code == 200
+        assert b"Active Queue" in response.data
         assert b"% Done" in response.data
         assert b"ETA" in response.data
         assert b"50.00%" in response.data
         assert b"DASHBOARD_ETA" in response.data
 
 @pytest.mark.security
-def test_dashboard_shows_stop_button_for_importing_tasks():
+def test_jobs_page_shows_stop_button_for_importing_tasks():
     app = _build_app()
     with app.app_context():
         db.create_all()
@@ -357,7 +358,7 @@ def test_dashboard_shows_stop_button_for_importing_tasks():
         client = app.test_client()
         _login_client_as_user(client, admin)
 
-        response = client.get("/")
+        response = client.get("/jobs")
         assert response.status_code == 200
         assert f"/job_task/stop/{job_task.id}".encode() in response.data
 
@@ -1370,11 +1371,12 @@ def test_non_owner_can_view_scheduled_jobs_but_cannot_stop_them():
         _login_client_as_user(client, viewer)
 
         home_response = client.get("/")
-        assert home_response.status_code == 200
-        assert b"queued-visible-job" in home_response.data
+        assert home_response.status_code == 302
+        assert home_response.headers["Location"].endswith("/jobs")
 
         jobs_response = client.get("/jobs")
         assert jobs_response.status_code == 200
+        assert b"Active Queue" in jobs_response.data
         assert b"queued-visible-job" in jobs_response.data
         assert b"draft-hidden-job" not in jobs_response.data
         assert (

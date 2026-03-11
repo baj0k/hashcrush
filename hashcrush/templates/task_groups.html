@@ -1,23 +1,36 @@
 {% extends "layout.html"%}
 {% block header %}
-<br>
-<h1>Task Groups</h1>
-<br>
-Task Groups are a set of tasks that can be assigned to a job.
-{% if current_user.admin %}
-<a class="btn btn-success btn-sm mt-1 mb-1" href="{{ url_for('task_groups.task_groups_add') }}">Add</a>
-<form class="d-inline" action="{{ url_for('task_groups.task_groups_import') }}" method="POST" enctype="multipart/form-data">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input class="hc-file-input align-middle" type="file" name="import_file" accept=".json,application/json" required>
-    <button type="submit" class="btn btn-outline-secondary btn-sm">Import JSON</button>
-</form>
-<a class="btn btn-outline-primary btn-sm mt-1 mb-1" href="{{ url_for('task_groups.task_groups_export') }}">Export JSON</a>
-{% else %}
-<p class="text-muted mb-0">Shared task groups are managed by admins. All users can view and assign them to jobs.</p>
-{% endif %}
-<br>
-<br>
-<br>
+<div class="hc-page-header">
+    <h1>Task Groups</h1>
+    <p class="hc-page-intro">Task Groups are a set of tasks that can be assigned to a job.</p>
+    {% if current_user.admin %}
+    <div class="hc-page-actions">
+        <a class="btn btn-success btn-sm" href="{{ url_for('task_groups.task_groups_add') }}">Add</a>
+        <form class="hc-inline-form" action="{{ url_for('task_groups.task_groups_import') }}" method="POST" enctype="multipart/form-data">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input
+                id="task-group-import-file"
+                class="hc-file-input-hidden"
+                type="file"
+                name="import_file"
+                accept=".json,application/json"
+                required
+                onchange="if (this.files.length) { this.form.submit(); }"
+            >
+            <button
+                type="button"
+                class="btn btn-secondary btn-sm"
+                onclick="document.getElementById('task-group-import-file').click();"
+            >
+                Import JSON
+            </button>
+        </form>
+        <a class="btn btn-secondary btn-sm" href="{{ url_for('task_groups.task_groups_export') }}">Export JSON</a>
+    </div>
+    {% else %}
+    <p class="text-muted mb-0">Shared task groups are managed by admins. All users can view and assign them to jobs.</p>
+    {% endif %}
+</div>
 {% endblock header %}
 {% block content %}
     <article class="media content-section">

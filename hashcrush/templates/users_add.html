@@ -1,11 +1,9 @@
 {% extends "layout.html" %}
 {% block header %}
-<br>
-<h1>Add User</h1>
-<br>
-<br>
-<br>
-<br>
+<div class="hc-page-header">
+    <h1>Add User</h1>
+    <p class="hc-page-intro">Create a new user account.</p>
+</div>
 {% endblock header %}
 {% block content %}
 <div class="content-section">
@@ -66,9 +64,11 @@
                 {% endif %}
             </div>
         </fieldset>
-        <div class="form-group">
+        <div class="hc-form-actions">
             <a class="btn btn-secondary" href="{{ url_for('users.users_list')}}">Back</a>
-            {{ form.submit(class="btn btn-primary pull-right")}}
+            <div class="hc-form-actions-right">
+                {{ form.submit(class="btn btn-primary")}}
+            </div>
         </div>
     </form>
 </div>

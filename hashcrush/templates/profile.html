@@ -1,12 +1,9 @@
 {% extends "layout.html" %}
 {% block header %}
-<br>
-<h1>Profile</h1>
-<br>
-Edit your profile.
-<br>
-<br>
-<br>
+<div class="hc-page-header">
+    <h1>Profile</h1>
+    <p class="hc-page-intro">Edit your profile.</p>
+</div>
 {% endblock header %}
 {% block content %}
     <div class="content-section">
@@ -56,8 +53,10 @@ Edit your profile.
                     {% endif %}
                 </div>
             </fieldset>
-            <div class="form-group">
-                {{ form.submit(class="btn btn-primary pull-right") }}
+            <div class="hc-form-actions hc-form-actions--center">
+                <div class="hc-form-actions-right">
+                    {{ form.submit(class="btn btn-primary") }}
+                </div>
             </div>
         </form>
     </div>

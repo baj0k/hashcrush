@@ -225,77 +225,6 @@ def test_rules_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
         assert _count_rows(Rules) == 0
 
 @pytest.mark.security
-def test_dynamic_wordlist_update_uses_all_cracked_data_for_shared_wordlists(tmp_path):
-    app = _build_app()
-    with app.app_context():
-        db.create_all()
-        _seed_user("owner-user", password="owner-user-password", admin=False)
-        _seed_user("other-user", password="other-user-password", admin=False)
-        _seed_settings()
-
-        domain = Domains(name="ScopeDomain")
-        db.session.add(domain)
-        db.session.commit()
-
-        owner_hashfile = Hashfiles(name="owner.txt", domain_id=domain.id)
-        other_hashfile = Hashfiles(name="other.txt", domain_id=domain.id)
-        db.session.add(owner_hashfile)
-        db.session.add(other_hashfile)
-        db.session.commit()
-
-        owner_hash = Hashes(
-            sub_ciphertext="11111111111111111111111111111111",
-            ciphertext="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            hash_type=1000,
-            cracked=True,
-            plaintext=encode_plaintext_for_storage("owner-secret"),
-        )
-        other_hash = Hashes(
-            sub_ciphertext="22222222222222222222222222222222",
-            ciphertext="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            hash_type=1000,
-            cracked=True,
-            plaintext=encode_plaintext_for_storage("other-secret"),
-        )
-        db.session.add(owner_hash)
-        db.session.add(other_hash)
-        db.session.commit()
-
-        db.session.add(
-            HashfileHashes(hash_id=owner_hash.id, hashfile_id=owner_hashfile.id)
-        )
-        db.session.add(
-            HashfileHashes(hash_id=other_hash.id, hashfile_id=other_hashfile.id)
-        )
-        db.session.commit()
-
-        dynamic_wordlist_path = tmp_path / "dynamic-wordlist.txt"
-        dynamic_wordlist = Wordlists(
-            name="dynamic-owner",
-            type="dynamic",
-            path=str(dynamic_wordlist_path),
-            size=0,
-            checksum="0" * 64,
-        )
-        db.session.add(dynamic_wordlist)
-        db.session.commit()
-
-        admin = _seed_admin_user()
-        client = app.test_client()
-        _login_client_as_user(client, admin)
-
-        response = client.post(f"/wordlists/update/{dynamic_wordlist.id}")
-        assert response.status_code == 302
-
-        contents = dynamic_wordlist_path.read_text(encoding="utf-8")
-        assert "owner-secret" in contents
-        assert "other-secret" in contents
-        entry = _latest_audit_entry()
-        assert entry is not None
-        assert entry.event_type == "wordlist.update_dynamic"
-        assert entry.target_id == str(dynamic_wordlist.id)
-
-@pytest.mark.security
 def test_task_group_export_includes_shared_items():
     app = _build_app()
     with app.app_context():
@@ -468,9 +397,6 @@ def test_wordlist_and_job_mutation_routes_return_404_for_invalid_ids():
 
         response_wordlist_delete = client.post("/wordlists/delete/999999")
         assert response_wordlist_delete.status_code == 404
-
-        response_wordlist_update = client.post("/wordlists/update/999999")
-        assert response_wordlist_update.status_code == 404
 
         response_job_delete = client.post("/jobs/delete/999999")
         assert response_job_delete.status_code == 404

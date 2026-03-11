@@ -34,6 +34,7 @@ from hashcrush.utils.utils import (
     get_md5_hash,
     get_plaintext_search_digest,
     get_runtime_subdir,
+    update_all_dynamic_wordlists,
     update_dynamic_wordlist,
     update_job_task_status,
 )
@@ -656,6 +657,8 @@ class LocalExecutorService:
                     imported_count += 1
                     break
         db.session.commit()
+        if imported_count > 0:
+            update_all_dynamic_wordlists()
         return imported_count
 
     def _cleanup_runtime_artifacts(self) -> None:

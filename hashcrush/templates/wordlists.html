@@ -1,42 +1,48 @@
 {% extends "layout.html"%}
 {% block header %}
-<br>
-<h1>Wordlists</h1>
-<br>
-These are plaintext, newline-delimited files assigned to tasks. Admins upload shared static wordlists here. The dynamic wordlist is generated from cracked plaintexts.
-{% if current_user.admin %}
-<a class="btn btn-success btn-sm mt-1 mb-1" href="{{ url_for('wordlists.wordlists_add') }}">Upload Wordlist</a>
-{% else %}
-<p class="text-muted mb-0">Shared wordlists are managed by admins. All users can view and use them in tasks.</p>
-{% endif %}
-<br>
-<br>
-<br>
+<div class="hc-page-header">
+    <h1>Wordlists</h1>
+    <p class="hc-page-intro">These are plaintext, newline-delimited files assigned to tasks. Admins upload shared static wordlists here. Dynamic wordlists are rebuilt automatically from recovered plaintexts.</p>
+    {% if current_user.admin %}
+    <div class="hc-page-actions">
+        <a class="btn btn-success btn-sm" href="{{ url_for('wordlists.wordlists_add') }}">Upload Wordlist</a>
+    </div>
+    {% else %}
+    <p class="text-muted mb-0">Shared wordlists are managed by admins. All users can view and use them in tasks.</p>
+    {% endif %}
+</div>
 {% endblock header %}
 {% block content %}
     <article class="media content-section">
         <div class="media-body">
-            <legend class="border-bottom mb-4">Static Wordlists</legend>
             <table class="table">
                 <thead>
                 <tr>
                     <th scope="col">Name</th>
+                    <th scope="col">Type</th>
                     <th scope="col">Size</th>
                     <th scope="col">Last Updated</th>
                     <th scope="col">Control</th>
                 </tr>
                 </thead>
                 <tbody>
-                    {% for wordlist in static_wordlists %}
+                    {% for wordlist in wordlists %}
                         <tr>
                             <td>{{ wordlist.name }}</td>
+                            <td>
+                                {% if wordlist.type == 'dynamic' %}
+                                    <span class="badge badge-info">dynamic</span>
+                                {% else %}
+                                    <span class="badge badge-secondary">static</span>
+                                {% endif %}
+                            </td>
                             <td>{{ wordlist.size }}</td>
                             <td>
                                 {{ wordlist.last_updated }}
                             </td>
                             <td>
                                 <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{wordlist.id}}" title=Info></button>
-                                {% if current_user.admin %}
+                                {% if current_user.admin and wordlist.type == 'static' %}
                                 <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{wordlist.id}}" title=Delete></button>
                                 {% endif %}
                             </td>
@@ -44,38 +50,6 @@ These are plaintext, newline-delimited files assigned to tasks. Admins upload sh
                     {% endfor %}
                 </tbody>
             </table>
-            <legend class="border-bottom mb-4">Dynamic Wordlists</legend>
-            <table class="table">
-                <thead>
-                <tr>
-                    <th scope="col">Name</th>
-                    <th scope="col">Size</th>
-                    <th scope="col">Last Updated</th>
-                    <th scope="col">Control</th>
-                </tr>
-                </thead>
-                <tbody>
-                    {% for wordlist in dynamic_wordlists %}
-                        <tr>
-                            <td>{{ wordlist.name }}</td>
-                            <td>{{ wordlist.size }}</td>
-                            <td>
-                                {{ wordlist.last_updated }}
-                            </td>
-                            <td>
-                                <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{wordlist.id}}" title=Info></button>
-                                {% if current_user.admin %}
-                                <form action="{{ url_for('wordlists.dynamicwordlist_update', wordlist_id=wordlist.id) }}" method="POST" class="d-inline">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                    <button type="submit" class="fa fa-undo btn btn-warning" title="Update"></button>
-                                </form>
-                                {% endif %}
-                            </td>
-                        </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        
         </div>
     </article>
     {% for wordlist in wordlists %}
@@ -90,13 +64,17 @@ These are plaintext, newline-delimited files assigned to tasks. Admins upload sh
             </button>
             </div>
             <div class="modal-body">
-            The following tasks are using this wordlist.<br>
-            <br>
-                {% for task in tasks %}
-                    {% if task.wl_id == wordlist.id %}
-                        {{task.name}} <br>
-                    {% endif %}
+                {% if wordlist.type == 'dynamic' %}
+                <p class="mb-3">This dynamic wordlist is rebuilt automatically from all recovered plaintexts.</p>
+                {% endif %}
+                The following tasks are using this wordlist.<br>
+                <br>
+                {% for task_name in task_names_by_wordlist_id.get(wordlist.id, []) %}
+                    {{ task_name }} <br>
                 {% endfor %}
+                {% if not task_names_by_wordlist_id.get(wordlist.id) %}
+                    <i>none</i>
+                {% endif %}
             </div>
             <div class="modal-footer">
             <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>

@@ -42,6 +42,10 @@ To point the suite at a different PostgreSQL database, set
 environments where schema creation is unavailable but temporary database creation
 is possible.
 
+The non-E2E suite includes a PostgreSQL backup/restore round-trip validation using
+`pg_dump` and `pg_restore`. Keep those client tools installed on environments that
+run the automated tests.
+
 ## Local Automated Browser Tests
 
 Default mode:
@@ -158,3 +162,17 @@ Use `e2e_external` when:
 - validating a deployed instance
 - checking PostgreSQL/TLS/config integration
 - running a final post-upgrade smoke test
+
+## Backup / Restore Verification
+
+The PostgreSQL non-E2E suite includes a backup/restore round-trip test:
+
+```bash
+PYTHONPATH=. pytest -q tests/integration/test_backup_restore.py -rs
+```
+
+What it validates:
+- schema-scoped `pg_dump` / `pg_restore` round trip
+- restored schema version tracking
+- restored encrypted hash material remains readable with the configured data encryption key
+- restored managed wordlist/rule files under `STORAGE_PATH`

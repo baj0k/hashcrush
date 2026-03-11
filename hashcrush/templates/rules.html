@@ -1,17 +1,16 @@
 {% extends "layout.html"%}
 {% block header %}
-<br>
-<h1>Rules</h1>
-<br>
-Rules are instructions combined with wordlists. Admins upload shared rule files here.
-{% if current_user.admin %}
-<a class="btn btn-success btn-sm mt-1 mb-1" href="{{ url_for('rules.rules_add') }}">Upload Rule</a>
-{% else %}
-<p class="text-muted mb-0">Shared rules are managed by admins. All users can view and use them in tasks.</p>
-{% endif %}
-<br>
-<br>
-<br>
+<div class="hc-page-header">
+    <h1>Rules</h1>
+    <p class="hc-page-intro">Rules are instructions combined with wordlists. Admins upload shared rule files here.</p>
+    {% if current_user.admin %}
+    <div class="hc-page-actions">
+        <a class="btn btn-success btn-sm" href="{{ url_for('rules.rules_add') }}">Upload Rule</a>
+    </div>
+    {% else %}
+    <p class="text-muted mb-0">Shared rules are managed by admins. All users can view and use them in tasks.</p>
+    {% endif %}
+</div>
 {% endblock header %}
 {% block content %}
     <article class="media content-section">

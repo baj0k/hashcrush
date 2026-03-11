@@ -1,12 +1,9 @@
 {% extends "layout.html" %}
 {% block header %}
-<br>
-<h1>Create Shared Hashfile</h1>
-<br>
-Create a shared hashfile outside the job flow. The hashfile will be available to jobs in the selected domain.
-<br>
-<br>
-<br>
+<div class="hc-page-header">
+    <h1>Create Shared Hashfile</h1>
+    <p class="hc-page-intro">Create a shared hashfile outside the job flow. The hashfile will be available to jobs in the selected domain.</p>
+</div>
 {% endblock header %}
 {% block content %}
 <script>
@@ -172,7 +169,7 @@ Create a shared hashfile outside the job flow. The hashfile will be available to
                     <div class="tab-pane fade" id="pills-profile" role="tabpanel" aria-labelledby="pills-profile-tab">
                         <div class="form-group">
                             {{ hashfilesForm.hashfile.label() }}
-                            {{ hashfilesForm.hashfile(class="form-control-file") }}
+                            {{ hashfilesForm.hashfile(class="hc-file-input hc-file-input--wide") }}
                             {% if hashfilesForm.hashfile.errors %}
                                 {% for error in hashfilesForm.hashfile.errors %}
                                     <span class="text-danger">{{ error }}</span><br>
@@ -183,9 +180,11 @@ Create a shared hashfile outside the job flow. The hashfile will be available to
                 </div>
             </div>
         </fieldset>
-        <div class="form-group">
+        <div class="hc-form-actions">
             <a class="btn btn-secondary" href="{{ url_for('hashfiles.hashfiles_list') }}">Back</a>
-            {{ hashfilesForm.submit(class="btn btn-primary") }}
+            <div class="hc-form-actions-right">
+                {{ hashfilesForm.submit(class="btn btn-primary") }}
+            </div>
         </div>
     </form>
 </div>

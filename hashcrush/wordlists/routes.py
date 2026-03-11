@@ -14,7 +14,6 @@ from hashcrush.utils.utils import (
     get_linecount,
     get_storage_subdir,
     save_file,
-    update_dynamic_wordlist,
 )
 from hashcrush.wordlists.forms import WordlistsForm
 
@@ -65,17 +64,20 @@ def _derive_wordlist_name(form_name: str | None, uploaded_filename: str | None) 
 def wordlists_list():
     """Function to present list of wordlists"""
 
-    wordlists = db.session.execute(select(Wordlists)).scalars().all()
-    static_wordlists = [wordlist for wordlist in wordlists if wordlist.type == 'static']
-    dynamic_wordlists = [wordlist for wordlist in wordlists if wordlist.type == 'dynamic']
+    wordlists = db.session.execute(
+        select(Wordlists).order_by(Wordlists.type.asc(), Wordlists.name.asc())
+    ).scalars().all()
     tasks = db.session.execute(select(Tasks)).scalars().all()
+    task_names_by_wordlist_id: dict[int, list[str]] = {}
+    for task in tasks:
+        if task.wl_id is None:
+            continue
+        task_names_by_wordlist_id.setdefault(task.wl_id, []).append(task.name)
     return render_template(
         'wordlists.html',
         title='Wordlists',
-        static_wordlists=static_wordlists,
-        dynamic_wordlists=dynamic_wordlists,
         wordlists=wordlists,
-        tasks=tasks,
+        task_names_by_wordlist_id=task_names_by_wordlist_id,
     )
 
 
@@ -183,32 +185,4 @@ def wordlists_delete(wordlist_id):
         },
     )
     flash('Wordlist has been deleted!', 'success')
-    return redirect(url_for('wordlists.wordlists_list'))
-
-
-@wordlists.route("/wordlists/update/<int:wordlist_id>", methods=['POST'])
-@login_required
-@admin_required_redirect('wordlists.wordlists_list')
-def dynamicwordlist_update(wordlist_id):
-    """Function to update dynamic wordlist"""
-
-    wordlist = db.get_or_404(Wordlists, wordlist_id)
-    if wordlist.type != 'dynamic':
-        flash('Invalid wordlist', 'danger')
-        return redirect(url_for('wordlists.wordlists_list'))
-
-    update_dynamic_wordlist(wordlist_id)
-    db.session.refresh(wordlist)
-    record_audit_event(
-        'wordlist.update_dynamic',
-        'wordlist',
-        target_id=wordlist.id,
-        summary=f'Updated dynamic shared wordlist "{wordlist.name}".',
-        details={
-            'wordlist_name': wordlist.name,
-            'path': wordlist.path,
-            'size': wordlist.size,
-        },
-    )
-    flash('Updated Dynamic Wordlist', 'success')
     return redirect(url_for('wordlists.wordlists_list'))

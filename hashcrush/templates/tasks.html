@@ -1,17 +1,16 @@
 {% extends "layout.html"%}
 {% block header %}
-<br>
-<h1>Tasks</h1>
-<br>
-Tasks are predefined hashcat commands. Any number of tasks can be assigned to a Job.
-{% if current_user.admin %}
-<a class="btn btn-success btn-sm mt-1 mb-1" href="{{ url_for('tasks.tasks_add') }}">Add</a>
-{% else %}
-<p class="text-muted mb-0">Shared tasks are managed by admins. All users can view and assign them to jobs.</p>
-{% endif %}
-<br>
-<br>
-<br>
+<div class="hc-page-header">
+    <h1>Tasks</h1>
+    <p class="hc-page-intro">Tasks are predefined Hashcat commands. Any number of tasks can be assigned to a job.</p>
+    {% if current_user.admin %}
+    <div class="hc-page-actions">
+        <a class="btn btn-success btn-sm" href="{{ url_for('tasks.tasks_add') }}">Add Task</a>
+    </div>
+    {% else %}
+    <p class="text-muted mb-0">Shared tasks are managed by admins. All users can view and assign them to jobs.</p>
+    {% endif %}
+</div>
 {% endblock header %}
 {% block content %}
     <article class="media content-section">

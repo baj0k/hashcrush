@@ -1,12 +1,9 @@
 {% extends "layout.html" %}
 {% block header %}
-<br>
-<h1>Assign Hashes for: {{job.name}}</h1>
-<br>
-Apply hashes to be cracked. You can either copy/paste the desired hashes below, upload a new hashfile, or select from an existing file.
-<br>
-<br>
-<br>
+<div class="hc-page-header">
+    <h1>Assign Hashes for: {{job.name}}</h1>
+    <p class="hc-page-intro">Apply hashes to be cracked. You can either copy/paste the desired hashes below, upload a new hashfile, or select from an existing file.</p>
+</div>
 {% endblock header %}
 {% block content %}
 <script>
@@ -216,7 +213,7 @@ Apply hashes to be cracked. You can either copy/paste the desired hashes below, 
                             <div class="tab-pane fade" id="pills-profile" role="tabpanel" aria-labelledby="pills-profile-tab">
                                 <div class="form-group">
                                     {{ jobs_new_hashfile_form.hashfile.label() }}
-                                    {{ jobs_new_hashfile_form.hashfile(class="form-control-file") }}
+                                    {{ jobs_new_hashfile_form.hashfile(class="hc-file-input hc-file-input--wide") }}
                                     {% if jobs_new_hashfile_form.hashfile.errors %}
                                         {% for error in jobs_new_hashfile_form.hashfile.errors %}
                                             <span class="text-danger">{{ error }}</span></br>
@@ -228,9 +225,11 @@ Apply hashes to be cracked. You can either copy/paste the desired hashes below, 
                     </div>
                 </fieldset>
                 <br>
-                <div class="form-group">
+                <div class="hc-form-actions">
                     <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_list') }}">Back</a>
-                    <button class='btn btn-primary pull-right' type='submit'>Next</button>              
+                    <div class="hc-form-actions-right">
+                        <button class="btn btn-primary" type="submit">Next</button>
+                    </div>
                 </div>
             </form>
         </div>
@@ -264,9 +263,11 @@ Apply hashes to be cracked. You can either copy/paste the desired hashes below, 
                         </select>
                     </div>
                 </fieldset>
-                <div class="form-group">
+                <div class="hc-form-actions">
                     <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_list') }}">Back</a>
-                    <button class='btn btn-primary pull-right' type='submit'>Next</button>
+                    <div class="hc-form-actions-right">
+                        <button class="btn btn-primary" type="submit">Next</button>
+                    </div>
                 </div>
             </form>
         </div>

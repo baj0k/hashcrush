@@ -1,23 +1,22 @@
 {% extends "layout.html"%}
 {% from "macros.j2" import render_pagination %}
 {% block header %}
-<br>
-<h1>Domains</h1>
-<br>
-The following are domains currently configured in HashCrush. All jobs, passwords, and hashes are assigned to a single domain. Deleting a domain removes all associated data.
-<br>
-{% if current_user.admin %}
-<form action="{{ url_for('domains.domains_add') }}" method="POST" class="form-inline mt-2">
-    {{ domainsForm.hidden_tag() }}
-    <label class="sr-only" for="{{ domainsForm.name.id }}">Domain Name</label>
-    {{ domainsForm.name(class="form-control form-control-sm mr-2", placeholder="New domain name") }}
-    {{ domainsForm.submit(class="btn btn-success btn-sm") }}
-</form>
-{% else %}
-<p class="text-muted mb-0 mt-2">Shared domains are visible to all users. Admins manage additions and deletions.</p>
-{% endif %}
-<br>
-<br>
+<div class="hc-page-header">
+    <h1>Domains</h1>
+    <p class="hc-page-intro">The following are domains currently configured in HashCrush. All jobs, passwords, and hashes are assigned to a single domain. Deleting a domain removes all associated data.</p>
+    {% if current_user.admin %}
+    <div class="hc-page-actions">
+        <form action="{{ url_for('domains.domains_add') }}" method="POST" class="hc-inline-form">
+            {{ domainsForm.hidden_tag() }}
+            <label class="sr-only" for="{{ domainsForm.name.id }}">Domain Name</label>
+            {{ domainsForm.name(class="form-control form-control-sm", placeholder="New domain name") }}
+            {{ domainsForm.submit(class="btn btn-success btn-sm") }}
+        </form>
+    </div>
+    {% else %}
+    <p class="text-muted mb-0 mt-2">Shared domains are visible to all users. Admins manage additions and deletions.</p>
+    {% endif %}
+</div>
 {% endblock header %}
 {% block content %}
     <article class="media content-section">

@@ -112,6 +112,90 @@ def test_executor_import_stores_plaintext_encrypted_at_rest(tmp_path):
         assert imported_hash.plaintext != "Pa$$w0rd"
         assert decode_plaintext_from_storage(imported_hash.plaintext) == "Pa$$w0rd"
 
+
+@pytest.mark.security
+def test_executor_import_refreshes_dynamic_wordlists_when_new_plaintexts_are_found(tmp_path):
+    from hashcrush.executor.service import LocalExecutorService
+    from hashcrush.utils.utils import get_md5_hash
+
+    app = _build_app(
+        {
+            "STORAGE_PATH": str(tmp_path / "storage"),
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="DynamicDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="input.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = Hashes(
+            sub_ciphertext=get_md5_hash("dynamic-hash"),
+            ciphertext="dynamic-hash",
+            hash_type=1000,
+            cracked=False,
+            plaintext=None,
+        )
+        db.session.add(hash_row)
+        db.session.commit()
+
+        db.session.add(HashfileHashes(hash_id=hash_row.id, hashfile_id=hashfile.id))
+        db.session.commit()
+
+        dynamic_wordlist_path = tmp_path / "storage" / "wordlists" / "dynamic.txt"
+        dynamic_wordlist_path.parent.mkdir(parents=True, exist_ok=True)
+        dynamic_wordlist = Wordlists(
+            name="dynamic",
+            type="dynamic",
+            path=str(dynamic_wordlist_path),
+            size=0,
+            checksum="0" * 64,
+        )
+        db.session.add(dynamic_wordlist)
+        db.session.commit()
+
+        task = Tasks(
+            name="mask",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a",
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        job = Jobs(
+            name="job-1",
+            status="Running",
+            domain_id=domain.id,
+            owner_id=user.id,
+            hashfile_id=hashfile.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        job_task = JobTasks(job_id=job.id, task_id=task.id, status="Running")
+        db.session.add(job_task)
+        db.session.commit()
+
+        crack_path = tmp_path / "cracked.txt"
+        crack_path.write_text("dynamic-hash:RecoveredDynamicSecret\n", encoding="latin-1")
+
+        service = LocalExecutorService(app)
+        imported_count = service._import_crack_file_for_task(job_task, str(crack_path))
+        assert imported_count == 1
+
+        assert dynamic_wordlist_path.read_text(encoding="utf-8") == "RecoveredDynamicSecret\n"
+        db.session.refresh(dynamic_wordlist)
+        assert dynamic_wordlist.size == 1
+
 @pytest.mark.security
 def test_executor_canceled_flow_imports_recovered_hashes(tmp_path, monkeypatch):
     from hashcrush.executor.service import ActiveTask, LocalExecutorService

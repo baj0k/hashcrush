@@ -1,16 +1,121 @@
 {% extends "layout.html"%}
 {% from "macros.j2" import render_pagination %}
 {% block header %}
-<br>
-<h1>Jobs</h1>
-<br>
-Jobs contain a series of tasks (hashcat commands). Jobs also have an associated list of hashes to crack.
-<a class="btn btn-success btn-sm mt-1 mb-1" href="{{ url_for('jobs.jobs_add') }}">Create a New Job</a>
-<br>
-<br>
-<br>
+<div class="hc-page-header">
+    <h1>Jobs</h1>
+    <p class="hc-page-intro">Jobs contain a series of tasks (hashcat commands). Jobs also have an associated list of hashes to crack.</p>
+    <div class="hc-page-actions">
+        <a class="btn btn-success btn-sm" href="{{ url_for('jobs.jobs_add') }}">Create a New Job</a>
+    </div>
+</div>
 {% endblock header %}
 {% block content %}
+    <section class="content-section mb-4">
+        <h4 class="mt-0 mb-3">Active Queue</h4>
+        {% if not running_jobs and not queued_jobs %}
+            <p class="mb-0">No running or queued jobs.</p>
+        {% else %}
+            {% if running_jobs %}
+                <h3 class="mt-3">Running Jobs</h3>
+                {% for job in running_jobs %}
+                    <div class="card mb-3">
+                        <div class="card-header">
+                            <strong>{{ active_domain_names.get(job.domain_id, '') }}:</strong>
+                            {{ job.name }}
+                            <span class="text-muted">({{ active_owner_names.get(job.owner_id, '') }})</span>
+                        </div>
+                        <div class="card-body">
+                            {% set progress = active_job_progress_summary.get(job.id, {'total': 0, 'completed': 0, 'running': 0}) %}
+                            {% if progress.total > 0 %}
+                                <div class="progress mb-3">
+                                    <div class="progress-bar" role="progressbar" style="width: {{ (progress.completed / progress.total) * 100 }}%">Completed</div>
+                                    <div class="progress-bar progress-bar-striped progress-bar-animated bg-success" role="progressbar" style="width: {{ (progress.running / progress.total) * 100 }}%">In Progress</div>
+                                </div>
+                            {% endif %}
+                            <div class="table-responsive">
+                                <table class="table table-sm">
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">Task Name</th>
+                                            <th scope="col">Status</th>
+                                            <th scope="col">Recovered</th>
+                                            <th scope="col">Rate</th>
+                                            <th scope="col">% Done</th>
+                                            <th scope="col">ETA</th>
+                                            <th scope="col">Control</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for job_task_row in active_job_task_rows_by_job_id.get(job.id, []) %}
+                                            {% set job_task = job_task_row.job_task %}
+                                            {% set runtime = active_job_task_runtime_progress.get(job_task.id) %}
+                                            <tr>
+                                                <td>{{ job_task_row.task_name }}</td>
+                                                <td>{{ job_task.status }}</td>
+                                                <td>{{ active_job_recovered.get(job.id, '0/0') }}</td>
+                                                <td>{{ job_task.benchmark or '' }}</td>
+                                                <td>{{ runtime.percent_done if runtime else 'N/A' }}</td>
+                                                <td>{{ runtime.eta if runtime else 'N/A' }}</td>
+                                                <td>
+                                                    {% if job_task.status in ('Running', 'Importing') and (current_user.admin or job.owner_id == current_user.id) %}
+                                                        <form action="{{ url_for('main.stop_job_task', job_task_id=job_task.id) }}" method="POST" class="d-inline">
+                                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                            <button type="submit" class="fa fa-stop btn btn-secondary" title="stop"></button>
+                                                        </form>
+                                                    {% endif %}
+                                                </td>
+                                            </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                {% endfor %}
+            {% endif %}
+
+            {% if queued_jobs %}
+                <h3 class="mt-3">Queued Jobs</h3>
+                {% for job in queued_jobs %}
+                    <div class="card mb-3">
+                        <div class="card-header">
+                            <strong>{{ active_domain_names.get(job.domain_id, '') }}:</strong>
+                            {{ job.name }}
+                            <span class="text-muted">({{ active_owner_names.get(job.owner_id, '') }})</span>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table table-sm">
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">Task Name</th>
+                                            <th scope="col">Status</th>
+                                            <th scope="col">Recovered</th>
+                                            <th scope="col">% Done</th>
+                                            <th scope="col">ETA</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for job_task_row in active_job_task_rows_by_job_id.get(job.id, []) %}
+                                            {% set job_task = job_task_row.job_task %}
+                                            {% set runtime = active_job_task_runtime_progress.get(job_task.id) %}
+                                            <tr>
+                                                <td>{{ job_task_row.task_name }}</td>
+                                                <td>{{ job_task.status }}</td>
+                                                <td>{{ active_job_recovered.get(job.id, '0/0') }}</td>
+                                                <td>{{ runtime.percent_done if runtime else 'N/A' }}</td>
+                                                <td>{{ runtime.eta if runtime else 'N/A' }}</td>
+                                            </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endif %}
+    </section>
     <article class="media content-section">
         <div class="media-body">
             <table class="table">
@@ -87,7 +192,7 @@ Jobs contain a series of tasks (hashcat commands). Jobs also have an associated 
                                     {% endif %}
                                 {% endif %}
                                 {% if job.status != 'Incomplete' %}
-                                    <a class="fa fa-eye btn btn-outline-info" href="{{ url_for('jobs.jobs_summary', job_id=job.id) }}" role="button" title="View"></a>
+                                    <a class="fa fa-eye btn btn-secondary" href="{{ url_for('jobs.jobs_summary', job_id=job.id) }}" role="button" title="View"></a>
                                     {% if can_manage_job %}
                                         <a class="fa fa-pie-chart btn btn-warning" href="/analytics?domain_id={{job.domain_id}}&hashfile_id={{job.hashfile_id}}" role="button" title=Analytics></a>
                                     {% endif %}

@@ -416,6 +416,16 @@ class AuditLog(db.Model):
     __table_args__ = (
         db.Index("ix_audit_logs_created_at", "created_at"),
         db.Index("ix_audit_logs_event_type_created_at", "event_type", "created_at"),
+        db.Index(
+            "ix_audit_logs_actor_username_created_at",
+            "actor_username",
+            "created_at",
+        ),
+        db.Index(
+            "ix_audit_logs_target_type_created_at",
+            "target_type",
+            "created_at",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

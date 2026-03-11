@@ -15,25 +15,3 @@
   2. Stop treating `app.run(...)` as the long-term production serving model.
   3. Decide whether TLS terminates at the reverse proxy and simplify app-side serving accordingly.
   4. Document the supported deployment/runbook around the WSGI server entrypoint.
-
-- [ ] Define and test backup/restore for PostgreSQL deployments.
-  Scope:
-  1. Document the supported `pg_dump` / restore workflow.
-  2. Verify restore into a fresh environment.
-  3. Include config backup expectations and runtime-path expectations.
-  4. Add the backup/restore flow to the production deploy checklist.
-
-## P3 - Audit and Operations
-
-- [ ] Add audit-log filtering and export for production use.
-  Scope:
-  1. Filter by actor, event type, target type, and date range.
-  2. Add admin-only CSV export.
-  3. Keep the default audit view usable on larger datasets.
-
-## P3 - Database and Platform
-
-- [ ] Keep validating future ORM cleanup batches against the PostgreSQL automated lane.
-  Scope:
-  1. Treat PostgreSQL as the required source-of-truth database for ORM/runtime changes.
-  2. Do not rely on a production database or `setup --test` as the primary automated validation path.

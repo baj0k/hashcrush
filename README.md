@@ -67,6 +67,8 @@ Recommended production environment overrides:
 export HASHCRUSH_SECRET_KEY='<strong-random-secret>'
 export HASHCRUSH_DATA_ENCRYPTION_KEY='<fernet-key>'
 export HASHCRUSH_DATABASE_URI='postgresql+psycopg://hashcrush:<strong-db-password>@127.0.0.1:5432/hashcrush'
+export HASHCRUSH_STORAGE_PATH='/var/lib/hashcrush'
+export HASHCRUSH_RUNTIME_PATH='/tmp/hashcrush-runtime'
 export HASHCRUSH_SSL_CERT_PATH='/run/secrets/hashcrush-cert.pem'
 export HASHCRUSH_SSL_KEY_PATH='/run/secrets/hashcrush-key.pem'
 ```
@@ -110,6 +112,65 @@ python3 ./hashcrush.py
 `hashcrush.py upgrade` is non-destructive. It applies tracked schema/data migrations in place and preserves existing data.
 If the database schema is older than the code expects, app startup shows an explicit error until an upgrade is performed.
 Current releases expect schema version `5`.
+
+## PostgreSQL Backup and Restore
+
+Supported backup set:
+- PostgreSQL database dump
+- `config.conf` or the equivalent secret-store values for:
+  - `HASHCRUSH_SECRET_KEY`
+  - `HASHCRUSH_DATA_ENCRYPTION_KEY`
+  - PostgreSQL connection settings
+  - `HASHCRUSH_STORAGE_PATH`
+  - TLS certificate/key paths
+- `STORAGE_PATH` contents
+
+Do not back up `RUNTIME_PATH`. It is ephemeral scratch/output space and should be recreated empty on restore.
+
+Database backup:
+
+```bash
+pg_dump --format=custom --file hashcrush_$(date +%F_%H%M%S).dump "$HASHCRUSH_DATABASE_URI"
+```
+
+Config and managed-storage backup:
+
+```bash
+cp hashcrush/config.conf hashcrush_config_$(date +%F_%H%M%S).conf
+tar -C "$(dirname "$HASHCRUSH_STORAGE_PATH")" \
+  -czf hashcrush_storage_$(date +%F_%H%M%S).tar.gz \
+  "$(basename "$HASHCRUSH_STORAGE_PATH")"
+```
+
+Restore into a fresh environment:
+
+```bash
+# 1. Install PostgreSQL, Python dependencies, and HashCrush code.
+# 2. Recreate the target database/role or point HASHCRUSH_DATABASE_URI at an empty target DB.
+pg_restore --clean --if-exists --no-owner --dbname="$HASHCRUSH_DATABASE_URI" hashcrush.dump
+tar -C "$(dirname "$HASHCRUSH_STORAGE_PATH")" -xzf hashcrush_storage.tar.gz
+python3 ./hashcrush.py upgrade --dry-run
+python3 ./hashcrush.py upgrade
+python3 ./hashcrush.py
+```
+
+Restore expectations:
+- `STORAGE_PATH` should be restored to the same absolute path whenever possible.
+- Uploaded wordlists and rules are stored by absolute path in the database. If you restore them to a different path, those DB paths must be rewritten before use.
+- `RUNTIME_PATH` should exist and be writable, but its previous contents should not be restored.
+- `HASHCRUSH_DATA_ENCRYPTION_KEY` must match the key used when the data was written, or encrypted hash material will be unreadable.
+
+Production deploy checklist:
+1. Run `pg_dump` before deploying.
+2. Back up `config.conf` or the equivalent secret-store values.
+3. Back up `STORAGE_PATH`.
+4. Deploy the new code.
+5. Run `python3 ./hashcrush.py upgrade --dry-run`.
+6. Run `python3 ./hashcrush.py upgrade`.
+7. Restart the app.
+8. Run the external smoke suite:
+   - `export HASHCRUSH_E2E_MODE=external`
+   - `./tests/test-all.sh`
 
 ## Account and Password Management
 - Admins can reset a password of any user.

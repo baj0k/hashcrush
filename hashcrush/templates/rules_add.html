@@ -1,12 +1,9 @@
 {% extends "layout.html" %}
 {% block header %}
-<br>
-<h1>Upload Rule</h1>
-<br>
-<p class="text-muted">
-    Upload a shared Hashcat rule file. Supported format: <code>.rule</code>.
-</p>
-<br>
+<div class="hc-page-header">
+    <h1>Upload Rule</h1>
+    <p class="text-muted">Upload a shared Hashcat rule file. Supported format: <code>.rule</code>.</p>
+</div>
 {% endblock header %}
 {% block content %}
 <div class="content-section">
@@ -29,7 +26,7 @@
             </div>
             <div class="form-group">
                 {{ form.upload.label(class="form-control-label") }}
-                {{ form.upload(class="form-control-file") }}
+                {{ form.upload(class="hc-file-input hc-file-input--wide") }}
                 <small class="text-muted d-block">Upload a <code>.rule</code> file.</small>
                 {% if form.upload.errors %}
                     {% for error in form.upload.errors %}
@@ -38,9 +35,11 @@
                 {% endif %}
             </div>
         </fieldset>
-        <div class="form-group">
+        <div class="hc-form-actions">
             <a class="btn btn-secondary" href="{{ url_for('rules.rules_list') }}">Back</a>
-            {{ form.submit(class="btn btn-primary") }}
+            <div class="hc-form-actions-right">
+                {{ form.submit(class="btn btn-primary") }}
+            </div>
         </div>
     </form>
 </div>

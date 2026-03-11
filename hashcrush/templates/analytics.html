@@ -51,21 +51,42 @@
     .dropdown-menu{
         max-height: 350px;
         overflow-y: auto;
+        background: var(--analytics-bg);
+        border: 1px solid var(--analytics-border);
+        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+    }
+    .dropdown-menu .dropdown-item{
+        color: var(--analytics-text);
+    }
+    .dropdown-menu .dropdown-item:hover,
+    .dropdown-menu .dropdown-item:focus{
+        background: rgba(153, 153, 119, 0.12);
+        color: #fff;
+    }
+    .dropdown-menu .dropdown-divider{
+        border-top-color: var(--analytics-border);
     }
     .analytics-filter-shell{
         display: inline-block;
     }
     .analytics-filter-shell .btn-default{
-        background-color: var(--analytics-bg-strong);
-        border: 1px solid var(--analytics-border);
+        background-color: #242424;
+        border: 1px solid #494949;
         color: var(--analytics-text);
     }
     .analytics-filter-shell .btn-default:hover,
     .analytics-filter-shell .btn-default:focus,
     .analytics-filter-shell .show > .btn-default.dropdown-toggle{
-        background-color: #262626;
-        border-color: #4a4a4a;
+        background-color: #313131;
+        border-color: #636363;
         color: #fff;
+    }
+    .analytics-filter-shell .btn-default.disabled,
+    .analytics-filter-shell .btn-default:disabled{
+        background-color: #202020;
+        border-color: #414141;
+        color: var(--analytics-text-muted);
+        opacity: 1;
     }
 </style>
 
@@ -211,6 +232,7 @@
 <div id="config_options" class="form-row">
     <div class="col-auto mb-1">
         <span>Domains &nbsp;</h4>
+        {% if domains %}
         <div class="analytics-filter-shell">
             <div class="dropdown">
                 <button class="btn btn-default dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown"
@@ -237,10 +259,17 @@
                 </div>
             </div>
         </div>
+        {% else %}
+        <div class="analytics-filter-shell">
+            <button class="btn btn-default dropdown-toggle" type="button" disabled aria-disabled="true">
+                All Domains
+            </button>
+        </div>
+        {% endif %}
     </div>
     <div class="col-auto mb-1">
         <span>HashFiles &nbsp;</h4>
-        {% if domain_id is not none %}
+        {% if domain_id is not none and hashfiles %}
         <div class="analytics-filter-shell">
             <div class="dropdown">
                 <button class="btn btn-default dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown"
@@ -311,11 +340,17 @@
                     <span class="input-group-text" id="basic-addon1">
                         <i id="toggle_icons" class="fa fa-eye-slash" role="button" onclick="show_hide()" title="Show/Hide Icons"></i>
                     </span>
-                  </div>
-              </div>
-          </div>
-    {% endif %}
-</div>
+                </div>
+            </div>
+        </div>
+        {% elif domain_id is not none %}
+        <div class="analytics-filter-shell">
+            <button class="btn btn-default dropdown-toggle" type="button" disabled aria-disabled="true">
+                N/A
+            </button>
+        </div>
+        {% endif %}
+    </div>
 
 <div class="alert alert-info mb-4" role="alert">
     <h6 class="mb-2">Analytics Definitions</h6>
@@ -892,4 +927,3 @@
         </div>
     </div>
     {% endblock content %}
-

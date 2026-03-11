@@ -1,20 +1,61 @@
 {% extends "layout.html"%}
 {% block header %}
-<br>
-<h1>Audit Log</h1>
-<br>
-<p class="text-muted">Recent sensitive actions recorded by the application. Entries are append-only snapshots.</p>
-<br>
+<div class="hc-page-header">
+    <h1>Audit Log</h1>
+    <p class="text-muted">Recent sensitive actions recorded by the application. Entries are append-only snapshots.</p>
+</div>
 {% endblock header %}
 {% block content %}
     <div class="content-section">
+        <form method="get" class="mb-4">
+            <div class="form-row align-items-end">
+                <div class="form-group col-xl-2 col-lg-3 col-md-6">
+                    <label for="actor">User</label>
+                    <input id="actor" name="actor" type="text" class="form-control form-control-sm" value="{{ filters.actor }}" placeholder="username contains...">
+                </div>
+                <div class="form-group col-xl-2 col-lg-3 col-md-6">
+                    <label for="event_type">Event</label>
+                    <select id="event_type" name="event_type" class="custom-select custom-select-sm">
+                        <option value="">All events</option>
+                        {% for value in event_types %}
+                            <option value="{{ value }}" {% if filters.event_type == value %}selected{% endif %}>{{ value }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group col-xl-2 col-lg-3 col-md-6">
+                    <label for="target_type">Target</label>
+                    <select id="target_type" name="target_type" class="custom-select custom-select-sm">
+                        <option value="">All targets</option>
+                        {% for value in target_types %}
+                            <option value="{{ value }}" {% if filters.target_type == value %}selected{% endif %}>{{ value }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group col-xl-2 col-lg-3 col-md-6">
+                    <label for="date_from">From (UTC date)</label>
+                    <input id="date_from" name="date_from" type="date" class="form-control form-control-sm" value="{{ filters.date_from }}">
+                </div>
+                <div class="form-group col-xl-2 col-lg-3 col-md-6">
+                    <label for="date_to">To (UTC date)</label>
+                    <input id="date_to" name="date_to" type="date" class="form-control form-control-sm" value="{{ filters.date_to }}">
+                </div>
+                <div class="form-group col-xl-2 col-lg-9 col-md-12">
+                    <label class="d-none d-xl-block">&nbsp;</label>
+                    <div class="hc-filter-actions">
+                    <button type="submit" class="btn btn-primary btn-sm mr-2">Apply Filters</button>
+                    <a class="btn btn-secondary btn-sm mr-2" href="{{ url_for('audit_logs.audit_logs_list') }}">Clear</a>
+                    <a class="btn btn-info btn-sm" href="{{ csv_export_url }}">Export CSV</a>
+                    </div>
+                </div>
+            </div>
+        </form>
         {% if entries %}
             <div class="table-responsive">
                 <table class="table table-sm table-striped">
                     <thead>
                         <tr>
                             <th scope="col">Time (UTC)</th>
-                            <th scope="col">Actor</th>
+                            <th scope="col">User</th>
                             <th scope="col">Event</th>
                             <th scope="col">Target</th>
                             <th scope="col">Summary</th>
@@ -53,6 +94,34 @@
                     </tbody>
                 </table>
             </div>
+            {% if pagination.total_pages > 1 %}
+                <div class="d-flex justify-content-between align-items-center mt-3">
+                    <small class="text-muted">
+                        Showing {{ pagination.start_item }}-{{ pagination.end_item }} of {{ pagination.total_items }}
+                    </small>
+                    <nav aria-label="Audit pagination">
+                        <ul class="pagination pagination-sm mb-0">
+                            <li class="page-item{% if not pagination.has_prev %} disabled{% endif %}">
+                                {% if prev_page_url %}
+                                    <a class="page-link" href="{{ prev_page_url }}">Previous</a>
+                                {% else %}
+                                    <span class="page-link">Previous</span>
+                                {% endif %}
+                            </li>
+                            <li class="page-item disabled">
+                                <span class="page-link">Page {{ pagination.page }} / {{ pagination.total_pages }}</span>
+                            </li>
+                            <li class="page-item{% if not pagination.has_next %} disabled{% endif %}">
+                                {% if next_page_url %}
+                                    <a class="page-link" href="{{ next_page_url }}">Next</a>
+                                {% else %}
+                                    <span class="page-link">Next</span>
+                                {% endif %}
+                            </li>
+                        </ul>
+                    </nav>
+                </div>
+            {% endif %}
         {% else %}
             <p class="mb-0">No audit events recorded yet.</p>
         {% endif %}

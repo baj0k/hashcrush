@@ -512,7 +512,7 @@ def import_hashfilehashes(hashfile_id, hashfile_path, file_type, hash_type):
     db.session.commit()
     return True
 
-def update_dynamic_wordlist(wordlist_id):
+def update_dynamic_wordlist(wordlist_id, *, commit=True):
     """Function to update dynamic wordlist"""
 
     wordlist = db.session.get(Wordlists, wordlist_id)
@@ -548,8 +548,27 @@ def update_dynamic_wordlist(wordlist_id):
     wordlist.checksum = get_filehash(resolved_path)
     # update last update
     wordlist.last_updated = datetime.now(UTC).replace(tzinfo=None)
-    db.session.commit()
+    if commit:
+        db.session.commit()
     return True
+
+
+def update_all_dynamic_wordlists() -> int:
+    """Rebuild all managed dynamic wordlists from cracked plaintexts."""
+    dynamic_wordlists = db.session.execute(
+        select(Wordlists).where(Wordlists.type == 'dynamic').order_by(Wordlists.id.asc())
+    ).scalars().all()
+    if not dynamic_wordlists:
+        return 0
+
+    updated = 0
+    for wordlist in dynamic_wordlists:
+        if update_dynamic_wordlist(wordlist.id, commit=False):
+            updated += 1
+
+    if updated:
+        db.session.commit()
+    return updated
 
 def build_hashcat_argv(job_id, task_id, hashcat_bin=None):
     """Build a safe argv list for launching hashcat without a shell."""

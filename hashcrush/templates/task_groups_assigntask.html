@@ -1,12 +1,9 @@
 {% extends "layout.html"%}
 {% block header %}
-<br>
-<h1>Assign Task to Group: {{task_group.name}}</h1>
-<br>
-Each task will be ran once in order selected You can create new tasks by selecting 'tasks' in the above menu.
-<br>
-<br>
-<br>
+<div class="hc-page-header">
+    <h1>Assign Task to Group: {{task_group.name}}</h1>
+    <p class="hc-page-intro">Each task will be run once in the selected order. You can create new tasks from the Tasks page.</p>
+</div>
 {% endblock header %}
 {% block content %}
     <article class="media content-section">
@@ -47,10 +44,10 @@ Each task will be ran once in order selected You can create new tasks by selecti
                 </tbody>
                 </table>
                 <div class="dropdown">
-                        <button class="btn btn-outline-primary dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                        <button class="btn btn-primary dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
                         Add Task
                         </button>
-                        <div class="dropdown-menu" aria-labelledby="dropdownMenuButton">
+                        <div class="dropdown-menu hc-scroll-dropdown" aria-labelledby="dropdownMenuButton">
                             {% for task in tasks %}
                                 <form action="{{ url_for('task_groups.task_groups_assigned_tasks_add_task', task_group_id=task_group.id, task_id=task.id) }}" method="POST" class="m-0">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -59,7 +56,11 @@ Each task will be ran once in order selected You can create new tasks by selecti
                             {% endfor %}
                         </div>
                 </div>
-              <a class="btn btn-primary" href="{{url_for('task_groups.task_groups_list')}}" role="button">Done</a>
+              <div class="hc-form-actions">
+                  <div class="hc-form-actions-right">
+                      <a class="btn btn-primary" href="{{url_for('task_groups.task_groups_list')}}" role="button">Done</a>
+                  </div>
+              </div>
         </div>
     </article>
 {% endblock content %}

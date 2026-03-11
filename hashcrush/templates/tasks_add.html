@@ -1,12 +1,9 @@
 {% extends "layout.html" %}
 {% block header %}
-<br>
-<h1>Add Tasks</h1>
-<br>
-Select from the following options to create a new task to be run.
-<br>
-<br>
-<br>
+<div class="hc-page-header">
+    <h1>Add Tasks</h1>
+    <p class="hc-page-intro">Select from the following options to create a new task to be run.</p>
+</div>
 {% endblock header %}
 {% block content %}
 <script>
@@ -104,8 +101,11 @@ Select from the following options to create a new task to be run.
                 {% endif %}
             </div>
         </fieldset>
-        <div class="form-group">
-            {{ tasksForm.submit(class="btn btn-primary pull-right")}}
+        <div class="hc-form-actions">
+            <a class="btn btn-secondary" href="{{ url_for('tasks.tasks_list') }}">Back</a>
+            <div class="hc-form-actions-right">
+                {{ tasksForm.submit(class="btn btn-primary")}}
+            </div>
         </div>
     </form>
 </div>

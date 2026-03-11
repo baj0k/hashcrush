@@ -1,5 +1,7 @@
 """Integration tests for audit logging."""
 # ruff: noqa: F403,F405
+from datetime import datetime
+
 from tests.integration.support import *
 
 
@@ -93,6 +95,179 @@ def test_audit_log_page_rejects_non_admin():
         _login_client_as_user(client, user)
 
         response = client.get("/audit")
+
+        assert response.status_code == 403
+
+
+@pytest.mark.security
+def test_audit_log_page_filters_by_actor_event_target_and_date():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+        db.session.add_all(
+            [
+                AuditLog(
+                    actor_user_id=admin.id,
+                    actor_username="alice-admin",
+                    actor_admin=True,
+                    actor_ip="127.0.0.1",
+                    event_type="job.start",
+                    target_type="job",
+                    target_id="7",
+                    summary="Matched audit row",
+                    details_json='{"job_name":"match"}',
+                    created_at=datetime(2026, 3, 10, 12, 0, 0),
+                ),
+                AuditLog(
+                    actor_user_id=admin.id,
+                    actor_username="bob-admin",
+                    actor_admin=True,
+                    actor_ip="127.0.0.1",
+                    event_type="job.stop",
+                    target_type="job",
+                    target_id="8",
+                    summary="Wrong actor/event",
+                    details_json='{"job_name":"stop"}',
+                    created_at=datetime(2026, 3, 10, 12, 30, 0),
+                ),
+                AuditLog(
+                    actor_user_id=admin.id,
+                    actor_username="alice-admin",
+                    actor_admin=True,
+                    actor_ip="127.0.0.1",
+                    event_type="job.start",
+                    target_type="task",
+                    target_id="9",
+                    summary="Wrong target type",
+                    details_json='{"task_name":"task"}',
+                    created_at=datetime(2026, 3, 11, 12, 0, 0),
+                ),
+            ]
+        )
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get(
+            "/audit?actor=alice&event_type=job.start&target_type=job&date_from=2026-03-10&date_to=2026-03-10"
+        )
+
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Matched audit row" in html
+        assert "Wrong actor/event" not in html
+        assert "Wrong target type" not in html
+
+
+@pytest.mark.security
+def test_audit_log_csv_export_respects_filters():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+        db.session.add_all(
+            [
+                AuditLog(
+                    actor_user_id=admin.id,
+                    actor_username="alice-admin",
+                    actor_admin=True,
+                    actor_ip="127.0.0.1",
+                    event_type="job.start",
+                    target_type="job",
+                    target_id="7",
+                    summary="Matched export row",
+                    details_json='{"job_name":"match"}',
+                ),
+                AuditLog(
+                    actor_user_id=admin.id,
+                    actor_username="bob-admin",
+                    actor_admin=True,
+                    actor_ip="127.0.0.1",
+                    event_type="job.stop",
+                    target_type="job",
+                    target_id="8",
+                    summary="Filtered out row",
+                    details_json='{"job_name":"stop"}',
+                ),
+            ]
+        )
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get("/audit?actor=alice&export=csv")
+
+        assert response.status_code == 200
+        assert response.headers["Content-Disposition"].startswith(
+            "attachment; filename=audit_log.csv"
+        )
+        body = response.get_data(as_text=True)
+        assert "Matched export row" in body
+        assert "Filtered out row" not in body
+        assert "actor_username" in body
+
+
+@pytest.mark.security
+def test_audit_log_page_paginates_results():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+        db.session.add_all(
+            [
+                AuditLog(
+                    actor_user_id=admin.id,
+                    actor_username=admin.username,
+                    actor_admin=True,
+                    actor_ip="127.0.0.1",
+                    event_type="job.start",
+                    target_type="job",
+                    target_id=str(index),
+                    summary=f"Audit row {index}",
+                    details_json="{}",
+                    created_at=datetime(2026, 3, 10, 12, 0, 0),
+                )
+                for index in range(55)
+            ]
+        )
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        first_page = client.get("/audit")
+        second_page = client.get("/audit?page=2")
+
+        assert first_page.status_code == 200
+        assert second_page.status_code == 200
+        first_html = first_page.get_data(as_text=True)
+        second_html = second_page.get_data(as_text=True)
+        assert "Page 1 / 2" in first_html
+        assert "Audit row 54" in first_html
+        assert "Audit row 0" not in first_html
+        assert "Page 2 / 2" in second_html
+        assert "Audit row 0" in second_html
+
+
+@pytest.mark.security
+def test_audit_log_csv_export_rejects_non_admin():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        _seed_admin_user()
+        user = _seed_user("audit-export-user")
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, user)
+
+        response = client.get("/audit?export=csv")
 
         assert response.status_code == 403
 

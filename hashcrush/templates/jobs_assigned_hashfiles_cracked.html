@@ -1,12 +1,9 @@
 {% extends "layout.html"%}
 {% block header %}
-<br>
-<h1>Local Check</h1>
-<br>
-The following hashes are already cracked in HashCrush's Local database!
-<br>
-<br>
-<br>
+<div class="hc-page-header">
+    <h1>Local Check</h1>
+    <p class="hc-page-intro">The following hashes are already cracked in HashCrush's Local database.</p>
+</div>
 {% endblock header %}
 {% block content %}
     <article class="media content-section">
@@ -58,6 +55,10 @@ The following hashes are already cracked in HashCrush's Local database!
               </table>
         </div>
     </article>
-    <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_assigned_hashfile', job_id=job.id) }}">Back</a>
-    <a class="btn btn-primary pull-right" href="/jobs/{{job.id}}/tasks" role="button">Next</a>
+    <div class="hc-form-actions">
+        <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_assigned_hashfile', job_id=job.id) }}">Back</a>
+        <div class="hc-form-actions-right">
+            <a class="btn btn-primary" href="{{ url_for('jobs.jobs_list_tasks', job_id=job.id) }}" role="button">Next</a>
+        </div>
+    </div>
 {% endblock content %}

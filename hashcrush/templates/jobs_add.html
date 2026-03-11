@@ -1,12 +1,9 @@
 {% extends "layout.html" %}
 {% block header %}
-<br>
-<h1>Create a new Job</h1>
-<br>
-Provide the name of the job and select a shared domain.
-<br>
-<br>
-<br>
+<div class="hc-page-header">
+    <h1>Create a new Job</h1>
+    <p class="hc-page-intro">Provide the name of the job and select a shared domain.</p>
+</div>
 {% endblock header %}
 {% block content %}
 <script>
@@ -85,9 +82,11 @@ Provide the name of the job and select a shared domain.
             </small>
             {% endif %}
         </fieldset>
-        <div class="form-group">
-            <a class="btn btn-danger" href="/jobs" role="button" title='Cancel'>Cancel</a>
-            {{ jobsForm.submit(class="btn btn-primary pull-right")}}
+        <div class="hc-form-actions">
+            <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_list') }}" role="button" title="Cancel">Cancel</a>
+            <div class="hc-form-actions-right">
+                {{ jobsForm.submit(class="btn btn-primary")}}
+            </div>
         </div>
     </form>
 </div>

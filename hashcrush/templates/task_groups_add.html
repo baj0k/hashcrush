@@ -1,12 +1,9 @@
 {% extends "layout.html" %}
 {% block header %}
-<br>
-<h1>Create a new Task Group</h1>
-<br>
-Enter the name of the task group.
-<br>
-<br>
-<br>
+<div class="hc-page-header">
+    <h1>Create a new Task Group</h1>
+    <p class="hc-page-intro">Enter the name of the task group.</p>
+</div>
 {% endblock header %}
 {% block content %}
 <div class="content-section">
@@ -28,8 +25,11 @@ Enter the name of the task group.
                 {% endif %}
            </div> 
         </fieldset>
-        <div class="form-group">
-            {{ taskGroupsForm.submit(class="btn btn-outline-info")}}
+        <div class="hc-form-actions">
+            <a class="btn btn-secondary" href="{{ url_for('task_groups.task_groups_list') }}">Back</a>
+            <div class="hc-form-actions-right">
+                {{ taskGroupsForm.submit(class="btn btn-primary")}}
+            </div>
         </div>
     </form>
 </div>

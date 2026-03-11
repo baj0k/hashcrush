@@ -9,7 +9,7 @@ from sqlalchemy import inspect, text
 import hashcrush
 from hashcrush.models import AuditLog, SchemaVersion, db, utc_now_naive
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 
 @dataclass(frozen=True)
@@ -221,6 +221,31 @@ def _migration_005_encrypt_sensitive_hash_material() -> None:
     migrate_sensitive_storage_rows()
 
 
+def _migration_006_add_audit_filter_indexes() -> None:
+    """Add indexes for actor/target filtered audit log views."""
+    inspector = inspect(db.engine)
+    if "audit_logs" not in inspector.get_table_names():
+        return
+
+    index_names = _index_names("audit_logs")
+    if "ix_audit_logs_actor_username_created_at" not in index_names:
+        db.session.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_audit_logs_actor_username_created_at "
+                "ON audit_logs (actor_username, created_at)"
+            )
+        )
+        db.session.commit()
+    if "ix_audit_logs_target_type_created_at" not in index_names:
+        db.session.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_audit_logs_target_type_created_at "
+                "ON audit_logs (target_type, created_at)"
+            )
+        )
+        db.session.commit()
+
+
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(
         version=1,
@@ -251,6 +276,12 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
         name="encrypt_sensitive_hash_material",
         summary="Encrypt persisted hashes, cracked plaintexts, and usernames with blind-index lookups.",
         upgrade=_migration_005_encrypt_sensitive_hash_material,
+    ),
+    MigrationStep(
+        version=6,
+        name="add_audit_filter_indexes",
+        summary="Add audit-log indexes for actor and target filtering.",
+        upgrade=_migration_006_add_audit_filter_indexes,
     ),
 )
 

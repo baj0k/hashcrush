@@ -295,16 +295,6 @@ def test_shared_resource_mutation_requires_admin(tmp_path, monkeypatch):
         db.session.add(task_group)
         db.session.commit()
 
-        update_dynamic_called = {"value": False}
-
-        def _blocked_dynamic_update(_wordlist_id):
-            update_dynamic_called["value"] = True
-
-        monkeypatch.setattr(
-            "hashcrush.wordlists.routes.update_dynamic_wordlist",
-            _blocked_dynamic_update,
-        )
-
         client = app.test_client()
         _login_client_as_user(client, attacker)
 
@@ -390,10 +380,6 @@ def test_shared_resource_mutation_requires_admin(tmp_path, monkeypatch):
         assert response.status_code == 302
         assert _first_row(Wordlists, name="blocked-wordlist") is None
 
-        response = client.post(f"/wordlists/update/{dynamic_wordlist.id}")
-        assert response.status_code == 302
-        assert update_dynamic_called["value"] is False
-
         response = client.post(f"/wordlists/delete/{static_wordlist.id}")
         assert response.status_code == 302
         assert db.session.get(Wordlists, static_wordlist.id) is not None
@@ -471,7 +457,6 @@ def test_shared_resource_lists_hide_admin_controls_for_non_admin():
         wordlists_html = client.get("/wordlists").get_data(as_text=True)
         assert "/wordlists/add" not in wordlists_html
         assert f"/wordlists/delete/{static_wordlist.id}" not in wordlists_html
-        assert f"/wordlists/update/{dynamic_wordlist.id}" not in wordlists_html
 
         rules_html = client.get("/rules").get_data(as_text=True)
         assert "/rules/add" not in rules_html
@@ -717,7 +702,6 @@ def test_mutating_routes_reject_get_requests():
         _login_client_as_user(client, admin)
 
         assert client.get(f"/hashfiles/delete/{hashfile.id}").status_code == 405
-        assert client.get("/wordlists/update/999999").status_code == 405
         assert client.get(f"/jobs/start/{job.id}").status_code == 405
         assert client.get(f"/jobs/{job.id}/assign_task/{task.id}").status_code == 405
         assert (

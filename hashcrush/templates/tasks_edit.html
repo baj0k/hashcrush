@@ -1,12 +1,9 @@
 {% extends "layout.html" %}
 {% block header %}
-<br>
-<h1>Tasks: Edit: {{task.name}}</h1>
-<br>
-Edit your task.
-<br>
-<br>
-<br>
+<div class="hc-page-header">
+    <h1>Tasks: Edit: {{task.name}}</h1>
+    <p class="hc-page-intro">Edit your task.</p>
+</div>
 {% endblock header %}
 {% block content %}
 <script>
@@ -116,8 +113,11 @@ Edit your task.
                 {% endif %}
             </div>
         </fieldset>
-        <div class="form-group">
-            {{ tasksForm.submit(class="btn btn-primary pull-right")}}
+        <div class="hc-form-actions">
+            <a class="btn btn-secondary" href="{{ url_for('tasks.tasks_list') }}">Back</a>
+            <div class="hc-form-actions-right">
+                {{ tasksForm.submit(class="btn btn-primary")}}
+            </div>
         </div>
     </form>
 </div>
