@@ -17,6 +17,9 @@
 !requirements-test.txt
 !hashcrush.py
 !bootstrap_cli.py
+!Dockerfile
+!compose.yaml
+!.dockerignore
 
 # Application source and frontend assets
 !hashcrush/**/*.py

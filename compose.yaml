@@ -1,0 +1,77 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-hashcrush}
+      POSTGRES_USER: ${POSTGRES_USER:-hashcrush}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hashcrush}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - hashcrush-postgres:/var/lib/postgresql/data
+
+  bootstrap:
+    build:
+      context: .
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment: &hashcrush-env
+      HASHCRUSH_DATABASE_URI: ${HASHCRUSH_DATABASE_URI:-postgresql+psycopg://hashcrush:hashcrush@db:5432/hashcrush}
+      HASHCRUSH_SECRET_KEY: ${HASHCRUSH_SECRET_KEY:-docker-local-secret-key-change-me-0123456789abcdef}
+      HASHCRUSH_DATA_ENCRYPTION_KEY: ${HASHCRUSH_DATA_ENCRYPTION_KEY:-MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+      HASHCRUSH_HASHCAT_BIN: ${HASHCRUSH_HASHCAT_BIN:-/usr/bin/hashcat}
+      HASHCRUSH_RUNTIME_PATH: /tmp/hashcrush-runtime
+      HASHCRUSH_STORAGE_PATH: /var/lib/hashcrush
+      HASHCRUSH_SESSION_COOKIE_SECURE: ${HASHCRUSH_SESSION_COOKIE_SECURE:-0}
+      HASHCRUSH_INITIAL_ADMIN_USERNAME: ${HASHCRUSH_INITIAL_ADMIN_USERNAME:-admin}
+      HASHCRUSH_INITIAL_ADMIN_PASSWORD: ${HASHCRUSH_INITIAL_ADMIN_PASSWORD:-HashCrushDockerAdmin!2026}
+      HASHCRUSH_BOOTSTRAP_DB_WAIT_SECONDS: ${HASHCRUSH_BOOTSTRAP_DB_WAIT_SECONDS:-60}
+    command: ["python3", "-m", "hashcrush.container_bootstrap"]
+    volumes:
+      - hashcrush-storage:/var/lib/hashcrush
+      - hashcrush-runtime:/tmp/hashcrush-runtime
+
+  web:
+    build:
+      context: .
+    init: true
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
+    environment: *hashcrush-env
+    command: ["gunicorn", "--bind", "0.0.0.0:8000", "wsgi:app"]
+    ports:
+      - "${HASHCRUSH_WEB_PORT:-8080}:8000"
+    volumes:
+      - hashcrush-storage:/var/lib/hashcrush
+      - hashcrush-runtime:/tmp/hashcrush-runtime
+
+  worker:
+    build:
+      context: .
+    init: true
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
+    environment: *hashcrush-env
+    command: ["python3", "./hashcrush.py", "worker"]
+    volumes:
+      - hashcrush-storage:/var/lib/hashcrush
+      - hashcrush-runtime:/tmp/hashcrush-runtime
+
+volumes:
+  hashcrush-postgres:
+  hashcrush-storage:
+  hashcrush-runtime:

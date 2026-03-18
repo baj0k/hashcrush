@@ -1,8 +1,103 @@
-# HashCrush v1.1
+# HashCrush v2.0
 
 **HashCrush** is a tool for organization and automation of password cracking tasks. It also produces some analytics.
 
-## Requirements
+## Quick Start
+
+Docker Compose is the recommended deployment path.
+
+Requirements:
+1. Docker
+2. Docker Compose plugin
+
+#### 1) Clone the repo
+
+```bash
+git clone https://github.com/baj0k/hashcrush.git
+cd hashcrush
+```
+
+#### 2) Create `.env`
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env` and set:
+- `POSTGRES_PASSWORD`
+- `HASHCRUSH_SECRET_KEY`
+- `HASHCRUSH_DATA_ENCRYPTION_KEY`
+- `HASHCRUSH_INITIAL_ADMIN_PASSWORD`
+
+#### 3) Start the stack
+
+```bash
+docker compose up -d --build
+```
+
+Watch startup:
+
+```bash
+docker compose logs -f bootstrap web worker
+```
+
+#### 4) Open the app
+
+Browse to:
+
+```text
+http://127.0.0.1:8080
+```
+
+Login:
+- username: `admin`
+- password: the value you set in `.env`
+
+The Compose stack starts:
+- PostgreSQL
+- a one-shot bootstrap container that applies schema/data upgrades and seeds the initial admin/settings/default tasks
+- a Gunicorn web container
+- a dedicated worker container
+
+Important notes:
+- `docker compose down` stops the stack and keeps the data volumes
+- `docker compose down -v` wipes the database and uploaded asset volumes
+- the stack serves plain HTTP on port `8080` by default
+- if you place a TLS reverse proxy in front of the stack, set `HASHCRUSH_SESSION_COOKIE_SECURE=1` in `.env`
+
+## Future Upgrades and Migrations
+
+For future releases, use the same Compose workflow:
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+The bootstrap container reruns tracked schema/data upgrades before the web and worker services become ready.
+
+If you need to rerun the bootstrap step by itself:
+
+```bash
+docker compose run --rm bootstrap
+```
+
+Do not use `python3 ./hashcrush.py setup` on an existing deployment. It is destructive and rebuilds the database from scratch.
+
+Current releases expect schema version `6`.
+
+## Manual Host Installation
+
+Docker Compose is the recommended deployment path. If you do not want to use Docker, the supported host layout keeps state outside the repo:
+
+- `/etc/hashcrush/config.conf`
+- `/etc/hashcrush/ssl/cert.pem`
+- `/etc/hashcrush/ssl/key.pem`
+- `/var/lib/hashcrush/wordlists/...`
+- `/var/lib/hashcrush/rules/...`
+- `/tmp/hashcrush-runtime/...`
+
+Host requirements:
 1. Python 3.10+
 2. PostgreSQL running locally
 3. Administrative privileges for local PostgreSQL bootstrap
@@ -10,114 +105,55 @@
 
 Prefer downloading the Hashcat release bundle manually from the official website instead of relying on distro packages. The official release is usually newer.
 
-## Installation
-#### 1) Setup PostgreSQL
-```
-sudo apt update -y
-sudo apt install postgresql postgresql-contrib -y
-sudo service postgresql start
-```
+Fresh host deployment:
 
-#### 2) Install HashCrush
-```
-git clone https://github.com/baj0k/hashcrush.git
-cd hashcrush
-sudo apt install python3 python3-pip python3-flask -y
+```bash
+sudo apt update -y
+sudo apt install postgresql postgresql-contrib python3 python3-pip -y
+sudo service postgresql start
 python3 -m pip install -r requirements.txt
+sudo install -o "$USER" -g "$USER" -m 700 -d \
+  /etc/hashcrush /etc/hashcrush/ssl \
+  /var/lib/hashcrush /var/lib/hashcrush/wordlists /var/lib/hashcrush/rules \
+  /tmp/hashcrush-runtime /tmp/hashcrush-runtime/tmp /tmp/hashcrush-runtime/hashes /tmp/hashcrush-runtime/outfiles
 python3 ./hashcrush.py setup
 ```
-Disposable live-test environment bootstrap:
-```bash
-python3 ./hashcrush.py setup --test
-```
-`hashcrush.py setup --test` rebuilds the DB, creates dummy users/data, and writes `.env.test` for E2E tests.
-##### Important Setup Warning
 
-`hashcrush.py setup` is destructive.
-
-It rebuilds the `hashcrush` database from scratch.
-Do not run it on a production instance.
-
-#### 3) It's alive
-```
-python3 ./hashcrush.py
-```
-Navigate to your server at [https://127.0.0.1:8443](https://127.0.0.1:8443) and log in with the admin account you created during `hashcrush.py setup`.
-
-Because HashCrush starts with a self-signed certificate, browsers will warn by default.
-Production deployments should provide certificate paths via environment variables:
-- `HASHCRUSH_SSL_CERT_PATH`
-- `HASHCRUSH_SSL_KEY_PATH`
-- `HASHCRUSH_TRUST_X_FORWARDED_FOR` (set only behind a trusted reverse proxy)
-
-If either TLS file is missing/unreadable, startup fails with an explicit error.
-Initial bootstrap defaults to generating the certificate and key under `/etc/hashcrush/ssl`.
-It applies restrictive permissions (`cert.pem` `0644`, `key.pem` `0600`) and prompts for another writable directory if `/etc/hashcrush/ssl` is not writable.
-
-
-## Running HashCrush
+Then run the web app and worker separately:
 
 ```bash
-python3 ./hashcrush.py
+python3 ./hashcrush.py serve
+python3 ./hashcrush.py worker
 ```
 
-Recommended production environment overrides:
+Manual production topology:
+- reverse proxy such as `nginx` or `caddy`
+- WSGI server serving `wsgi:app`
+- one `python3 ./hashcrush.py worker` process
+
+Example manual web entrypoint:
 
 ```bash
-export HASHCRUSH_SECRET_KEY='<strong-random-secret>'
-export HASHCRUSH_DATA_ENCRYPTION_KEY='<fernet-key>'
-export HASHCRUSH_DATABASE_URI='postgresql+psycopg://hashcrush:<strong-db-password>@127.0.0.1:5432/hashcrush'
-export HASHCRUSH_STORAGE_PATH='/var/lib/hashcrush'
-export HASHCRUSH_RUNTIME_PATH='/tmp/hashcrush-runtime'
-export HASHCRUSH_SSL_CERT_PATH='/run/secrets/hashcrush-cert.pem'
-export HASHCRUSH_SSL_KEY_PATH='/run/secrets/hashcrush-key.pem'
+gunicorn --bind 127.0.0.1:8000 wsgi:app
 ```
 
-Persisted data is encrypted at rest with the data encryption key. Keep `HASHCRUSH_DATA_ENCRYPTION_KEY` in a secret store or environment, not in shell history.
+CLI commands:
 
-If you do not want to use a full URI, HashCrush also supports:
-
-```bash
-export HASHCRUSH_DB_HOST='127.0.0.1'
-export HASHCRUSH_DB_PORT='5432'
-export HASHCRUSH_DB_NAME='hashcrush'
-export HASHCRUSH_DB_USERNAME='hashcrush'
-export HASHCRUSH_DB_PASSWORD='<strong-db-password>'
-```
-
-Optional flags:
-
-- --debug
-- --reset-admin-password
-- --reset-admin-password --admin-username <admin_username>
-- upgrade
-- upgrade --dry-run
-- setup
-- setup --test
-
-## Production Upgrades
-
-Do not use `hashcrush.py setup` on an existing deployment. It is destructive.
-
-Use the upgrade path instead:
-
-```bash
-# 1. Back up the database and config first.
-# 2. Deploy the new code.
-python3 ./hashcrush.py upgrade --dry-run
-python3 ./hashcrush.py upgrade
-python3 ./hashcrush.py
-```
-
-`hashcrush.py upgrade` is non-destructive. It applies tracked schema/data migrations in place and preserves existing data.
-If the database schema is older than the code expects, app startup shows an explicit error until an upgrade is performed.
-Current releases expect schema version `5`.
+- `serve`
+- `serve --debug`
+- `serve --reset-admin-password`
+- `serve --reset-admin-password --admin-username <admin_username>`
+- `worker`
+- `upgrade`
+- `upgrade --dry-run`
+- `setup`
+- `setup --test`
 
 ## PostgreSQL Backup and Restore
 
 Supported backup set:
 - PostgreSQL database dump
-- `config.conf` or the equivalent secret-store values for:
+- the active config file (recommended host path: `/etc/hashcrush/config.conf`) or the equivalent secret-store values for:
   - `HASHCRUSH_SECRET_KEY`
   - `HASHCRUSH_DATA_ENCRYPTION_KEY`
   - PostgreSQL connection settings
@@ -136,7 +172,7 @@ pg_dump --format=custom --file hashcrush_$(date +%F_%H%M%S).dump "$HASHCRUSH_DAT
 Config and managed-storage backup:
 
 ```bash
-cp hashcrush/config.conf hashcrush_config_$(date +%F_%H%M%S).conf
+cp "${HASHCRUSH_CONFIG_PATH:-/etc/hashcrush/config.conf}" hashcrush_config_$(date +%F_%H%M%S).conf
 tar -C "$(dirname "$HASHCRUSH_STORAGE_PATH")" \
   -czf hashcrush_storage_$(date +%F_%H%M%S).tar.gz \
   "$(basename "$HASHCRUSH_STORAGE_PATH")"
@@ -162,7 +198,7 @@ Restore expectations:
 
 Production deploy checklist:
 1. Run `pg_dump` before deploying.
-2. Back up `config.conf` or the equivalent secret-store values.
+2. Back up the active config file or the equivalent secret-store values.
 3. Back up `STORAGE_PATH`.
 4. Deploy the new code.
 5. Run `python3 ./hashcrush.py upgrade --dry-run`.
@@ -202,7 +238,7 @@ Local automated browser tests are the default.
 Optional live-instance smoke:
 ```bash
 python3 ./hashcrush.py setup --test
-python3 ./hashcrush.py
+python3 ./hashcrush.py serve
 export HASHCRUSH_E2E_MODE=external
 ./tests/test-all.sh
 ```
