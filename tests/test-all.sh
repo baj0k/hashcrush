@@ -4,7 +4,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-if [[ -f .env.test ]]; then
+dotenv_path=""
+if [[ -f tests/.env.test ]]; then
+  dotenv_path="tests/.env.test"
+elif [[ -f .env.test ]]; then
+  dotenv_path=".env.test"
+fi
+
+if [[ -n "$dotenv_path" ]]; then
   while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
     line="${raw_line#"${raw_line%%[![:space:]]*}"}"
     [[ -z "$line" || "$line" == \#* ]] && continue
@@ -17,7 +24,7 @@ if [[ -f .env.test ]]; then
     if [[ -z "${!key+x}" ]]; then
       export "$key=$value"
     fi
-  done < .env.test
+  done < "$dotenv_path"
 fi
 
 export PYTHONPATH="${PYTHONPATH:-.}"

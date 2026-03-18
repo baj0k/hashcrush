@@ -8,7 +8,7 @@ from logging.config import dictConfig as loggingDictConfig
 from flask import Flask
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 
-__version__ = "1.1"
+__version__ = "2.0"
 
 
 class _SuppressWerkzeugTlsDisconnects(logging.Filter):
@@ -205,12 +205,12 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     )
     _attach_werkzeug_tls_disconnect_filter()
 
-    from hashcrush.config import Config
+    from hashcrush.config import build_config
 
-    app.config.from_object(Config)
+    app.config.from_mapping(build_config(config_overrides))
 
     # Sensible defaults; can be overridden via config_overrides or app config.
-    app.config.setdefault("ENABLE_LOCAL_EXECUTOR", True)
+    app.config.setdefault("ENABLE_LOCAL_EXECUTOR", False)
     app.config.setdefault("SKIP_RUNTIME_BOOTSTRAP", False)
     app.config.setdefault(
         "RUNTIME_PATH", os.path.join(tempfile.gettempdir(), "hashcrush-runtime")
@@ -307,18 +307,5 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     from hashcrush.uploads import UploadOperationService
 
     app.extensions["upload_operations"] = UploadOperationService(app)
-
-    # Local single-node executor for queued JobTasks.
-    if (
-        (not app.config.get("TESTING"))
-        and (not app.config.get("SKIP_RUNTIME_BOOTSTRAP"))
-        and app.config.get("ENABLE_LOCAL_EXECUTOR", True)
-    ):
-        if (not app.debug) or (os.environ.get("WERKZEUG_RUN_MAIN") == "true"):
-            from hashcrush.executor import LocalExecutorService
-
-            local_executor = LocalExecutorService(app)
-            local_executor.start()
-            app.extensions["local_executor"] = local_executor
 
     return app

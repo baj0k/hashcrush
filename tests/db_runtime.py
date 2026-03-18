@@ -7,14 +7,23 @@ import os
 import secrets
 import threading
 from configparser import ConfigParser
-from pathlib import Path
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.pool import NullPool
 
+from hashcrush.paths import get_default_config_path
+
 TEST_POSTGRES_URI_ENV = "HASHCRUSH_TEST_POSTGRES_URI"
 TEST_POSTGRES_ADMIN_URI_ENV = "HASHCRUSH_TEST_POSTGRES_ADMIN_URI"
+DEFAULT_LOCAL_TEST_POSTGRES_URI = URL.create(
+    "postgresql+psycopg",
+    username="hashcrush",
+    password="hashcrush",
+    host="127.0.0.1",
+    port=5432,
+    database="hashcrush",
+).render_as_string(hide_password=False)
 
 _state_lock = threading.Lock()
 _managed_postgres_databases: set[tuple[str, str]] = set()
@@ -59,7 +68,7 @@ def _postgres_base_uri() -> str:
     if runtime_uri:
         return runtime_uri
 
-    config_path = Path(os.getenv("HASHCRUSH_CONFIG_PATH", "hashcrush/config.conf"))
+    config_path = get_default_config_path()
     parser = ConfigParser(interpolation=None)
     parser.read(config_path)
 
@@ -82,11 +91,7 @@ def _postgres_base_uri() -> str:
             database=name,
         ).render_as_string(hide_password=False)
 
-    raise RuntimeError(
-        "Automated tests require PostgreSQL. Configure either "
-        "HASHCRUSH_TEST_POSTGRES_URI, HASHCRUSH_DATABASE_URI, or a PostgreSQL "
-        "database in hashcrush/config.conf."
-    )
+    return DEFAULT_LOCAL_TEST_POSTGRES_URI
 
 
 def _drop_postgres_database(admin_uri: str, db_name: str) -> None:

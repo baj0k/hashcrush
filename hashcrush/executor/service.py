@@ -14,7 +14,8 @@ from datetime import datetime
 from typing import TextIO
 
 from flask import current_app
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, or_, select, text, update
+from sqlalchemy.engine import Connection
 
 from hashcrush.models import (
     Hashes,
@@ -46,6 +47,80 @@ def _ensure_runtime_dirs() -> tuple[str, str]:
     os.makedirs(hashes_dir, exist_ok=True)
     os.makedirs(outfiles_dir, exist_ok=True)
     return hashes_dir, outfiles_dir
+
+
+_EXECUTOR_LOCK_CLASS_ID = 0x48435253
+_EXECUTOR_LOCK_ID = 0x57524B52
+
+
+class ExecutorOwnershipError(RuntimeError):
+    """Raised when another worker already owns the deployment executor lock."""
+
+
+@dataclass
+class ExecutorOwnershipLease:
+    """Hold the advisory lock connection for the active worker lifetime."""
+
+    connection: Connection | None
+    dialect_name: str
+    acquired: bool = False
+
+    def release(self) -> None:
+        if self.connection is None:
+            return
+
+        try:
+            if self.acquired and self.dialect_name == "postgresql":
+                self.connection.execute(
+                    text(
+                        "SELECT pg_advisory_unlock(:class_id, :lock_id)"
+                    ),
+                    {
+                        "class_id": _EXECUTOR_LOCK_CLASS_ID,
+                        "lock_id": _EXECUTOR_LOCK_ID,
+                    },
+                )
+        finally:
+            self.connection.close()
+            self.connection = None
+
+
+def acquire_executor_ownership() -> ExecutorOwnershipLease:
+    """Acquire the singleton worker advisory lock for this deployment."""
+    dialect_name = db.engine.dialect.name
+    if dialect_name != "postgresql":
+        current_app.logger.warning(
+            "Executor ownership lock is not enforced for database dialect=%s; continuing without singleton protection.",
+            dialect_name,
+        )
+        return ExecutorOwnershipLease(
+            connection=None,
+            dialect_name=dialect_name,
+            acquired=False,
+        )
+
+    connection = db.engine.connect()
+    acquired = bool(
+        connection.execute(
+            text("SELECT pg_try_advisory_lock(:class_id, :lock_id)"),
+            {
+                "class_id": _EXECUTOR_LOCK_CLASS_ID,
+                "lock_id": _EXECUTOR_LOCK_ID,
+            },
+        ).scalar()
+    )
+    if not acquired:
+        connection.close()
+        raise ExecutorOwnershipError(
+            "Another HashCrush worker already owns the executor lock for this deployment."
+        )
+
+    current_app.logger.info("Acquired executor ownership lock.")
+    return ExecutorOwnershipLease(
+        connection=connection,
+        dialect_name=dialect_name,
+        acquired=True,
+    )
 
 
 def _parse_hashcat_status(filepath: str) -> dict[str, str]:
@@ -138,6 +213,7 @@ class LocalExecutorService:
         self._thread: threading.Thread | None = None
         self._active: ActiveTask | None = None
         self._lock = threading.Lock()
+        self._ownership_lease: ExecutorOwnershipLease | None = None
         self._recovered_once = False
 
     def start(self) -> None:
@@ -145,12 +221,17 @@ class LocalExecutorService:
             if self._thread and self._thread.is_alive():
                 return
             self._stop_event.clear()
+            self._acquire_ownership()
             self._thread = threading.Thread(
                 target=self._run_loop,
                 name="hashcrush-local-executor",
                 daemon=True,
             )
-            self._thread.start()
+            try:
+                self._thread.start()
+            except Exception:
+                self._release_ownership()
+                raise
         self.app.logger.info("Local executor started.")
 
     def stop(self) -> None:
@@ -158,17 +239,47 @@ class LocalExecutorService:
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=3.0)
 
+    def run_forever(self) -> None:
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                raise RuntimeError("Local executor is already running in a background thread.")
+            self._stop_event.clear()
+            self._acquire_ownership()
+        self.app.logger.info("Local executor started.")
+        self._run_loop()
+
+    def _acquire_ownership(self) -> None:
+        if self._ownership_lease is not None:
+            return
+        with self.app.app_context():
+            self._ownership_lease = acquire_executor_ownership()
+
+    def _release_ownership(self) -> None:
+        lease = self._ownership_lease
+        self._ownership_lease = None
+        if lease is None:
+            return
+        try:
+            lease.release()
+        finally:
+            self.app.logger.info("Released executor ownership lock.")
+
     def _run_loop(self) -> None:
-        while not self._stop_event.is_set():
-            try:
-                with self.app.app_context():
-                    self._tick()
-            except Exception:
-                self.app.logger.exception("Local executor tick failed.")
-            finally:
-                with self.app.app_context():
-                    db.session.remove()
-            self._stop_event.wait(self.poll_interval)
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    with self.app.app_context():
+                        self._tick()
+                except Exception:
+                    self.app.logger.exception("Local executor tick failed.")
+                finally:
+                    with self.app.app_context():
+                        db.session.remove()
+                self._stop_event.wait(self.poll_interval)
+        finally:
+            with self.app.app_context():
+                db.session.remove()
+            self._release_ownership()
 
     def _tick(self) -> None:
         if not self._recovered_once:

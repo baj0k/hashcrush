@@ -5,6 +5,7 @@ import argparse
 import importlib
 import logging
 import os
+import signal
 import sys
 import traceback
 from configparser import ConfigParser
@@ -55,7 +56,9 @@ def _load_bootstrap_cli():
 
 
 def _config_path() -> Path:
-    return Path(__file__).resolve().parent / "hashcrush" / "config.conf"
+    from hashcrush.paths import get_default_config_path
+
+    return get_default_config_path()
 
 
 def _write_config_parser_atomic(config_path: Path, parser: ConfigParser) -> None:
@@ -188,7 +191,7 @@ def reset_admin_password_cli(db, bcrypt, admin_username: str | None = None) -> i
         )
         return 1
 
-    config_path = Path(__file__).resolve().parent / "hashcrush" / "config.conf"
+    config_path = _config_path()
     if not _can_run_break_glass(config_path):
         print(
             "Error: run this command as root or as the config owner account.",
@@ -263,7 +266,7 @@ def _build_root_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=("serve", "setup", "upgrade"),
+        choices=("serve", "worker", "setup", "upgrade"),
         help="command to run (default: serve)",
     )
     parser.add_argument(
@@ -299,6 +302,17 @@ def _build_upgrade_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_worker_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(allow_abbrev=False)
+    parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=2.0,
+        help="seconds between executor queue polls (default: 2.0)",
+    )
+    return parser
+
+
 def _normalize_cli_args(args: list[str]) -> list[str]:
     if not args:
         return []
@@ -322,11 +336,19 @@ def _parse_upgrade_args(args: list[str]) -> argparse.Namespace:
     return _build_upgrade_parser().parse_args(args)
 
 
+def _parse_worker_args(args: list[str]) -> argparse.Namespace:
+    return _build_worker_parser().parse_args(args)
+
+
 def _run_serve(parsed_args: argparse.Namespace) -> int:
     ensure_flask_bcrypt()
 
     create_app = _load_create_app()
-    app = create_app()
+    app = create_app(
+        config_overrides={
+            "ENABLE_LOCAL_EXECUTOR": False,
+        }
+    )
     with app.app_context():
         from hashcrush.models import db
         from hashcrush.users.routes import bcrypt
@@ -341,6 +363,14 @@ def _run_serve(parsed_args: argparse.Namespace) -> int:
             return 1
 
         print("Done! Running HashCrush! Enjoy.")
+        print(
+            "Warning: `hashcrush.py serve` uses Flask's built-in HTTPS server and is supported for local use only.",
+            file=sys.stderr,
+        )
+        print(
+            "Production topology: run the web app behind a reverse proxy and WSGI server, and run `python3 ./hashcrush.py worker` separately.",
+            file=sys.stderr,
+        )
 
     if parsed_args.debug:
         app_state.debug = True
@@ -356,6 +386,52 @@ def _run_serve(parsed_args: argparse.Namespace) -> int:
         ssl_context=ssl_context,
         debug=parsed_args.debug,
     )
+    return 0
+
+
+def _run_worker(parsed_args: argparse.Namespace) -> int:
+    ensure_flask_bcrypt()
+
+    create_app = _load_create_app()
+    app = create_app(
+        config_overrides={
+            "ENABLE_LOCAL_EXECUTOR": False,
+        }
+    )
+
+    with app.app_context():
+        from hashcrush.executor import ExecutorOwnershipError, LocalExecutorService
+        from hashcrush.models import db
+
+        bootstrap_errors = _runtime_bootstrap_errors(db)
+        if bootstrap_errors:
+            for error in bootstrap_errors:
+                print(f"Error: {error}", file=sys.stderr)
+            return 1
+
+        service = LocalExecutorService(app, poll_interval=parsed_args.poll_interval)
+
+    previous_handlers: list[tuple[int, object]] = []
+
+    def _handle_signal(signum, _frame):
+        app.logger.info("Worker received signal=%s; stopping.", signum)
+        service.stop()
+
+    for signal_name in ("SIGINT", "SIGTERM"):
+        if hasattr(signal, signal_name):
+            signum = getattr(signal, signal_name)
+            previous_handlers.append((signum, signal.getsignal(signum)))
+            signal.signal(signum, _handle_signal)
+
+    print("Starting HashCrush worker.")
+    try:
+        service.run_forever()
+    except ExecutorOwnershipError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        for signum, previous_handler in previous_handlers:
+            signal.signal(signum, previous_handler)
     return 0
 
 
@@ -417,6 +493,8 @@ def cli(args) -> int:
             return _run_setup(argv[1:])
         if first == "upgrade":
             return _run_upgrade(_parse_upgrade_args(argv[1:]))
+        if first == "worker":
+            return _run_worker(_parse_worker_args(argv[1:]))
         if first == "serve":
             return _run_serve(_parse_serve_args(argv[1:]))
         if first.startswith("-"):

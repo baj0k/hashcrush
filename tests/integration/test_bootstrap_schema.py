@@ -9,6 +9,29 @@ from sqlalchemy import text
 from tests.integration.support import *
 
 
+def _build_sqlite_cli_app(tmp_path):
+    runtime_path = tmp_path / "runtime"
+    storage_path = tmp_path / "storage"
+    for subdir in ("tmp", "hashes", "outfiles"):
+        (runtime_path / subdir).mkdir(parents=True, exist_ok=True)
+    for subdir in ("wordlists", "rules"):
+        (storage_path / subdir).mkdir(parents=True, exist_ok=True)
+
+    return create_app(
+        testing=True,
+        config_overrides={
+            "SECRET_KEY": "sqlite-cli-test-secret-key",
+            "DATA_ENCRYPTION_KEY": TEST_DATA_ENCRYPTION_KEY,
+            "SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path / 'cli.sqlite'}",
+            "SQLALCHEMY_TRACK_MODIFICATIONS": False,
+            "WTF_CSRF_ENABLED": False,
+            "ENABLE_LOCAL_EXECUTOR": False,
+            "RUNTIME_PATH": str(runtime_path),
+            "STORAGE_PATH": str(storage_path),
+        },
+    )
+
+
 @pytest.mark.security
 def test_cli_resolve_ssl_context_uses_configured_paths(tmp_path):
     cli_module = _load_cli_module()
@@ -221,6 +244,16 @@ def test_hashcrush_cli_setup_subcommand_delegates_to_bootstrap(monkeypatch):
     assert result == 23
     assert captured["argv"] == ["--test"]
 
+
+@pytest.mark.security
+def test_hashcrush_cli_config_path_prefers_hashcrush_config_path_env(monkeypatch, tmp_path):
+    cli_module = _load_cli_module()
+    config_path = tmp_path / "hashcrush.conf"
+    monkeypatch.setenv("HASHCRUSH_CONFIG_PATH", str(config_path))
+
+    assert cli_module._config_path() == config_path
+
+
 @pytest.mark.security
 def test_hashcrush_cli_upgrade_subcommand_runs_schema_upgrade(monkeypatch):
     cli_module = _load_cli_module()
@@ -260,6 +293,44 @@ def test_hashcrush_cli_upgrade_subcommand_runs_schema_upgrade(monkeypatch):
 
 
 @pytest.mark.security
+def test_hashcrush_cli_worker_subcommand_runs_executor(tmp_path, monkeypatch):
+    cli_module = _load_cli_module()
+    app = _build_sqlite_cli_app(tmp_path)
+    with app.app_context():
+        db.create_all()
+        _seed_settings()
+        _seed_admin_user()
+
+    captured = {}
+
+    class _FakeExecutor:
+        def __init__(self, app, poll_interval=2.0):
+            captured["app"] = app
+            captured["poll_interval"] = poll_interval
+
+        def run_forever(self):
+            captured["ran"] = True
+
+        def stop(self):
+            captured["stopped"] = True
+
+    monkeypatch.setattr(cli_module, "ensure_flask_bcrypt", lambda: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_load_create_app",
+        lambda: (lambda config_overrides=None: app),
+    )
+    monkeypatch.setattr("hashcrush.executor.LocalExecutorService", _FakeExecutor)
+
+    result = cli_module.cli(["hashcrush.py", "worker", "--poll-interval", "3.5"])
+
+    assert result == 0
+    assert captured["app"] is app
+    assert captured["poll_interval"] == 3.5
+    assert captured["ran"] is True
+
+
+@pytest.mark.security
 def test_upgrade_bootstraps_missing_data_encryption_key_into_config(tmp_path, monkeypatch):
     cli_module = _load_cli_module()
     config_dir = tmp_path / "hashcrush"
@@ -280,7 +351,7 @@ def test_upgrade_bootstraps_missing_data_encryption_key_into_config(tmp_path, mo
     with open(config_path, "w", encoding="utf-8") as handle:
         parser.write(handle)
 
-    monkeypatch.setattr(cli_module, "__file__", str(tmp_path / "hashcrush.py"))
+    monkeypatch.setenv("HASHCRUSH_CONFIG_PATH", str(config_path))
     monkeypatch.delenv("HASHCRUSH_DATA_ENCRYPTION_KEY", raising=False)
 
     changed = cli_module._ensure_upgrade_data_encryption_key()
@@ -300,9 +371,37 @@ def test_hashcrush_cli_serve_refuses_missing_runtime_bootstrap_state(monkeypatch
         db.create_all()
 
     monkeypatch.setattr(cli_module, "ensure_flask_bcrypt", lambda: None)
-    monkeypatch.setattr(cli_module, "_load_create_app", lambda: (lambda: app))
+    monkeypatch.setattr(
+        cli_module,
+        "_load_create_app",
+        lambda: (lambda config_overrides=None: app),
+    )
 
     result = cli_module._run_serve(cli_module._parse_serve_args([]))
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert "Settings row is missing" in captured.err
+    assert "Admin account is missing" in captured.err
+
+
+@pytest.mark.security
+def test_hashcrush_cli_worker_refuses_missing_runtime_bootstrap_state(
+    tmp_path, monkeypatch, capsys
+):
+    cli_module = _load_cli_module()
+    app = _build_sqlite_cli_app(tmp_path)
+    with app.app_context():
+        db.create_all()
+
+    monkeypatch.setattr(cli_module, "ensure_flask_bcrypt", lambda: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_load_create_app",
+        lambda: (lambda config_overrides=None: app),
+    )
+
+    result = cli_module._run_worker(cli_module._parse_worker_args([]))
 
     captured = capsys.readouterr()
     assert result == 1
@@ -1055,7 +1154,8 @@ def test_config_prefers_database_uri_from_config(tmp_path, monkeypatch):
         "[database]\n"
         "uri = postgresql+psycopg://config-user:config-pass@db.example:5432/hashcrush\n\n"
         "[app]\n"
-        "secret_key = test-secret\n",
+        "secret_key = test-secret\n"
+        "data_encryption_key = test-data-key\n",
         encoding="utf-8",
     )
 
@@ -1071,9 +1171,8 @@ def test_config_prefers_database_uri_from_config(tmp_path, monkeypatch):
     assert spec and spec.loader
     spec.loader.exec_module(config_module)
 
-    assert (
-        config_module.Config.SQLALCHEMY_DATABASE_URI
-        == "postgresql+psycopg://config-user:config-pass@db.example:5432/hashcrush"
+    assert config_module.build_config()["SQLALCHEMY_DATABASE_URI"] == (
+        "postgresql+psycopg://config-user:config-pass@db.example:5432/hashcrush"
     )
 
 @pytest.mark.security
@@ -1087,7 +1186,8 @@ def test_config_builds_postgresql_uri_from_discrete_fields(tmp_path, monkeypatch
         "username = app-user\n"
         "password = app-pass\n\n"
         "[app]\n"
-        "secret_key = test-secret\n",
+        "secret_key = test-secret\n"
+        "data_encryption_key = test-data-key\n",
         encoding="utf-8",
     )
 
@@ -1103,9 +1203,8 @@ def test_config_builds_postgresql_uri_from_discrete_fields(tmp_path, monkeypatch
     assert spec and spec.loader
     spec.loader.exec_module(config_module)
 
-    assert (
-        config_module.Config.SQLALCHEMY_DATABASE_URI
-        == "postgresql+psycopg://app-user:app-pass@db.internal:5433/hashcrush_app"
+    assert config_module.build_config()["SQLALCHEMY_DATABASE_URI"] == (
+        "postgresql+psycopg://app-user:app-pass@db.internal:5433/hashcrush_app"
     )
 
 

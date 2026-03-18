@@ -10,6 +10,7 @@ from urllib.request import urlopen
 import pytest
 from werkzeug.serving import make_server
 
+from hashcrush.paths import iter_test_env_paths
 from tests.db_runtime import (
     create_managed_postgres_database,
     sqlalchemy_engine_options,
@@ -41,8 +42,8 @@ def load_dotenv(path: Path) -> None:
         if key and key not in os.environ:
             os.environ[key] = value
 
-
-load_dotenv(Path(__file__).resolve().parents[1] / ".env.test")
+for dotenv_path in iter_test_env_paths():
+    load_dotenv(dotenv_path)
 
 
 def _external_e2e_enabled() -> bool:

@@ -16,27 +16,31 @@ def get_project_root() -> Path:
     return get_package_root().parent
 
 
-def get_repo_runtime_root() -> Path:
-    """Return the repo-local runtime folder used for generated local artifacts."""
-    return get_project_root() / ".runtime"
-
-
 def get_legacy_config_path() -> Path:
     """Return the historical in-package config path."""
     return get_package_root() / "config.conf"
 
 
+def get_system_config_path() -> Path:
+    """Return the preferred system-wide config path."""
+    return Path("/etc/hashcrush/config.conf")
+
+
 def get_default_config_path() -> Path:
-    """Return the active config path, preferring explicit env and legacy installs."""
+    """Return the active config path, preferring explicit env and system installs."""
     configured = str(os.getenv("HASHCRUSH_CONFIG_PATH") or "").strip()
     if configured:
         return Path(os.path.abspath(os.path.expanduser(configured)))
+
+    system_path = get_system_config_path()
+    if system_path.exists():
+        return system_path
 
     legacy_path = get_legacy_config_path()
     if legacy_path.exists():
         return legacy_path
 
-    return get_repo_runtime_root() / "config.conf"
+    return system_path
 
 
 def get_config_template_path() -> Path:
@@ -62,7 +66,3 @@ def iter_test_env_paths() -> tuple[Path, ...]:
             ordered_paths.append(candidate)
     return tuple(ordered_paths)
 
-
-def get_repo_ssl_dir() -> Path:
-    """Return the repo-local fallback TLS directory for disposable test setup."""
-    return get_repo_runtime_root() / "ssl"

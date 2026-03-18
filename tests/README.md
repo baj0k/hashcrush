@@ -38,6 +38,14 @@ HashCrush PostgreSQL database and isolates each test app in its own temporary sc
 To point the suite at a different PostgreSQL database, set
 `HASHCRUSH_TEST_POSTGRES_URI`.
 
+If neither `HASHCRUSH_TEST_POSTGRES_URI` nor `HASHCRUSH_DATABASE_URI` is set and no
+active HashCrush config file is present, the suite falls back to the standard local
+development URI:
+
+```text
+postgresql+psycopg://hashcrush:hashcrush@127.0.0.1:5432/hashcrush
+```
+
 `HASHCRUSH_TEST_POSTGRES_ADMIN_URI` remains supported only as a fallback for
 environments where schema creation is unavailable but temporary database creation
 is possible.
@@ -88,7 +96,7 @@ Typical flow:
 
 ```bash
 python3 ./hashcrush.py setup --test
-python3 ./hashcrush.py
+python3 ./hashcrush.py serve
 export HASHCRUSH_E2E_MODE=external
 ./tests/test-all.sh
 ```
@@ -100,8 +108,8 @@ PYTHONPATH=. pytest -q -m e2e_external -rs
 ```
 
 In external mode:
-- `.env.test` is loaded automatically if present
-- `hashcrush.py setup --test` writes a ready-to-use `.env.test`
+- `tests/.env.test` is loaded automatically if present
+- `hashcrush.py setup --test` writes a ready-to-use `tests/.env.test`
 - the suite targets `HASHCRUSH_E2E_BASE_URL`
 - the suite does not bootstrap its own server or database
 

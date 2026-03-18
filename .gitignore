@@ -1,33 +1,31 @@
-# Ignore everything by default.
-*
+# Python caches and build output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
 
-# Allow nested allowlist rules.
-!*/
+# Local environments
+.venv/
+.venv*/
+venv/
 
-# Repository metadata and docs
-!.gitignore
-!LICENSE
-!README.md
-!TODO.md
+# Local HashCrush runtime/config artifacts
+.runtime/
+.env
+.env.test
+tests/.env.test
+data-volume/
+hashcrush/config.conf
+hashcrush/control/
+hashcrush/ssl/
 
-# Project configuration and entry points
-!pyproject.toml
-!pytest.ini
-!requirements.txt
-!requirements-test.txt
-!hashcrush.py
-!bootstrap_cli.py
-!Dockerfile
-!compose.yaml
-!.dockerignore
-
-# Application source and frontend assets
-!hashcrush/**/*.py
-!hashcrush/templates/**
-!hashcrush/static/**
-!hashcrush/config.conf.example
-
-# Tests and test fixtures/scripts
-!tests/**/*.py
-!tests/**/*.txt
-!tests/**/*.sh
+# Editor and OS noise
+.idea/
+.vscode/
+*.code-workspace
+.DS_Store

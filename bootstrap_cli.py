@@ -11,9 +11,11 @@ from getpass import getpass
 from sqlalchemy import select
 
 from hashcrush.crypto_utils import generate_data_encryption_key
+from hashcrush.paths import (
+    get_default_config_path,
+    get_default_test_env_path,
+)
 
-CONFIG_PATH = os.path.join("hashcrush", "config.conf")
-ENV_TEST_PATH = ".env.test"
 LOCAL_POSTGRES_HOST_ALIASES = {"localhost", "127.0.0.1", "::1"}
 DEFAULT_DB_HOST = "127.0.0.1"
 DEFAULT_DB_PORT = "5432"
@@ -25,7 +27,7 @@ DEFAULT_HASHCAT_STATUS_TIMER = 5
 DEFAULT_RUNTIME_PATH = "/tmp/hashcrush-runtime"
 DEFAULT_STORAGE_PATH = "/var/lib/hashcrush"
 DEFAULT_SSL_DIR = "/etc/hashcrush/ssl"
-FALLBACK_TEST_SSL_DIR = os.path.join("hashcrush", "ssl")
+DEFAULT_TEST_SSL_DIR = os.path.join(tempfile.gettempdir(), "hashcrush-e2e-ssl")
 
 E2E_ADMIN_USERNAME = "admin"
 E2E_ADMIN_PASSWORD = "HashCrushE2EAdmin!2026"
@@ -49,6 +51,14 @@ def _read_existing_app_value(config_path: str, key: str) -> str | None:
     parser.read(config_path, encoding="utf-8")
     value = parser.get("app", key, fallback="").strip()
     return value or None
+
+
+def _config_path() -> str:
+    return str(get_default_config_path())
+
+
+def _test_env_path() -> str:
+    return str(get_default_test_env_path())
 
 
 def _probe_writable_directory(path: str) -> str:
@@ -430,7 +440,7 @@ def _collect_interactive_install_config(existing_values: dict[str, str | None]) 
         ssl_dir_default,
     )
 
-    config_exists = os.path.exists(CONFIG_PATH)
+    config_exists = os.path.exists(_config_path())
     existing_hashcat_bin = existing_values["hashcat_bin"]
     if config_exists and existing_hashcat_bin:
         preserve_hashcat_bin = (
@@ -521,7 +531,6 @@ def _collect_test_install_config(existing_values: dict[str, str | None]) -> dict
     )
     os.makedirs(storage_path, exist_ok=True)
 
-    project_root = os.path.abspath(os.path.dirname(__file__))
     ssl_dir = _find_first_writable_directory(
         [
             _env_ssl_dir() or "",
@@ -530,7 +539,7 @@ def _collect_test_install_config(existing_values: dict[str, str | None]) -> dict
             )
             or "",
             DEFAULT_SSL_DIR,
-            os.path.join(project_root, FALLBACK_TEST_SSL_DIR),
+            DEFAULT_TEST_SSL_DIR,
         ]
     )
 
@@ -627,6 +636,9 @@ def _write_e2e_env_file(env_path: str, values: dict[str, str]) -> None:
         f"HASHCRUSH_E2E_TASK_NAME={_dotenv_escape(values['HASHCRUSH_E2E_TASK_NAME'])}",
         "",
     ]
+    env_directory = os.path.dirname(env_path)
+    if env_directory:
+        os.makedirs(env_directory, exist_ok=True)
     with open(env_path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write("\n".join(lines))
 
@@ -850,18 +862,19 @@ def _print_test_environment_summary(values: dict[str, str]) -> None:
     print(f"- sample dictionary task: {values['dictionary_task_name']}")
     print(f"- sample dictionary+rule task: {values['dictionary_rule_task_name']}")
     print(f"- sample job id: {values['seed_job_id']}")
-    print(f"- wrote {ENV_TEST_PATH} with ready-to-use E2E variables")
+    print(f"- wrote {_test_env_path()} with ready-to-use E2E variables")
     print(f"- sample wordlist path: {values['wordlist_path']}")
     print(f"- sample rule path: {values['rule_path']}")
 
 
 def _existing_install_values() -> dict[str, str | None]:
+    config_path = _config_path()
     return {
-        "hashcat_bin": _read_existing_app_value(CONFIG_PATH, "hashcat_bin"),
-        "runtime_path": _read_existing_app_value(CONFIG_PATH, "runtime_path"),
-        "storage_path": _read_existing_app_value(CONFIG_PATH, "storage_path"),
-        "ssl_cert_path": _read_existing_app_value(CONFIG_PATH, "ssl_cert_path"),
-        "ssl_key_path": _read_existing_app_value(CONFIG_PATH, "ssl_key_path"),
+        "hashcat_bin": _read_existing_app_value(config_path, "hashcat_bin"),
+        "runtime_path": _read_existing_app_value(config_path, "runtime_path"),
+        "storage_path": _read_existing_app_value(config_path, "storage_path"),
+        "ssl_cert_path": _read_existing_app_value(config_path, "ssl_cert_path"),
+        "ssl_key_path": _read_existing_app_value(config_path, "ssl_key_path"),
     }
 
 
@@ -874,7 +887,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--test",
         dest="test_mode",
         action="store_true",
-        help="Rebuild a disposable local live-testing environment and write .env.test.",
+        help="Rebuild a disposable local live-testing environment and write tests/.env.test.",
     )
     return parser.parse_args(argv)
 
@@ -888,7 +901,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.test_mode:
         print(
             "\nWARNING: hashcrush.py setup --test is destructive. "
-            "It rebuilds the local hashcrush database, overwrites config.conf, "
+            "It rebuilds the local hashcrush database, overwrites the active config file, "
             "and seeds dummy live-test credentials."
         )
         install_config = _collect_test_install_config(existing_values)
@@ -905,8 +918,9 @@ def main(argv: list[str] | None = None) -> int:
 
     secret_key = secrets.token_urlsafe(64)
     data_encryption_key = generate_data_encryption_key()
+    config_path = _config_path()
     _write_config_atomic(
-        CONFIG_PATH,
+        config_path,
         install_config["db_server"],
         install_config["db_port"],
         install_config["db_name"],
@@ -921,7 +935,7 @@ def main(argv: list[str] | None = None) -> int:
         install_config["ssl_cert_path"],
         install_config["ssl_key_path"],
     )
-    print(f"Writing hashcrush config at: {CONFIG_PATH}")
+    print(f"Writing hashcrush config at: {config_path}")
     print("Generated a new app secret_key and stored it in config.")
     print("Generated a new data_encryption_key and stored it in config.")
     print(f"Set db_host={install_config['db_server']}")
@@ -954,7 +968,7 @@ def main(argv: list[str] | None = None) -> int:
         seeded_values = _seed_test_environment(
             install_config["runtime_path"],
             install_config["storage_path"],
-            ENV_TEST_PATH,
+            _test_env_path(),
         )
         _print_test_environment_summary(seeded_values)
         print("You can now run the live test flow with: ./tests/test-all.sh")

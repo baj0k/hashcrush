@@ -22,6 +22,7 @@ from hashcrush.audit import record_audit_event
 from hashcrush.config import sanitize_config_input
 from hashcrush.db_upgrade import get_schema_status
 from hashcrush.models import Settings, db
+from hashcrush.paths import get_default_config_path
 from hashcrush.utils.utils import get_runtime_subdir
 
 settings = Blueprint("settings", __name__)
@@ -203,12 +204,10 @@ def _temp_folder_path() -> str:
 
 
 def _hashcrush_config_path() -> str:
-    configured = (
-        current_app.config.get("HASHCRUSH_CONFIG_PATH")
-        or os.getenv("HASHCRUSH_CONFIG_PATH")
-        or "hashcrush/config.conf"
-    )
-    return os.path.abspath(os.path.expanduser(str(configured)))
+    configured = current_app.config.get("HASHCRUSH_CONFIG_PATH")
+    if configured:
+        return os.path.abspath(os.path.expanduser(str(configured)))
+    return str(get_default_config_path())
 
 
 def _load_hashcrush_config(config_path: str) -> ConfigParser:
@@ -321,7 +320,7 @@ def settings_list():
 @settings.route("/settings/hashcrush_config", methods=["POST"])
 @login_required
 def update_hashcrush_config():
-    """Save editable hashcrush/config.conf values from settings UI."""
+    """Save editable HashCrush config values from the settings UI."""
     if not current_user.admin:
         abort(403)
 

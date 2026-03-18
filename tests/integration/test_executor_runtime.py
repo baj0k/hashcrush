@@ -1,5 +1,7 @@
 """Integration tests for executor behavior and runtime recovery."""
 # ruff: noqa: F403,F405
+from flask import Flask
+
 from tests.integration.support import *
 
 
@@ -111,6 +113,70 @@ def test_executor_import_stores_plaintext_encrypted_at_rest(tmp_path):
         assert imported_hash.cracked is True
         assert imported_hash.plaintext != "Pa$$w0rd"
         assert decode_plaintext_from_storage(imported_hash.plaintext) == "Pa$$w0rd"
+
+
+@pytest.mark.security
+def test_executor_ownership_lock_allows_only_one_active_owner(monkeypatch):
+    from hashcrush.executor import service as executor_service
+
+    class _Result:
+        def __init__(self, value):
+            self._value = value
+
+        def scalar(self):
+            return self._value
+
+    class _FakeConnection:
+        def __init__(self, engine_state):
+            self._engine_state = engine_state
+            self.closed = False
+            self.acquired = False
+
+        def execute(self, statement, params=None):
+            sql_text = str(statement)
+            if "pg_try_advisory_lock" in sql_text:
+                acquired = not self._engine_state["locked"]
+                if acquired:
+                    self._engine_state["locked"] = True
+                    self.acquired = True
+                return _Result(acquired)
+            if "pg_advisory_unlock" in sql_text:
+                if self.acquired:
+                    self._engine_state["locked"] = False
+                    self.acquired = False
+                return _Result(True)
+            raise AssertionError(f"Unexpected SQL: {sql_text}")
+
+        def close(self):
+            self.closed = True
+            if self.acquired:
+                self._engine_state["locked"] = False
+                self.acquired = False
+
+    class _FakeEngine:
+        class dialect:
+            name = "postgresql"
+
+        def __init__(self):
+            self.state = {"locked": False}
+
+        def connect(self):
+            return _FakeConnection(self.state)
+
+    fake_db = type("FakeDb", (), {"engine": _FakeEngine()})()
+    monkeypatch.setattr(executor_service, "db", fake_db)
+
+    app = Flask(__name__)
+    with app.app_context():
+        first_lease = executor_service.acquire_executor_ownership()
+        try:
+            with pytest.raises(executor_service.ExecutorOwnershipError):
+                executor_service.acquire_executor_ownership()
+        finally:
+            first_lease.release()
+
+        second_lease = executor_service.acquire_executor_ownership()
+        second_lease.release()
 
 
 @pytest.mark.security
