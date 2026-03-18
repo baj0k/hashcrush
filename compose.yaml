@@ -58,6 +58,9 @@ services:
   worker:
     build:
       context: .
+      dockerfile: Dockerfile.worker
+      args:
+        HASHCRUSH_HASHCAT_VERSION: ${HASHCRUSH_HASHCAT_VERSION:-7.1.2}
     init: true
     restart: unless-stopped
     depends_on:
@@ -65,11 +68,21 @@ services:
         condition: service_healthy
       bootstrap:
         condition: service_completed_successfully
-    environment: *hashcrush-env
+    environment:
+      <<: *hashcrush-env
+      NVIDIA_VISIBLE_DEVICES: ${HASHCRUSH_NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${HASHCRUSH_NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
     command: ["python3", "./hashcrush.py", "worker"]
     volumes:
       - hashcrush-storage:/var/lib/hashcrush
       - hashcrush-runtime:/tmp/hashcrush-runtime
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
 volumes:
   hashcrush-postgres:

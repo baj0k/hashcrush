@@ -1,0 +1,42 @@
+FROM nvidia/cuda:12.9.0-devel-ubuntu22.04
+
+ARG HASHCRUSH_HASHCAT_VERSION=7.1.2
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        libgcc-s1 \
+        libminizip1 \
+        libstdc++6 \
+        libxxhash0 \
+        p7zip-full \
+        python3 \
+        python3-pip \
+        zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /app/requirements.txt
+
+RUN python3 -m pip install --no-cache-dir -r /app/requirements.txt
+
+RUN curl -fsSL -o /tmp/hashcat.7z "https://hashcat.net/files/hashcat-${HASHCRUSH_HASHCAT_VERSION}.7z" \
+    && 7z x /tmp/hashcat.7z -o/opt >/dev/null \
+    && extracted_dir="/opt/hashcat-${HASHCRUSH_HASHCAT_VERSION}" \
+    && if [ -x "$extracted_dir/hashcat" ]; then hashcat_exec="hashcat"; \
+       elif [ -x "$extracted_dir/hashcat.bin" ]; then hashcat_exec="hashcat.bin"; \
+       else echo "Could not find hashcat executable in $extracted_dir" >&2; exit 1; fi \
+    && ln -sfn "$extracted_dir" /opt/hashcat \
+    && printf '%s\n' '#!/bin/sh' 'exec /opt/hashcat/'"$hashcat_exec"' "$@"' > /usr/bin/hashcat \
+    && chmod 0755 /usr/bin/hashcat \
+    && rm -f /tmp/hashcat.7z
+
+COPY . /app

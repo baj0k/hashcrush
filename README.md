@@ -1,14 +1,19 @@
-# HashCrush v2.0
-
-**HashCrush** is a tool for organization and automation of password cracking tasks. It also produces some analytics.
+# HashCrush
+**HashCrush** is a tool for automation and organization of password cracking tasks. It also produces some analytics.
 
 ## Quick Start
-
-Docker Compose is the recommended deployment path.
-
 Requirements:
-1. Docker
-2. Docker Compose plugin
+- Docker with the compose plugin
+- NVIDIA Container Toolkit
+- Working Docker GPU support on the host
+
+#### 0) Ensure prerequisites are met
+
+Verify Docker can see the NVIDIA GPU before building HashCrush:
+
+```bash
+docker run --rm --gpus all ubuntu nvidia-smi
+```
 
 #### 1) Clone the repo
 
@@ -28,6 +33,17 @@ Then edit `.env` and set:
 - `HASHCRUSH_SECRET_KEY`
 - `HASHCRUSH_DATA_ENCRYPTION_KEY`
 - `HASHCRUSH_INITIAL_ADMIN_PASSWORD`
+- optional: `HASHCRUSH_HASHCAT_VERSION` to override the bundled worker Hashcat version
+
+Safe ways to generate secret keys:
+
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Use the first output for `HASHCRUSH_SECRET_KEY` and the second for
+`HASHCRUSH_DATA_ENCRYPTION_KEY`.
 
 #### 3) Start the stack
 
@@ -41,29 +57,42 @@ Watch startup:
 docker compose logs -f bootstrap web worker
 ```
 
-#### 4) Open the app
+#### 4) Verify the GPU worker
 
-Browse to:
+The worker image bundles Hashcat. Confirm it sees CUDA before relying on job
+execution:
+
+```bash
+docker run --rm --gpus all hashcrush-worker hashcat -I
+docker run --rm --gpus all hashcrush-worker hashcat -b -m 1000
+```
+
+Expected result:
+- `hashcat -I` shows `CUDA API`
+- your NVIDIA GPU appears as a backend device
+
+`clGetPlatformIDs(): CL_PLATFORM_NOT_FOUND_KHR` is expected here when Hashcat is
+using CUDA directly instead of OpenCL.
+
+#### 5) Open the app
+
+Open the app - by default it should be reachable under this URL:
+
 
 ```text
 http://127.0.0.1:8080
 ```
 
-Login:
-- username: `admin`
-- password: the value you set in `.env`
-
 The Compose stack starts:
 - PostgreSQL
 - a one-shot bootstrap container that applies schema/data upgrades and seeds the initial admin/settings/default tasks
-- a Gunicorn web container
-- a dedicated worker container
+- a Gunicorn web UI container
+- a worker container
 
 Important notes:
 - `docker compose down` stops the stack and keeps the data volumes
 - `docker compose down -v` wipes the database and uploaded asset volumes
 - the stack serves plain HTTP on port `8080` by default
-- if you place a TLS reverse proxy in front of the stack, set `HASHCRUSH_SESSION_COOKIE_SECURE=1` in `.env`
 
 ## Future Upgrades and Migrations
 
