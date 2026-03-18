@@ -26,15 +26,15 @@
                                     <td>
                                         <form action="{{ url_for('task_groups.task_groups_assigned_tasks_promote_task', task_group_id=task_group.id, task_id=task.id) }}" method="POST" class="d-inline">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                            <button type="submit" class="fa fa-arrow-up btn btn-success btn-sm" title="Move Up"></button>
+                                            <button type="submit" class="fa fa-arrow-up btn btn-success btn-sm" title="Move Up" aria-label="Move task {{ task.name }} up in task group {{ task_group.name }}"></button>
                                         </form>
                                         <form action="{{ url_for('task_groups.task_groups_assigned_tasks_demote_task', task_group_id=task_group.id, task_id=task.id) }}" method="POST" class="d-inline">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                            <button type="submit" class="fa fa-arrow-down btn btn-success btn-sm" title="Move Down"></button>
+                                            <button type="submit" class="fa fa-arrow-down btn btn-success btn-sm" title="Move Down" aria-label="Move task {{ task.name }} down in task group {{ task_group.name }}"></button>
                                         </form>
                                         <form action="{{ url_for('task_groups.task_groups_assigned_tasks_remove_task', task_group_id=task_group.id, task_id=task.id) }}" method="POST" class="d-inline">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                            <button type="submit" class="fa fa-trash btn btn-danger btn-sm" title="delete"></button>
+                                            <button type="submit" class="fa fa-trash btn btn-danger btn-sm" title="Delete" aria-label="Remove task {{ task.name }} from task group {{ task_group.name }}"></button>
                                         </form>
                                     </td>
                                 </tr>

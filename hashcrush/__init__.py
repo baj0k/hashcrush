@@ -159,6 +159,13 @@ def jinja_ciphertext_decode(text):
     return decode_ciphertext_from_storage(text)
 
 
+def jinja_format_hashcat_speed(text):
+    """Jinja2 filter to render hashcat speed strings in readable units."""
+    from hashcrush.utils.utils import format_hashcat_speed
+
+    return format_hashcat_speed(text)
+
+
 def create_app(testing: bool = False, config_overrides: dict | None = None):
     app = Flask(__name__)
 
@@ -274,6 +281,7 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     from hashcrush.settings.routes import settings
     from hashcrush.task_groups.routes import task_groups
     from hashcrush.tasks.routes import tasks
+    from hashcrush.uploads.routes import uploads
     from hashcrush.users.routes import users
     from hashcrush.wordlists.routes import wordlists
 
@@ -286,6 +294,7 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     app.register_blueprint(settings)
     app.register_blueprint(tasks)
     app.register_blueprint(task_groups)
+    app.register_blueprint(uploads)
     app.register_blueprint(users)
     app.register_blueprint(wordlists)
     app.register_blueprint(analytics)
@@ -293,7 +302,11 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
 
     app.add_template_filter(jinja_hex_decode)
     app.add_template_filter(jinja_ciphertext_decode)
+    app.add_template_filter(jinja_format_hashcat_speed)
     app.add_template_global(get_application_version, get_application_version.__name__)
+    from hashcrush.uploads import UploadOperationService
+
+    app.extensions["upload_operations"] = UploadOperationService(app)
 
     # Local single-node executor for queued JobTasks.
     if (

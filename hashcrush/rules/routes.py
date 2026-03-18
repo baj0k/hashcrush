@@ -1,12 +1,12 @@
 """Flask routes to handle Rules."""
 import os
 
-from flask import Blueprint, flash, redirect, render_template, url_for
-from flask_login import login_required
+from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, url_for
+from flask_login import current_user, login_required
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from hashcrush.audit import record_audit_event
+from hashcrush.audit import capture_audit_actor, record_audit_event
 from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Rules, Tasks, db
 from hashcrush.rules.forms import RulesForm
@@ -18,6 +18,43 @@ from hashcrush.utils.utils import (
 )
 
 rules = Blueprint('rules', __name__)
+
+
+def _is_async_upload_request() -> bool:
+    return request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+
+
+def _async_operation_response(operation):
+    payload = operation.to_response_dict()
+    payload['status_url'] = url_for(
+        'uploads.upload_operation_status',
+        operation_id=operation.id,
+    )
+    return jsonify(payload), 202
+
+
+def _make_stage_progress_callback(
+    reporter,
+    *,
+    title: str,
+    detail: str,
+    start_percent: float,
+    end_percent: float,
+):
+    progress_span = max(0.0, float(end_percent) - float(start_percent))
+
+    def callback(processed: int, total: int) -> None:
+        if total > 0:
+            fraction = max(0.0, min(1.0, float(processed) / float(total)))
+        else:
+            fraction = 1.0 if processed else 0.0
+        reporter.update(
+            percent=start_percent + (progress_span * fraction),
+            title=title,
+            detail=detail,
+        )
+
+    return callback
 
 
 def _render_rules_add_form(form):
@@ -57,6 +94,91 @@ def _derive_rule_name(form_name: str | None, uploaded_filename: str | None) -> s
     if not filename:
         return ''
     return os.path.splitext(filename)[0]
+
+
+def _process_rule_upload(
+    *,
+    rule_name: str,
+    rules_path: str,
+    audit_actor: dict[str, object],
+    reporter,
+) -> None:
+    try:
+        reporter.update(
+            percent=5,
+            title='Processing rule...',
+            detail='Computing the uploaded file checksum.',
+        )
+        checksum = get_filehash(
+            rules_path,
+            progress_callback=_make_stage_progress_callback(
+                reporter,
+                title='Processing rule...',
+                detail='Computing the uploaded file checksum.',
+                start_percent=5,
+                end_percent=55,
+            ),
+        )
+        size = get_linecount(
+            rules_path,
+            progress_callback=_make_stage_progress_callback(
+                reporter,
+                title='Processing rule...',
+                detail='Counting rule entries.',
+                start_percent=55,
+                end_percent=92,
+            ),
+        )
+        reporter.update(
+            percent=95,
+            title='Saving rule...',
+            detail='Registering the rule file in the database.',
+        )
+        rule = Rules(
+            name=rule_name,
+            path=rules_path,
+            size=size,
+            checksum=checksum,
+        )
+        db.session.add(rule)
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        _remove_managed_rule_file(rules_path)
+        reporter.fail(
+            title='Rule upload failed.',
+            detail='Rule file could not be uploaded because that name or file already exists. Refresh and retry.',
+        )
+        return
+    except Exception:
+        db.session.rollback()
+        _remove_managed_rule_file(rules_path)
+        current_app.logger.exception(
+            'Failed processing async rule upload for %s', rule_name
+        )
+        reporter.fail(
+            title='Rule upload failed.',
+            detail='The server hit an unexpected error while processing the rule file.',
+        )
+        return
+
+    record_audit_event(
+        'rule.create',
+        'rule',
+        target_id=rule.id,
+        summary=f'Uploaded shared rule "{rule.name}".',
+        details={
+            'rule_name': rule.name,
+            'path': rule.path,
+            'size': rule.size,
+        },
+        actor=audit_actor,
+    )
+    reporter.complete(
+        title='Rule ready.',
+        detail=f'Shared rule "{rule.name}" is available.',
+        completion_flashes=[('success', 'Rule file uploaded!')],
+    )
 
 
 #############################################
@@ -108,6 +230,24 @@ def rules_add():
             _remove_managed_rule_file(rules_path)
             flash('Rules file is already registered.', 'warning')
             return redirect(url_for('rules.rules_list'))
+
+        if _is_async_upload_request():
+            operation = current_app.extensions['upload_operations'].start_operation(
+                owner_user_id=getattr(current_user, 'id', None),
+                redirect_url=url_for('rules.rules_list'),
+                worker=(
+                    lambda reporter,
+                    rule_name=rule_name,
+                    rules_path=rules_path,
+                    audit_actor=capture_audit_actor(): _process_rule_upload(
+                        rule_name=rule_name,
+                        rules_path=rules_path,
+                        audit_actor=audit_actor,
+                        reporter=reporter,
+                    )
+                ),
+            )
+            return _async_operation_response(operation)
 
         rule = Rules(
             name=rule_name,

@@ -29,10 +29,10 @@
                             <td>{{ task.name }}</td>
                             <td>{{ task.hc_attackmode}}</td>
                             <td>
-                                <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{task.id}}" title=Info></button>
+                                <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{task.id}}" title="Info" aria-label="View task details for {{ task.name }}"></button>
                                 {% if current_user.admin %}
-                                <a class="fa fa-edit btn btn-warning" href="/tasks/edit/{{task.id}}" role="button" title=Edit></a>
-                                <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{task.id}}" title=Delete></button>
+                                <a class="fa fa-edit btn btn-warning" href="{{ url_for('tasks.task_edit', task_id=task.id) }}" role="button" title="Edit" aria-label="Edit task {{ task.name }}"></a>
+                                <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{task.id}}" title="Delete" aria-label="Delete task {{ task.name }}"></button>
                                 {% endif %}
                             </td>
                         </tr>
@@ -47,7 +47,7 @@
             <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header">
-                <h5 class="modal-title" id="infoModal{{task.id}}Label">Info: {{task.name}}</h5>
+                <h5 class="modal-title" id="infoModal{{task.id}}Label">Details: {{task.name}}</h5>
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                     <span aria-hidden="true">&times;</span>
                 </button>
@@ -60,49 +60,55 @@
                                 <th scope="row">Associated Jobs</th>
                                 <td>
                                     {% set associated_jobs = namespace(value=0) %}
+                                    <div class="hc-line-list">
                                     {% for job_task in job_tasks %}
                                         {% if job_task.task_id == task.id %}
                                             {% for job in jobs %}
                                                 {% if job.id == job_task.job_id%}
                                                     {% set associated_jobs.value = 1 %}
-                                                    {{ job.name }} <br>
+                                                    <span>{{ job.name }}</span>
                                                 {% endif %}
                                             {% endfor %}
                                         {% endif %}
                                     {% endfor %}
                                     {% if associated_jobs.value == 0 %}
-                                        <i>none</i><br>
+                                        <i>none</i>
                                     {% endif %}
+                                    </div>
                                 </td>
                                 </tr>
                                 <tr>
                                 <th scope="row">Associated Wordlists</th>
                                 <td>
                                     {% set associated_wordlists = namespace(value=0) %}
+                                    <div class="hc-line-list">
                                     {% for wordlist in wordlists %}
                                         {% if wordlist.id == task.wl_id %}
                                             {% set associated_wordlists.value = 1 %}
-                                            {{ wordlist.name }} <br>
+                                            <span>{{ wordlist.name }}</span>
                                         {% endif %}
                                     {% endfor %}    
                                     {% if associated_wordlists.value == 0 %}
-                                        <i>none</i><br>
+                                        <i>none</i>
                                     {% endif %}
+                                    </div>
                                 </td>
                                 </tr>
                                 <tr>                              
                                 <th scope="row">Associated Task Groups</th>
                                 <td>
                                     {% set associated_task_groups = namespace(value=0) %}
+                                    <div class="hc-line-list">
                                     {% for task_group in task_groups %}
                                         {% if task.id in task_group_task_ids.get(task_group.id, []) %}
                                             {% set associated_task_groups.value = 1 %}
-                                            {{ task_group.name }} <br>
+                                            <span>{{ task_group.name }}</span>
                                         {% endif %}
                                     {% endfor %}
                                     {% if associated_task_groups.value == 0 %}
-                                        <i>none</i><br>
+                                        <i>none</i>
                                     {% endif %}                                    
+                                    </div>
                                 </td>
                                 </tr>
                             </tbody>
@@ -122,7 +128,7 @@
                 <div class="modal-dialog modal-dialog-centered">
                 <div class="modal-content">
                     <div class="modal-header">
-                    <h5 class="modal-title" id="deleteModal{{task.id}}Label">Delete: {{task.name}} ?</h5>
+                    <h5 class="modal-title" id="deleteModal{{task.id}}Label">Delete {{task.name}}?</h5>
                     <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                         <span aria-hidden="true">&times;</span>
                     </button>

@@ -39,9 +39,9 @@
                                 {% endif %}
                             </td>
                             <td>
-                                <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{user.id}}" title=Info></button>
-                                <button type="button" class="fa fa-undo btn btn-warning" data-toggle="modal" data-target="#resetModal{{user.id}}" title='Reset Password'></button>
-                                <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{user.id}}" title=Delete></button>
+                                <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{user.id}}" title="Info" aria-label="View user details for {{ user.username }}"></button>
+                                <button type="button" class="fa fa-undo btn btn-warning" data-toggle="modal" data-target="#resetModal{{user.id}}" title="Reset Password" aria-label="Reset password for {{ user.username }}"></button>
+                                <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{user.id}}" title="Delete" aria-label="Delete user {{ user.username }}"></button>
                             </td>
                         </tr>
                     {% endfor %}
@@ -55,7 +55,7 @@
             <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header">
-                <h5 class="modal-title" id="infoModal{{user.id}}Label">Info: {{user.username}}</h5>
+                <h5 class="modal-title" id="infoModal{{user.id}}Label">Details: {{user.username}}</h5>
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                     <span aria-hidden="true">&times;</span>
                 </button>
@@ -67,11 +67,13 @@
                                 <tr>
                                     <th scope="row">Associated Jobs</th>
                                     <td>
+                                        <div class="hc-line-list">
                                         {% for job in jobs %}
                                             {% if job.owner_id == user.id %}
-                                                {{ job.name }} <br>
+                                                <span>{{ job.name }}</span>
                                             {% endif %}
                                         {% endfor %}
+                                        </div>
                                     </td>
                                 </tr>
                             </tbody>
@@ -90,7 +92,7 @@
             <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header">
-                <h5 class="modal-title" id="resetModal{{user.id}}Label">Set Password: {{user.username}}</h5>
+                <h5 class="modal-title" id="resetModal{{user.id}}Label">Set Password for {{user.username}}</h5>
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                     <span aria-hidden="true">&times;</span>
                 </button>
@@ -123,7 +125,7 @@
             <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header">
-                <h5 class="modal-title" id="deleteModal{{user.id}}Label">Delete: {{user.username}} ?</h5>
+                <h5 class="modal-title" id="deleteModal{{user.id}}Label">Delete {{user.username}}?</h5>
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                     <span aria-hidden="true">&times;</span>
                 </button>

@@ -67,20 +67,26 @@
                             <tr>
                                 <td>{{ entry.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
                                 <td>
-                                    {{ entry.actor_username }}
-                                    {% if entry.actor_admin %}
-                                        <span class="badge badge-primary ml-1">Admin</span>
-                                    {% endif %}
-                                    {% if entry.actor_ip %}
-                                        <br><small class="text-muted">{{ entry.actor_ip }}</small>
-                                    {% endif %}
+                                    <div class="hc-line-list">
+                                        <span>
+                                            {{ entry.actor_username }}
+                                            {% if entry.actor_admin %}
+                                                <span class="badge badge-primary ml-1">Admin</span>
+                                            {% endif %}
+                                        </span>
+                                        {% if entry.actor_ip %}
+                                            <small class="text-muted">{{ entry.actor_ip }}</small>
+                                        {% endif %}
+                                    </div>
                                 </td>
                                 <td><code>{{ entry.event_type }}</code></td>
                                 <td>
-                                    <code>{{ entry.target_type }}</code>
-                                    {% if entry.target_id %}
-                                        <br><small class="text-muted">ID {{ entry.target_id }}</small>
-                                    {% endif %}
+                                    <div class="hc-line-list">
+                                        <code>{{ entry.target_type }}</code>
+                                        {% if entry.target_id %}
+                                            <small class="text-muted">ID {{ entry.target_id }}</small>
+                                        {% endif %}
+                                    </div>
                                 </td>
                                 <td>{{ entry.summary }}</td>
                                 <td>

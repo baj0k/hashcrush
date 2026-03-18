@@ -6,53 +6,6 @@
 </div>
 {% endblock header %}
 {% block content %}
-<script>
-    function showHashTypeSelected(selectedObject){
-        if (selectedObject.value == 'pwdump'){
-            document.getElementById('pwdump_hash_type_div').style.display = 'inline';
-            document.getElementById('netntlm_hash_type_div').style.display = 'none';
-            document.getElementById('kerberos_hash_type_div').style.display = 'none';
-            document.getElementById('shadow_hash_type_div').style.display = 'none';
-            document.getElementById('hash_type_div').style.display = 'none';
-            document.getElementById('hashfile_div').style.display = 'none';
-        }
-        if (selectedObject.value == 'NetNTLM'){
-            document.getElementById('pwdump_hash_type_div').style.display = 'none';
-            document.getElementById('netntlm_hash_type_div').style.display = 'inline';
-            document.getElementById('kerberos_hash_type_div').style.display = 'none';
-            document.getElementById('shadow_hash_type_div').style.display = 'none';
-            document.getElementById('hash_type_div').style.display = 'none';
-            document.getElementById('hashfile_div').style.display = 'none';
-        }
-        if (selectedObject.value == 'kerberos'){
-            document.getElementById('pwdump_hash_type_div').style.display = 'none';
-            document.getElementById('netntlm_hash_type_div').style.display = 'none';
-            document.getElementById('kerberos_hash_type_div').style.display = 'inline';
-            document.getElementById('shadow_hash_type_div').style.display = 'none';
-            document.getElementById('hash_type_div').style.display = 'none';
-            document.getElementById('hashfile_div').style.display = 'none';
-        }
-        if (selectedObject.value == 'shadow'){
-            document.getElementById('pwdump_hash_type_div').style.display = 'none';
-            document.getElementById('netntlm_hash_type_div').style.display = 'none';
-            document.getElementById('kerberos_hash_type_div').style.display = 'none';
-            document.getElementById('shadow_hash_type_div').style.display = 'inline';
-            document.getElementById('hash_type_div').style.display = 'none';
-            document.getElementById('hashfile_div').style.display = 'none';
-        }
-        if (selectedObject.value == 'user_hash' || selectedObject.value == 'hash_only'){
-            document.getElementById('pwdump_hash_type_div').style.display = 'none';
-            document.getElementById('netntlm_hash_type_div').style.display = 'none';
-            document.getElementById('kerberos_hash_type_div').style.display = 'none';
-            document.getElementById('shadow_hash_type_div').style.display = 'none';
-            document.getElementById('hash_type_div').style.display = 'inline';
-            document.getElementById('hashfile_div').style.display = 'none';
-        }                                       
-    }
-    function showHashFileSubmit(){
-        document.getElementById('hashfile_div').style.display = 'inline';
-    }   
-</script>
 <nav>
     <div class="nav nav-tabs" id="nav-tab" role="tablist">
         {% if job.hashfile_id == None %}
@@ -70,7 +23,7 @@
     {% else %}
         <div class="tab-pane fade" id="nav-new-hashfile" role="tabpanel" aria-labelledby="nav-new-hashfile-tab">
     {% endif %}
-        <br>
+        <div class="hc-tab-panel">
         <div class="content-section">
             <form action='' id='hf_form' method='post' name='hf_form' enctype='multipart/form-data'>
                 {{ jobs_new_hashfile_form.hidden_tag() }}
@@ -79,95 +32,93 @@
                     <div class="form-group">
                         {{ jobs_new_hashfile_form.file_type.label(class="form-control-label") }}
                         {% if jobs_new_hashfile_form.file_type.errors %}
-                            {{ jobs_new_hashfile_form.file_type(class="form-control form-control-lg is-invalid") }}
+                            {{ jobs_new_hashfile_form.file_type(class="form-control form-control-lg is-invalid", data_toggle_group="job-hashfile-format", data_hide_targets="hashfile_div") }}
                             <div class="invalid-feedback">
                                 {% for error in jobs_new_hashfile_form.file_type.errors %}
                                     <span>{{ error }}</span>
                                 {% endfor %}
                             </div>
                         {% else %}
-                            {{ jobs_new_hashfile_form.file_type(class="form-control form-control-lg", onchange="showHashTypeSelected(this)") }}
+                            {{ jobs_new_hashfile_form.file_type(class="form-control form-control-lg", data_toggle_group="job-hashfile-format", data_hide_targets="hashfile_div") }}
                         {% endif %}
                     </div> 
                     <!-- PwDump Hash Type-->
-                    <div class="form-group" style=display:none id="pwdump_hash_type_div">
+                    <div class="form-group hc-hidden" id="pwdump_hash_type_div" data-toggle-group-section="job-hashfile-format" data-toggle-values="pwdump">
                         {{ jobs_new_hashfile_form.pwdump_hash_type.label(class="form-control-label") }}
 
                         {% if jobs_new_hashfile_form.pwdump_hash_type.errors %}
-                            {{ jobs_new_hashfile_form.pwdump_hash_type(class="form-control form-control-lg is-invalid") }}
+                            {{ jobs_new_hashfile_form.pwdump_hash_type(class="form-control form-control-lg is-invalid", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
                             <div class="invalid-feedback">
                                 {% for error in jobs_new_hashfile_form.pwdump_hash_type.errors %}
                                     <span>{{ error }}</span>
                                 {% endfor %}
                             </div>
                         {% else %}
-                            {{ jobs_new_hashfile_form.pwdump_hash_type(class="form-control form-control-lg", onchange="showHashFileSubmit()") }}
+                            {{ jobs_new_hashfile_form.pwdump_hash_type(class="form-control form-control-lg", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
                         {% endif %}
                     </div>
                     <!-- Net NTLM Hash Type-->
-                    <div class="form-group" style=display:none id="netntlm_hash_type_div">
+                    <div class="form-group hc-hidden" id="netntlm_hash_type_div" data-toggle-group-section="job-hashfile-format" data-toggle-values="NetNTLM">
                         {{ jobs_new_hashfile_form.netntlm_hash_type.label(class="form-control-label") }}
 
                         {% if jobs_new_hashfile_form.netntlm_hash_type.errors %}
-                            {{ jobs_new_hashfile_form.netntlm_hash_type(class="form-control form-control-lg is-invalid") }}
+                            {{ jobs_new_hashfile_form.netntlm_hash_type(class="form-control form-control-lg is-invalid", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
                             <div class="invalid-feedback">
                                 {% for error in jobs_new_hashfile_form.netntlm_hash_type.errors %}
                                     <span>{{ error }}</span>
                                 {% endfor %}
                             </div>
                         {% else %}
-                            {{ jobs_new_hashfile_form.netntlm_hash_type(class="form-control form-control-lg", onchange="showHashFileSubmit()") }}
+                            {{ jobs_new_hashfile_form.netntlm_hash_type(class="form-control form-control-lg", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
                         {% endif %}
                     </div>
                     <!-- Kerberos Hash Type-->
-                    <div class="form-group" style=display:none id="kerberos_hash_type_div">
+                    <div class="form-group hc-hidden" id="kerberos_hash_type_div" data-toggle-group-section="job-hashfile-format" data-toggle-values="kerberos">
                         {{ jobs_new_hashfile_form.kerberos_hash_type.label(class="form-control-label") }}
 
                         {% if jobs_new_hashfile_form.kerberos_hash_type.errors %}
-                            {{ jobs_new_hashfile_form.kerberos_hash_type(class="form-control form-control-lg is-invalid") }}
+                            {{ jobs_new_hashfile_form.kerberos_hash_type(class="form-control form-control-lg is-invalid", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
                             <div class="invalid-feedback">
                                 {% for error in jobs_new_hashfile_form.kerberos_hash_type.errors %}
                                     <span>{{ error }}</span>
                                 {% endfor %}
                             </div>
                         {% else %}
-                            {{ jobs_new_hashfile_form.kerberos_hash_type(class="form-control form-control-lg", onchange="showHashFileSubmit()") }}
+                            {{ jobs_new_hashfile_form.kerberos_hash_type(class="form-control form-control-lg", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
                         {% endif %}
                     </div>
                     <!-- Shadow Hash Type-->
-                    <div class="form-group" style=display:none id="shadow_hash_type_div">
+                    <div class="form-group hc-hidden" id="shadow_hash_type_div" data-toggle-group-section="job-hashfile-format" data-toggle-values="shadow">
                         {{ jobs_new_hashfile_form.shadow_hash_type.label(class="form-control-label") }}
 
                         {% if jobs_new_hashfile_form.shadow_hash_type.errors %}
-                            {{ jobs_new_hashfile_form.shadow_hash_type(class="form-control form-control-lg is-invalid") }}
+                            {{ jobs_new_hashfile_form.shadow_hash_type(class="form-control form-control-lg is-invalid", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
                             <div class="invalid-feedback">
                                 {% for error in jobs_new_hashfile_form.shadow_hash_type.errors %}
                                     <span>{{ error }}</span>
                                 {% endfor %}
                             </div>
                         {% else %}
-                            {{ jobs_new_hashfile_form.shadow_hash_type(class="form-control form-control-lg", onchange="showHashFileSubmit()") }}
+                            {{ jobs_new_hashfile_form.shadow_hash_type(class="form-control form-control-lg", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
                         {% endif %}
                     </div>                                                            
                     <!-- Hash Type-->
-                    <div class="form-group" style=display:none id="hash_type_div">
+                    <div class="form-group hc-hidden" id="hash_type_div" data-toggle-group-section="job-hashfile-format" data-toggle-values="user_hash,hash_only">
                         {{ jobs_new_hashfile_form.hash_type.label(class="form-control-label") }}
 
                         {% if jobs_new_hashfile_form.hash_type.errors %}
-                            {{ jobs_new_hashfile_form.hash_type(class="form-control form-control-lg is-invalid") }}
+                            {{ jobs_new_hashfile_form.hash_type(class="form-control form-control-lg is-invalid", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
                             <div class="invalid-feedback">
                                 {% for error in jobs_new_hashfile_form.hash_type.errors %}
                                     <span>{{ error }}</span>
                                 {% endfor %}
                             </div>
                         {% else %}
-                            {{ jobs_new_hashfile_form.hash_type(class="form-control form-control-lg", onchange="showHashFileSubmit()") }}
+                            {{ jobs_new_hashfile_form.hash_type(class="form-control form-control-lg", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
                         {% endif %}
                     </div>                    
                     <!-- Hashfile Content -->
-                    <div class="form-group" style=display:none id="hashfile_div">
-                        <br>
-                        <br>
+                    <div class="form-group hc-hidden hc-section-gap" id="hashfile_div">
                         <label class="form-control-label" for="hash_type">Hash File Content</label>
                         <ul class="nav nav-pills mb-3" id="pills-tab" role="tablist">
                             <li class="nav-item" role="presentation">
@@ -191,7 +142,7 @@
                                             {% endfor %}
                                         </div>
                                     {% else %}
-                                        {{ jobs_new_hashfile_form.name(class="form-control form-control-lg", onchange="showHashFileSubmit()") }}
+                                        {{ jobs_new_hashfile_form.name(class="form-control form-control-lg") }}
                                     {% endif %}
                                 </div>
                                 <div class="form-group">
@@ -205,7 +156,7 @@
                                             {% endfor %}
                                         </div>
                                     {% else %}
-                                        {{ jobs_new_hashfile_form.hashfilehashes(class="form-control form-control-lg", onchange="showHashFileSubmit()") }}
+                                        {{ jobs_new_hashfile_form.hashfilehashes(class="form-control form-control-lg") }}
                                     {% endif %}
                                 </div>
                             </div>
@@ -216,7 +167,7 @@
                                     {{ jobs_new_hashfile_form.hashfile(class="hc-file-input hc-file-input--wide") }}
                                     {% if jobs_new_hashfile_form.hashfile.errors %}
                                         {% for error in jobs_new_hashfile_form.hashfile.errors %}
-                                            <span class="text-danger">{{ error }}</span></br>
+                                            <span class="text-danger d-block">{{ error }}</span>
                                         {% endfor %}
                                     {% endif %}  
                                 </div> 
@@ -224,7 +175,6 @@
                         </div>
                     </div>
                 </fieldset>
-                <br>
                 <div class="hc-form-actions">
                     <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_list') }}">Back</a>
                     <div class="hc-form-actions-right">
@@ -233,13 +183,13 @@
                 </div>
             </form>
         </div>
-    </div>
+    </div></div>
     {% if job.hashfile_id == None %}
         <div class="tab-pane fade" id="nav-existing-hashfile" role="tabpanel" aria-labelledby="nav-existing-hashfile-tab">
     {% else %}
         <div class="tab-pane fade show active" id="nav-existing-hashfile" role="tabpanel" aria-labelledby="nav-existing-hashfile-tab">      
     {% endif %}
-        <br>
+        <div class="hc-tab-panel">
         <div class="content-section">
             <form action='' class='form-horizontal' id='hf_form' method='post' name='hf_form'>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -271,6 +221,6 @@
                 </div>
             </form>
         </div>
-    </div>
+    </div></div>
 </div>
 {% endblock content %}

@@ -5,7 +5,7 @@
     <p class="hc-page-intro">Task Groups are a set of tasks that can be assigned to a job.</p>
     {% if current_user.admin %}
     <div class="hc-page-actions">
-        <a class="btn btn-success btn-sm" href="{{ url_for('task_groups.task_groups_add') }}">Add</a>
+        <a class="btn btn-success btn-sm" href="{{ url_for('task_groups.task_groups_add') }}">Add Task Group</a>
         <form class="hc-inline-form" action="{{ url_for('task_groups.task_groups_import') }}" method="POST" enctype="multipart/form-data">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input
@@ -15,12 +15,12 @@
                 name="import_file"
                 accept=".json,application/json"
                 required
-                onchange="if (this.files.length) { this.form.submit(); }"
+                data-auto-submit="true"
             >
             <button
                 type="button"
                 class="btn btn-secondary btn-sm"
-                onclick="document.getElementById('task-group-import-file').click();"
+                data-file-trigger="task-group-import-file"
             >
                 Import JSON
             </button>
@@ -47,10 +47,10 @@
                         <tr>
                             <td>{{ task_group.name }}</td>
                             <td>
-                                <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{task_group.id}}" title=Info></button>
+                                <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{task_group.id}}" title="Info" aria-label="View task group details for {{ task_group.name }}"></button>
                                 {% if current_user.admin %}
-                                <a class="fa fa-edit btn btn-warning" href="/task_groups/assigned_tasks/{{task_group.id}}" role="button" title=Edit></a>
-                                <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{task_group.id}}" title=Delete></button>
+                                <a class="fa fa-edit btn btn-warning" href="{{ url_for('task_groups.task_groups_assigned_tasks', task_group_id=task_group.id) }}" role="button" title="Edit" aria-label="Edit task group {{ task_group.name }}"></a>
+                                <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{task_group.id}}" title="Delete" aria-label="Delete task group {{ task_group.name }}"></button>
                                 {% endif %}
                             </td>
                         </tr>
@@ -65,7 +65,7 @@
         <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header">
-            <h5 class="modal-title" id="infoModal{{task_group.id}}Label">Info: {{task_group.name}}</h5>
+            <h5 class="modal-title" id="infoModal{{task_group.id}}Label">Details: {{task_group.name}}</h5>
             <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                 <span aria-hidden="true">&times;</span>
             </button>
@@ -77,12 +77,13 @@
                           <tr>                              
                             <th scope="row">Associated Tasks</th>
                             <td>
-                                {% for task_name in task_group_task_names.get(task_group.id, []) %}
-                                    {{ task_name }} <br>
-                                {% endfor %}
-                                {% if not task_group_task_names.get(task_group.id) %}
-                                    <i>none</i><br>
-                                {% endif %}
+                                <div class="hc-line-list">
+                                    {% for task_name in task_group_task_names.get(task_group.id, []) %}
+                                    <span>{{ task_name }}</span>
+                                    {% else %}
+                                    <i>none</i>
+                                    {% endfor %}
+                                </div>
                             </td>
                           </tr>
                       </tbody>
@@ -97,34 +98,12 @@
     {% endfor %}
     {% if current_user.admin %}
         {% for task_group in task_groups %}
-        <!-- Edit Modal -->
-            <div class="modal fade" id="resetModal{{task_group.id}}" tabindex="-1" aria-labelledby="editModal{{task_group.id}}Label" aria-hidden="true">
-                <div class="modal-dialog modal-dialog-centered">
-                <div class="modal-content">
-                    <div class="modal-header">
-                    <h5 class="modal-title" id="resetModal{{task_group.id}}Label">Edit task group: {{task_group.name}}</h5>
-                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                        <span aria-hidden="true">&times;</span>
-                    </button>
-                    </div>
-                    <div class="modal-body">
-                    ...
-                    </div>
-                    <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
-                    <button type="button" class="btn btn-primary">Understood</button>
-                    </div>
-                </div>
-                </div>
-            </div>
-        {% endfor %}
-        {% for task_group in task_groups %}
             <!-- DeleteModal -->
             <div class="modal fade" id="deleteModal{{task_group.id}}" tabindex="-1" aria-labelledby="deleteModal{{task_group.id}}Label" aria-hidden="true">
                 <div class="modal-dialog modal-dialog-centered">
                 <div class="modal-content">
                     <div class="modal-header">
-                    <h5 class="modal-title" id="deleteModal{{task_group.id}}Label">Delete: {{task_group.name}} ?</h5>
+                    <h5 class="modal-title" id="deleteModal{{task_group.id}}Label">Delete {{task_group.name}}?</h5>
                     <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                         <span aria-hidden="true">&times;</span>
                     </button>

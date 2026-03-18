@@ -53,14 +53,14 @@
                                                 <td>{{ job_task_row.task_name }}</td>
                                                 <td>{{ job_task.status }}</td>
                                                 <td>{{ active_job_recovered.get(job.id, '0/0') }}</td>
-                                                <td>{{ job_task.benchmark or '' }}</td>
+                                                <td>{{ job_task.benchmark | jinja_format_hashcat_speed }}</td>
                                                 <td>{{ runtime.percent_done if runtime else 'N/A' }}</td>
                                                 <td>{{ runtime.eta if runtime else 'N/A' }}</td>
                                                 <td>
                                                     {% if job_task.status in ('Running', 'Importing') and (current_user.admin or job.owner_id == current_user.id) %}
                                                         <form action="{{ url_for('main.stop_job_task', job_task_id=job_task.id) }}" method="POST" class="d-inline">
                                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                                            <button type="submit" class="fa fa-stop btn btn-secondary" title="stop"></button>
+                                                            <button type="submit" class="fa fa-stop btn btn-secondary" title="Stop" aria-label="Stop task {{ job_task_row.task_name }} for job {{ job.name }}"></button>
                                                         </form>
                                                     {% endif %}
                                                 </td>
@@ -162,47 +162,47 @@
                                     {% if job.status == 'Ready' %}
                                         <form action="{{ url_for('jobs.jobs_start', job_id=job.id) }}" method="POST" class="d-inline">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                            <button type="submit" class="fa fa-play btn btn-success" title="start"></button>
+                                            <button type="submit" class="fa fa-play btn btn-success" title="Start" aria-label="Start job {{ job.name }}"></button>
                                         </form>
                                     {% elif job.status == 'Queued' or job.status == 'Running' %}
                                         <form action="{{ url_for('jobs.jobs_pause', job_id=job.id) }}" method="POST" class="d-inline">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                            <button type="submit" class="fa fa-pause btn btn-warning" title="pause"></button>
+                                            <button type="submit" class="fa fa-pause btn btn-warning" title="Pause" aria-label="Pause job {{ job.name }}"></button>
                                         </form>
                                         <form action="{{ url_for('jobs.jobs_stop', job_id=job.id) }}" method="POST" class="d-inline">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                            <button type="submit" class="fa fa-stop btn btn-secondary" title="stop"></button>
+                                            <button type="submit" class="fa fa-stop btn btn-secondary" title="Stop" aria-label="Stop job {{ job.name }}"></button>
                                         </form>
                                     {% elif job.status == 'Paused' %}
                                         <form action="{{ url_for('jobs.jobs_resume', job_id=job.id) }}" method="POST" class="d-inline">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                            <button type="submit" class="fa fa-play btn btn-success" title="resume"></button>
+                                            <button type="submit" class="fa fa-play btn btn-success" title="Resume" aria-label="Resume job {{ job.name }}"></button>
                                         </form>
                                         <form action="{{ url_for('jobs.jobs_stop', job_id=job.id) }}" method="POST" class="d-inline">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                            <button type="submit" class="fa fa-stop btn btn-secondary" title="stop"></button>
+                                            <button type="submit" class="fa fa-stop btn btn-secondary" title="Stop" aria-label="Stop job {{ job.name }}"></button>
                                         </form>
                                     {% elif job.status == 'Completed' %}
-                                        <a class="fa fa-check btn btn-primary" href="#" role="button" title=Completed></a>
+                                        <span class="fa fa-check btn btn-primary disabled" title="Completed" aria-label="Job {{ job.name }} completed"></span>
                                     {% elif job.status == 'Canceled' %}
                                         <form action="{{ url_for('jobs.jobs_start', job_id=job.id) }}" method="POST" class="d-inline">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                            <button type="submit" class="fa fa-close btn btn-secondary" title="Canceled"></button>
+                                            <button type="submit" class="fa fa-close btn btn-secondary" title="Restart" aria-label="Restart canceled job {{ job.name }}"></button>
                                         </form>
                                     {% endif %}
                                 {% endif %}
                                 {% if job.status != 'Incomplete' %}
-                                    <a class="fa fa-eye btn btn-secondary" href="{{ url_for('jobs.jobs_summary', job_id=job.id) }}" role="button" title="View"></a>
+                                    <a class="fa fa-eye btn btn-secondary" href="{{ url_for('jobs.jobs_summary', job_id=job.id) }}" role="button" title="View" aria-label="View job {{ job.name }}"></a>
                                     {% if can_manage_job %}
-                                        <a class="fa fa-pie-chart btn btn-warning" href="/analytics?domain_id={{job.domain_id}}&hashfile_id={{job.hashfile_id}}" role="button" title=Analytics></a>
+                                        <a class="fa fa-pie-chart btn btn-warning" href="{{ url_for('analytics.get_analytics') }}?domain_id={{ job.domain_id }}&hashfile_id={{ job.hashfile_id }}" role="button" title="Analytics" aria-label="View analytics for job {{ job.name }}"></a>
                                     {% endif %}
-                                    <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{job.id}}" title=Info></button>
+                                    <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{job.id}}" title="Info" aria-label="View job details for {{ job.name }}"></button>
                                 {% endif %}
                                 {% if can_manage_job and job.status != 'Running' and job.status != 'Queued' and job.status != 'Paused' %}
-                                    <a class="fa fa-edit btn btn-warning" href="/jobs/{{job.id}}/assigned_hashfile/" role="button" title=Edit></a>
+                                    <a class="fa fa-edit btn btn-warning" href="{{ url_for('jobs.jobs_assigned_hashfile', job_id=job.id) }}" role="button" title="Edit" aria-label="Edit job {{ job.name }}"></a>
                                 {% endif %}
                                 {% if can_manage_job %}
-                                    <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{job.id}}" title=Delete></button>
+                                    <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{job.id}}" title="Delete" aria-label="Delete job {{ job.name }}"></button>
                                 {% endif %}
                             </td>
                         </tr>
@@ -218,7 +218,7 @@
         <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header">
-            <h5 class="modal-title" id="infoModal{{job.id}}Label">Info: {{job.name}}</h5>
+            <h5 class="modal-title" id="infoModal{{job.id}}Label">Details: {{job.name}}</h5>
             <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                 <span aria-hidden="true">&times;</span>
             </button>
@@ -230,11 +230,13 @@
                           <tr>
                             <th scope="row">Associated Tasks</th>
                             <td>
-                                {% for task_name in task_names_by_job_id.get(job.id, []) %}
-                                    {{ task_name }} <br>
-                                {% else %}
+                                <div class="hc-line-list">
+                                    {% for task_name in task_names_by_job_id.get(job.id, []) %}
+                                    <span>{{ task_name }}</span>
+                                    {% else %}
                                     <i>none</i>
-                                {% endfor %}
+                                    {% endfor %}
+                                </div>
                             </td>
                           </tr>
                           <tr>
@@ -279,7 +281,7 @@
             <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header">
-                <h5 class="modal-title" id="deleteModal{{job.id}}Label">Delete: {{job.name}} ?</h5>
+                <h5 class="modal-title" id="deleteModal{{job.id}}Label">Delete {{job.name}}?</h5>
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                     <span aria-hidden="true">&times;</span>
                 </button>

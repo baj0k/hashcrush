@@ -31,6 +31,14 @@ from hashcrush.models import (
 )
 
 _PLAINTEXT_HEX_PATTERN = re.compile(r'^[0-9a-f]+$')
+_HASHCAT_SPEED_PATTERN = re.compile(
+    r'^\s*(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>[kmgtpe]?h/s)\s*$',
+    re.IGNORECASE,
+)
+_HASHCAT_SPEED_UNITS = ["H/s", "kH/s", "MH/s", "GH/s", "TH/s", "PH/s", "EH/s"]
+_HASHCAT_SPEED_UNIT_INDEX = {
+    unit.lower(): index for index, unit in enumerate(_HASHCAT_SPEED_UNITS)
+}
 DEFAULT_HASHFILE_MAX_LINE_LENGTH = 50_000
 DEFAULT_HASHFILE_MAX_TOTAL_LINES = 1_000_000
 DEFAULT_HASHFILE_MAX_TOTAL_BYTES = 1024 * 1024 * 1024
@@ -49,7 +57,7 @@ def _get_hashfile_validation_limit(config_key: str, default: int, minimum: int =
     return parsed
 
 
-def _iter_hashfile_lines(hashfile_path: str):
+def _iter_hashfile_lines(hashfile_path: str, progress_callback=None):
     max_line_length = _get_hashfile_validation_limit(
         'HASHFILE_MAX_LINE_LENGTH',
         DEFAULT_HASHFILE_MAX_LINE_LENGTH,
@@ -64,6 +72,10 @@ def _iter_hashfile_lines(hashfile_path: str):
     )
 
     total_bytes = 0
+    try:
+        file_size = os.path.getsize(hashfile_path)
+    except OSError:
+        file_size = 0
     with open(hashfile_path, 'rb') as file:
         for line_number, raw_line in enumerate(file, start=1):
             if line_number > max_total_lines:
@@ -88,7 +100,13 @@ def _iter_hashfile_lines(hashfile_path: str):
                     + ' chars.'
                 )
 
+            if progress_callback is not None:
+                progress_callback(total_bytes, file_size)
+
             yield line_number, raw_line.decode('utf-8', errors='replace')
+
+    if progress_callback is not None:
+        progress_callback(total_bytes, file_size)
 
 
 def get_runtime_root_path() -> str:
@@ -192,6 +210,39 @@ def decode_username_from_storage(value: str | None) -> str | None:
         except (TypeError, ValueError):
             return value
     return value
+
+
+def format_hashcat_speed(value: str | None) -> str:
+    """Normalize hashcat speeds to the most readable SI unit."""
+    text = str(value or '').strip()
+    if not text:
+        return ''
+
+    match = _HASHCAT_SPEED_PATTERN.fullmatch(text)
+    if not match:
+        return text
+
+    try:
+        numeric_value = float(match.group('value'))
+    except (TypeError, ValueError):
+        return text
+
+    unit_index = _HASHCAT_SPEED_UNIT_INDEX.get(match.group('unit').lower())
+    if unit_index is None:
+        return text
+
+    while numeric_value >= 1000 and unit_index < (len(_HASHCAT_SPEED_UNITS) - 1):
+        numeric_value /= 1000
+        unit_index += 1
+
+    if numeric_value >= 100:
+        rendered_value = f"{numeric_value:.1f}".rstrip('0').rstrip('.')
+    elif numeric_value >= 10:
+        rendered_value = f"{numeric_value:.1f}".rstrip('0').rstrip('.')
+    else:
+        rendered_value = f"{numeric_value:.2f}".rstrip('0').rstrip('.')
+
+    return f"{rendered_value} {_HASHCAT_SPEED_UNITS[unit_index]}"
 
 
 def migrate_sensitive_storage_rows(batch_size: int = 1000) -> int:
@@ -329,34 +380,59 @@ def _count_generator(reader):
         yield b
         b = reader(1024 * 1024)
 
-def get_linecount(filepath):
+def get_linecount(filepath, progress_callback=None):
     """Function to return line count of file"""
+
+    try:
+        file_size = os.path.getsize(filepath)
+    except OSError:
+        file_size = 0
 
     with open(filepath, 'rb') as fp:
         c_generator = _count_generator(fp.raw.read)
         count = 0
         has_content = False
         trailing_newline = False
+        total_bytes = 0
         for buffer in c_generator:
             if not buffer:
                 continue
             has_content = True
+            total_bytes += len(buffer)
             count += buffer.count(b'\n')
             trailing_newline = buffer.endswith(b'\n')
+            if progress_callback is not None:
+                progress_callback(total_bytes, file_size)
         if not has_content:
+            if progress_callback is not None:
+                progress_callback(0, file_size)
             return 0
         if trailing_newline:
+            if progress_callback is not None:
+                progress_callback(total_bytes, file_size)
             return count
+        if progress_callback is not None:
+            progress_callback(total_bytes, file_size)
         return count + 1
 
-def get_filehash(filepath):
+def get_filehash(filepath, progress_callback=None):
     """Function to sha256 hash of file"""
 
     sha256_hash = hashlib.sha256()
+    try:
+        file_size = os.path.getsize(filepath)
+    except OSError:
+        file_size = 0
+    total_bytes = 0
     with open(filepath,"rb") as f:
         # Read and update hash string value in blocks of 4K
         for byte_block in iter(lambda: f.read(4096),b""):
             sha256_hash.update(byte_block)
+            total_bytes += len(byte_block)
+            if progress_callback is not None:
+                progress_callback(total_bytes, file_size)
+    if progress_callback is not None:
+        progress_callback(total_bytes, file_size)
     return sha256_hash.hexdigest()
 
 def get_md5_hash(string):
@@ -404,13 +480,24 @@ def import_hash_only(line, hash_type):
     db.session.flush()
     return new_hash.id
 
-def import_hashfilehashes(hashfile_id, hashfile_path, file_type, hash_type):
+def import_hashfilehashes(
+    hashfile_id,
+    hashfile_path,
+    file_type,
+    hash_type,
+    progress_callback=None,
+):
     """Function to hashfile"""
 
+    total_lines = get_linecount(hashfile_path) if progress_callback is not None else 0
+    processed_lines = 0
     with open(hashfile_path, encoding='utf-8', errors='replace') as file:
         for raw_line in file:
+            processed_lines += 1
             line = raw_line.rstrip('\r\n')
             if not line:
+                if progress_callback is not None:
+                    progress_callback(processed_lines, total_lines)
                 continue
 
             username = None
@@ -509,7 +596,12 @@ def import_hashfilehashes(hashfile_id, hashfile_path, file_type, hash_type):
                 )
                 db.session.add(hashfilehashes)
 
+            if progress_callback is not None:
+                progress_callback(processed_lines, total_lines)
+
     db.session.commit()
+    if progress_callback is not None:
+        progress_callback(total_lines, total_lines)
     return True
 
 def update_dynamic_wordlist(wordlist_id, *, commit=True):
@@ -778,11 +870,13 @@ def update_job_task_status(jobtask_id, status):
 
     return True
 
-def validate_pwdump_hashfile(hashfile_path, hash_type):
+def validate_pwdump_hashfile(hashfile_path, hash_type, progress_callback=None):
     """Function to validate if hashfile submitted is a pwdump format"""
 
     try:
-        for line_number, line in _iter_hashfile_lines(hashfile_path):
+        for line_number, line in _iter_hashfile_lines(
+            hashfile_path, progress_callback=progress_callback
+        ):
             line = line.rstrip('\r\n')
             if len(line) == 0:
                 continue
@@ -801,12 +895,14 @@ def validate_pwdump_hashfile(hashfile_path, hash_type):
         return str(error)
     return False
 
-def validate_netntlm_hashfile(hashfile_path):
+def validate_netntlm_hashfile(hashfile_path, progress_callback=None):
     """Function to validate if hashfile submitted is a netntlm format"""
 
     list_of_username_and_computers = set()
     try:
-        for line_number, line in _iter_hashfile_lines(hashfile_path):
+        for line_number, line in _iter_hashfile_lines(
+            hashfile_path, progress_callback=progress_callback
+        ):
             line = line.rstrip('\r\n')
             if len(line) == 0:
                 continue
@@ -825,10 +921,12 @@ def validate_netntlm_hashfile(hashfile_path):
         return str(error)
     return False
 
-def validate_kerberos_hashfile(hashfile_path, hash_type):
+def validate_kerberos_hashfile(hashfile_path, hash_type, progress_callback=None):
     """Function to validate if hashfile submitted is a kerberos format"""
     try:
-        for line_number, line in _iter_hashfile_lines(hashfile_path):
+        for line_number, line in _iter_hashfile_lines(
+            hashfile_path, progress_callback=progress_callback
+        ):
             line = line.rstrip('\r\n')
             if len(line) == 0:
                 continue
@@ -892,10 +990,12 @@ def validate_kerberos_hashfile(hashfile_path, hash_type):
         return str(error)
     return False
 
-def validate_shadow_hashfile(hashfile_path, hash_type):
+def validate_shadow_hashfile(hashfile_path, hash_type, progress_callback=None):
     """Function to validate if hashfile submitted is a shadow format"""
     try:
-        for line_number, line in _iter_hashfile_lines(hashfile_path):
+        for line_number, line in _iter_hashfile_lines(
+            hashfile_path, progress_callback=progress_callback
+        ):
             line = line.rstrip('\r\n')
             if len(line) == 0:
                 continue
@@ -911,10 +1011,12 @@ def validate_shadow_hashfile(hashfile_path, hash_type):
         return str(error)
     return False
 
-def validate_user_hash_hashfile(hashfile_path):
+def validate_user_hash_hashfile(hashfile_path, progress_callback=None):
     """Function to validate if hashfile submitted is a user:hash format"""
     try:
-        for line_number, line in _iter_hashfile_lines(hashfile_path):
+        for line_number, line in _iter_hashfile_lines(
+            hashfile_path, progress_callback=progress_callback
+        ):
             line = line.rstrip('\r\n')
             if len(line) == 0:
                 continue
@@ -927,11 +1029,13 @@ def validate_user_hash_hashfile(hashfile_path):
 
 # Dumb way of doing this, we return with an error message if we have an issue with the hashfile
 # and return false if hashfile is okay. :/ Should be the otherway around :shrug emoji:
-def validate_hash_only_hashfile(hashfile_path, hash_type):
+def validate_hash_only_hashfile(hashfile_path, hash_type, progress_callback=None):
     """Function to validate if hashfile submitted is a hash only format"""
 
     try:
-        for line_number, line in _iter_hashfile_lines(hashfile_path):
+        for line_number, line in _iter_hashfile_lines(
+            hashfile_path, progress_callback=progress_callback
+        ):
             line = line.rstrip('\r\n')
             if len(line) == 0:
                 continue

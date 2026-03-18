@@ -6,30 +6,6 @@
 </div>
 {% endblock header %}
 {% block content %}
-<script>
-    function showDiv(){
-        var Index = document.getElementById('hc_attackmode'); 
-        // support all other attack types
-        if(Index.value == 'dictionary')
-        {
-            document.getElementById('dictionary_div').style.display = 'inline';
-            document.getElementById('rules_div').style.display = 'inline';
-            document.getElementById('maskmode_div').style.display = 'none';
-        }
-        else if (Index.value == 'maskmode')
-        {
-            document.getElementById('dictionary_div').style.display = 'none';
-            document.getElementById('rules_div').style.display = 'none';
-            document.getElementById('maskmode_div').style.display = 'inline';
-        }
-        else
-        {
-            document.getElementById('dictionary_div').style.display = 'none';
-            document.getElementById('rules_div').style.display = 'none';
-            document.getElementById('maskmode_div').style.display = 'none';
-        }
-    }
-</script>
 <div class="content-section">
     <form method="POST" action="" enctype="multipart/form-data">
         {{ tasksForm.hidden_tag() }}
@@ -51,17 +27,17 @@
            <div class="form-group">
                 {{ tasksForm.hc_attackmode.label(class="form-control-label") }}
                 {% if tasksForm.hc_attackmode.errors %}
-                    {{ tasksForm.hc_attackmode(class="form-control form-control-lg is-invalid") }}
+                    {{ tasksForm.hc_attackmode(class="form-control form-control-lg is-invalid", data_toggle_group="task-attack-mode") }}
                     <div class="invalid-feedback">
                         {% for error in tasksForm.hc_attackmode.errors %}
                             <span>{{ error }}</span>
                         {% endfor %}
                     </div>
                 {% else %}
-                    {{ tasksForm.hc_attackmode(class="form-control form-control-lg", onchange="showDiv()") }}
+                    {{ tasksForm.hc_attackmode(class="form-control form-control-lg", data_toggle_group="task-attack-mode") }}
                 {% endif %}
             </div>
-            <div class="form-group" style=display:none id="dictionary_div">
+            <div class="form-group hc-hidden" id="dictionary_div" data-toggle-group-section="task-attack-mode" data-toggle-values="dictionary">
                 {{ tasksForm.wl_id.label(class="form-control-label") }}
                 {% if tasksForm.wl_id.errors %}
                     {{ tasksForm.wl_id(class="form-control form-control-lg is-invalid") }}
@@ -74,7 +50,7 @@
                     {{ tasksForm.wl_id(class="form-control form-control-lg") }}
                 {% endif %}
             </div>
-            <div class="form-group" style=display:none id="rules_div">
+            <div class="form-group hc-hidden" id="rules_div" data-toggle-group-section="task-attack-mode" data-toggle-values="dictionary">
                 {{ tasksForm.rule_id.label(class="form-control-label") }}
                 {% if tasksForm.rule_id.errors %}
                     {{ tasksForm.rule_id(class="form-control form-control-lg is-invalid") }}
@@ -87,7 +63,7 @@
                     {{ tasksForm.rule_id(class="form-control form-control-lg") }}
                 {% endif %}
             </div>
-            <div class="form-group" style=display:none id="maskmode_div">
+            <div class="form-group hc-hidden" id="maskmode_div" data-toggle-group-section="task-attack-mode" data-toggle-values="maskmode">
                 {{ tasksForm.mask.label(class="form-control-label") }}
                 {% if tasksForm.mask.errors %}
                     {{ tasksForm.mask(class="form-control form-control-lg is-invalid") }}

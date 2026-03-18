@@ -7,7 +7,7 @@
 {% endblock header %}
 {% block content %}
 <div class="content-section">
-    <form method="POST" action="" enctype="multipart/form-data">
+    <form method="POST" action="" enctype="multipart/form-data" data-upload-progress-form="true">
         {{ form.hidden_tag() }}
         <fieldset class="form-group">
             <div class="form-group">
@@ -30,11 +30,21 @@
                 <small class="text-muted d-block">Upload a <code>.rule</code> file.</small>
                 {% if form.upload.errors %}
                     {% for error in form.upload.errors %}
-                        <span class="text-danger">{{ error }}</span><br>
+                        <span class="text-danger d-block">{{ error }}</span>
                     {% endfor %}
                 {% endif %}
             </div>
         </fieldset>
+        <div class="hc-upload-status hc-hidden" data-upload-status aria-live="polite">
+            <div class="hc-upload-status-header">
+                <span class="hc-upload-status-title" data-upload-status-title>Uploading file...</span>
+                <span class="hc-upload-status-detail" data-upload-status-detail>Waiting to start.</span>
+            </div>
+            <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+                <div class="progress-bar" data-upload-progress-bar style="width: 0%" aria-valuenow="0">0%</div>
+            </div>
+            <small class="text-muted d-block mt-2">Large file uploads continue processing after the browser finishes sending the file.</small>
+        </div>
         <div class="hc-form-actions">
             <a class="btn btn-secondary" href="{{ url_for('rules.rules_list') }}">Back</a>
             <div class="hc-form-actions-right">

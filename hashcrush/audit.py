@@ -48,6 +48,18 @@ def _actor_snapshot() -> tuple[int | None, str, bool]:
     )
 
 
+def capture_audit_actor() -> dict[str, object]:
+    """Capture request actor details for deferred/background audit writes."""
+
+    actor_user_id, actor_username, actor_admin = _actor_snapshot()
+    return {
+        "actor_user_id": actor_user_id,
+        "actor_username": actor_username,
+        "actor_admin": actor_admin,
+        "actor_ip": _audit_client_ip(),
+    }
+
+
 def _serialize_details(details) -> str:
     if details is None:
         payload = {}
@@ -107,14 +119,22 @@ def record_audit_event(
     target_id=None,
     summary: str,
     details=None,
+    actor: dict[str, object] | None = None,
 ) -> None:
     """Queue audit persistence for after-commit, or write immediately post-commit."""
-    actor_user_id, actor_username, actor_admin = _actor_snapshot()
+    if actor is None:
+        actor_user_id, actor_username, actor_admin = _actor_snapshot()
+        actor_ip = _audit_client_ip()
+    else:
+        actor_user_id = actor.get("actor_user_id")
+        actor_username = str(actor.get("actor_username") or "<unknown>")
+        actor_admin = bool(actor.get("actor_admin", False))
+        actor_ip = actor.get("actor_ip")
     payload = {
         "actor_user_id": actor_user_id,
         "actor_username": actor_username,
         "actor_admin": actor_admin,
-        "actor_ip": _audit_client_ip(),
+        "actor_ip": actor_ip,
         "event_type": str(event_type),
         "target_type": str(target_type),
         "target_id": None if target_id is None else str(target_id),

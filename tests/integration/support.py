@@ -4,6 +4,7 @@
 import importlib.util
 import io
 import json
+import time
 from configparser import ConfigParser
 from pathlib import Path
 
@@ -143,6 +144,27 @@ def _login_client_as_user(client, user: Users):
 
 def _latest_audit_entry() -> AuditLog | None:
     return db.session.scalar(select(AuditLog).order_by(AuditLog.id.desc()))
+
+
+def _wait_for_upload_operation(
+    client,
+    status_url: str,
+    *,
+    attempts: int = 80,
+    delay_seconds: float = 0.05,
+):
+    response = None
+    for _ in range(attempts):
+        response = client.get(status_url)
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert isinstance(payload, dict)
+        if payload.get("complete"):
+            return payload
+        time.sleep(delay_seconds)
+    pytest.fail(
+        f"Upload operation did not complete after {attempts} poll attempt(s): {status_url}"
+    )
 
 
 def _count_rows(model, *criteria, **filters) -> int:

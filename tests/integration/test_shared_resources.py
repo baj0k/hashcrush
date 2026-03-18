@@ -130,6 +130,68 @@ def test_wordlists_add_uploads_static_wordlist_to_managed_runtime(tmp_path):
 
 
 @pytest.mark.security
+def test_wordlists_add_supports_async_processing_progress(tmp_path):
+    app = _build_app(
+        {
+            "RUNTIME_PATH": str(tmp_path / "runtime"),
+            "STORAGE_PATH": str(tmp_path / "storage"),
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/wordlists/add",
+            data={
+                "name": "async-wordlist",
+                "upload": (io.BytesIO(b"password\nletmein\n"), "async.txt"),
+            },
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+
+        assert response.status_code == 202
+        start_payload = response.get_json()
+        assert isinstance(start_payload, dict)
+        assert start_payload["state"] in {"queued", "running"}
+        assert start_payload["status_url"].startswith("/uploads/operations/")
+
+        final_payload = _wait_for_upload_operation(client, start_payload["status_url"])
+        assert final_payload["success"] is True
+        assert final_payload["redirect_url"] == "/wordlists"
+
+        wordlist = _first_row(Wordlists, name="async-wordlist")
+        assert wordlist is not None
+        assert Path(wordlist.path).read_text(encoding="utf-8") == "password\nletmein\n"
+
+        entry = _latest_audit_entry()
+        assert entry is not None
+        assert entry.event_type == "wordlist.create"
+        assert entry.actor_username == "admin"
+
+
+@pytest.mark.security
+def test_wordlists_add_form_includes_upload_progress_status_panel():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get("/wordlists/add")
+        assert response.status_code == 200
+        assert b'data-upload-progress-form="true"' in response.data
+        assert b"Large file uploads continue processing" in response.data
+
+
+@pytest.mark.security
 def test_rules_add_uploads_rule_to_managed_runtime(tmp_path):
     app = _build_app(
         {
@@ -158,6 +220,50 @@ def test_rules_add_uploads_rule_to_managed_runtime(tmp_path):
         assert rule is not None
         assert rule.path.startswith(str((tmp_path / "storage" / "rules").resolve()))
         assert Path(rule.path).read_text(encoding="utf-8") == ":\n"
+
+
+@pytest.mark.security
+def test_rules_add_supports_async_processing_progress(tmp_path):
+    app = _build_app(
+        {
+            "RUNTIME_PATH": str(tmp_path / "runtime"),
+            "STORAGE_PATH": str(tmp_path / "storage"),
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/rules/add",
+            data={
+                "name": "async-rule",
+                "upload": (io.BytesIO(b":\n"), "async.rule"),
+            },
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+
+        assert response.status_code == 202
+        start_payload = response.get_json()
+        assert isinstance(start_payload, dict)
+        assert start_payload["status_url"].startswith("/uploads/operations/")
+
+        final_payload = _wait_for_upload_operation(client, start_payload["status_url"])
+        assert final_payload["success"] is True
+        assert final_payload["redirect_url"] == "/rules"
+
+        rule = _first_row(Rules, name="async-rule")
+        assert rule is not None
+        assert Path(rule.path).read_text(encoding="utf-8") == ":\n"
+
+        entry = _latest_audit_entry()
+        assert entry is not None
+        assert entry.event_type == "rule.create"
+        assert entry.actor_username == "admin"
 
 
 @pytest.mark.security

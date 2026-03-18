@@ -227,6 +227,7 @@ def test_jobs_list_displays_eta_and_percent_done_for_active_job():
                 task_id=task.id,
                 status="Running",
                 progress=progress_payload,
+                benchmark="40252.3 MH/s",
             )
         )
         db.session.commit()
@@ -240,6 +241,8 @@ def test_jobs_list_displays_eta_and_percent_done_for_active_job():
         assert b"ETA" in response.data
         assert b"17.29%" in response.data
         assert b"ETA_TEST_VALUE" in response.data
+        assert b"40.3 GH/s" in response.data
+        assert b"40252.3 MH/s" not in response.data
 
 @pytest.mark.security
 def test_jobs_page_displays_active_queue_eta_and_percent_done_columns_for_tasks():
@@ -691,6 +694,56 @@ def test_hashfiles_page_allows_admin_to_add_shared_hashfiles():
 
 
 @pytest.mark.security
+def test_hashfiles_add_supports_async_processing_progress():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="Async Hashfile Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/hashfiles/add",
+            data={
+                "domain_id": str(domain.id),
+                "file_type": "hash_only",
+                "hash_type": "0",
+                "hashfile": (
+                    io.BytesIO(b"5f4dcc3b5aa765d61d8327deb882cf99\n"),
+                    "async-hashes.txt",
+                ),
+            },
+            content_type="multipart/form-data",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+
+        assert response.status_code == 202
+        start_payload = response.get_json()
+        assert isinstance(start_payload, dict)
+        assert start_payload["status_url"].startswith("/uploads/operations/")
+
+        final_payload = _wait_for_upload_operation(client, start_payload["status_url"])
+        assert final_payload["success"] is True
+        assert final_payload["redirect_url"] == "/hashfiles"
+
+        hashfile = _first_row(Hashfiles, name="async-hashes.txt")
+        assert hashfile is not None
+        assert hashfile.domain_id == domain.id
+        assert _count_rows(HashfileHashes, hashfile_id=hashfile.id) == 1
+
+        entry = _latest_audit_entry()
+        assert entry is not None
+        assert entry.event_type == "hashfile.create"
+        assert entry.actor_username == "admin"
+
+
+@pytest.mark.security
 def test_hashfiles_add_allows_admin_to_create_new_domain_inline():
     app = _build_app()
     with app.app_context():
@@ -705,6 +758,8 @@ def test_hashfiles_add_allows_admin_to_create_new_domain_inline():
         assert form_response.status_code == 200
         assert b"Add New Domain" in form_response.data
         assert b"New Domain" in form_response.data
+        assert b'data-upload-progress-form="true"' in form_response.data
+        assert b"Large file uploads continue processing" in form_response.data
 
         response = client.post(
             "/hashfiles/add",

@@ -129,6 +129,25 @@ def test_analytics_page_renders_upperalphanumeric_and_mixed_categories():
         assert "UpperAlphaNumeric: 1" in html
         assert "MixedAlphaSpecialNumeric: 1" in html
 
+
+@pytest.mark.security
+def test_analytics_page_uses_local_chart_renderer_assets():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get("/analytics")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "/static/analytics.js" in html
+        assert 'id="analytics-chart-data"' in html
+        assert "cdn.jsdelivr.net/npm/chart.js" not in html
+
 @pytest.mark.security
 def test_search_hash_post_is_trimmed_and_case_insensitive():
     app = _build_app()

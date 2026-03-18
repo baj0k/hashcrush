@@ -33,9 +33,9 @@
                                 {{ rule.last_updated }}
                             </td>
                             <td>
-                                <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{rule.id}}" title=Info></button>
+                                <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{rule.id}}" title="Info" aria-label="View rule details for {{ rule.name }}"></button>
                                 {% if current_user.admin %}
-                                <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{rule.id}}" title=Delete></button>
+                                <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{rule.id}}" title="Delete" aria-label="Delete rule {{ rule.name }}"></button>
                                 {% endif %}
                             </td>
                         </tr>
@@ -50,7 +50,7 @@
             <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header">
-                <h5 class="modal-title" id="infoModal{{rule.id}}Label">Info: {{rule.name}}</h5>
+                <h5 class="modal-title" id="infoModal{{rule.id}}Label">Details: {{rule.name}}</h5>
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                     <span aria-hidden="true">&times;</span>
                 </button>
@@ -62,11 +62,13 @@
                               <tr>
                                 <th scope="row">Associated Tasks</th>
                                 <td>
+                                    <div class="hc-line-list">
                                     {% for task in tasks %}
                                         {% if task.rule_id == rule.id %}
-                                            {{ task.name }} <br>
+                                            <span>{{ task.name }}</span>
                                         {% endif %}
                                     {% endfor %}
+                                    </div>
                                 </td>
                               </tr>
                           </tbody>
@@ -86,7 +88,7 @@
                 <div class="modal-dialog modal-dialog-centered">
                 <div class="modal-content">
                     <div class="modal-header">
-                    <h5 class="modal-title" id="deleteModal{{rule.id}}Label">Delete: {{rule.name}} ?</h5>
+                    <h5 class="modal-title" id="deleteModal{{rule.id}}Label">Delete {{rule.name}}?</h5>
                     <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                         <span aria-hidden="true">&times;</span>
                     </button>

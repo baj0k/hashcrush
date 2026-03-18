@@ -14,8 +14,7 @@
     </nav>
     <div class="tab-content" id="nav-tabContent">
         <div class="tab-pane fade show active" id="nav-hashcrush" role="tabpanel" aria-labelledby="nav-hashcrush-tab">
-            <br>
-            <div class="content-section">
+            <div class="content-section hc-tab-panel">
                 <p class="text-muted">
                     Edit <code>config.conf</code> values here. Leave a field empty to unset it and use the default shown.
                     Environment variables still take precedence over file values.
@@ -46,8 +45,10 @@
                                 {% for row in config_rows %}
                                     <tr class="align-middle">
                                         <td>
-                                            <code>{{ row.section }}.{{ row.key }}</code><br>
-                                            <small class="text-muted">{{ row.label }}</small>
+                                            <div class="hc-line-list">
+                                                <code>{{ row.section }}.{{ row.key }}</code>
+                                                <small class="text-muted">{{ row.label }}</small>
+                                            </div>
                                         </td>
                                         <td>
                                             <input
@@ -76,8 +77,7 @@
             </div>
         </div>
         <div class="tab-pane fade" id="nav-data" role="tabpanel" aria-labelledby="nav-data-tab">
-            <br>
-            <div class="content-section">
+            <div class="content-section hc-tab-panel">
                 <p class="text-muted mb-3">
                     Clearing temp data removes only generated files in <code>{{ temp_folder_path }}/</code>.
                     It does not delete jobs, hash records, users, or other database data.
@@ -95,14 +95,9 @@
                         <tr>
                             <td>Action</td>
                             <td>
-                                <form action="{{ url_for('settings.clear_temp_folder') }}" method="POST" class="d-inline">
+                                <form action="{{ url_for('settings.clear_temp_folder') }}" method="POST" class="d-inline" data-confirm="Delete all files in {{ temp_folder_path }}/ ?">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                    <button
-                                        class="btn btn-danger"
-                                        type="submit"
-                                        title="Clear Temp Folder"
-                                        onclick="return confirm('Delete all files in {{ temp_folder_path }}/ ?');"
-                                    >
+                                    <button class="btn btn-danger" type="submit" title="Clear Temp Folder">
                                         <i class="fa fa-trash" aria-hidden="true"></i> Clear Temp Folder
                                     </button>
                                 </form>
@@ -113,8 +108,7 @@
             </div>
         </div>
         <div class="tab-pane fade" id="nav-info" role="tabpanel" aria-labelledby="nav-info-tab">
-            <br>
-            <div class="content-section">
+            <div class="content-section hc-tab-panel">
                 <dl>
                     <dt>Application Version (Code):</dt>
                     <dd>{{ application_version }}</dd>

@@ -33,10 +33,10 @@
                         <tr>
                             <td>{{ domain.name }}</td>
                             <td>
-                                <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{domain.id}}" title=Info></button>
-                                <a class="fa fa-pie-chart btn btn-warning" href="/analytics?domain_id={{domain.id}}" role="button" title=Analytics></a>
+                                <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{domain.id}}" title="Info" aria-label="View domain details for {{ domain.name }}"></button>
+                                <a class="fa fa-pie-chart btn btn-warning" href="{{ url_for('analytics.get_analytics') }}?domain_id={{ domain.id }}" role="button" title="Analytics" aria-label="View analytics for domain {{ domain.name }}"></a>
                                 {% if current_user.admin %}
-                                    <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{domain.id}}" title=Delete></button>
+                                    <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{domain.id}}" title="Delete" aria-label="Delete domain {{ domain.name }}"></button>
                                 {% endif %}
                             </td>
                         </tr>
@@ -52,7 +52,7 @@
         <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header">
-            <h5 class="modal-title" id="infoModal{{domain.id}}Label">Info: {{domain.name}}</h5>
+            <h5 class="modal-title" id="infoModal{{domain.id}}Label">Details: {{domain.name}}</h5>
             <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                 <span aria-hidden="true">&times;</span>
             </button>
@@ -64,26 +64,26 @@
                             <th scope="row">Associated Jobs</th>
                             <td>
                                 {% set associated_jobs = jobs_by_domain.get(domain.id, []) %}
-                                {% if associated_jobs %}
+                                <div class="hc-line-list">
                                     {% for job in associated_jobs %}
-                                        {{ job.name }} <br>
-                                    {% endfor %}
-                                {% else %}
+                                    <span>{{ job.name }}</span>
+                                    {% else %}
                                     <i>none</i>
-                                {% endif %}
+                                    {% endfor %}
+                                </div>
                             </td>
                           </tr>
                           <tr>
                             <th scope="row">Associated Hashfiles</th>
                             <td>
                                 {% set associated_hashfiles = hashfiles_by_domain.get(domain.id, []) %}
-                                {% if associated_hashfiles %}
+                                <div class="hc-line-list">
                                     {% for hashfile in associated_hashfiles %}
-                                        {{ hashfile.name }} <br>
-                                    {% endfor %}
-                                {% else %}
+                                    <span>{{ hashfile.name }}</span>
+                                    {% else %}
                                     <i>none</i>
-                                {% endif %}
+                                    {% endfor %}
+                                </div>
                             </td>
                           </tr>
                       </tbody>
@@ -104,7 +104,7 @@
             <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header">
-                <h5 class="modal-title" id="deleteModal{{domain.id}}Label">Delete: {{domain.name}} ?</h5>
+                <h5 class="modal-title" id="deleteModal{{domain.id}}Label">Delete {{domain.name}}?</h5>
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                     <span aria-hidden="true">&times;</span>
                 </button>

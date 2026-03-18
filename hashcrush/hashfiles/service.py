@@ -32,35 +32,153 @@ class HashfileCreationResult:
     imported_hash_links: int
 
 
-def _validation_result(form, hashfile_path: str) -> tuple[str | None, str | None]:
-    if form.file_type.data == "pwdump":
+def _selected_hash_type(
+    *,
+    file_type: str | None,
+    hash_type: str | None = None,
+    pwdump_hash_type: str | None = None,
+    netntlm_hash_type: str | None = None,
+    kerberos_hash_type: str | None = None,
+    shadow_hash_type: str | None = None,
+) -> str | None:
+    if file_type == "pwdump":
+        return pwdump_hash_type
+    if file_type == "NetNTLM":
+        return netntlm_hash_type
+    if file_type == "kerberos":
+        return kerberos_hash_type
+    if file_type == "shadow":
+        return shadow_hash_type
+    if file_type in {"user_hash", "hash_only"}:
+        return hash_type
+    return None
+
+
+def _validation_result(
+    *,
+    file_type: str | None,
+    hash_type: str | None,
+    hashfile_path: str,
+    progress_callback=None,
+) -> tuple[str | None, str | None]:
+    if file_type == "pwdump":
         return (
-            validate_pwdump_hashfile(hashfile_path, form.pwdump_hash_type.data),
-            form.pwdump_hash_type.data,
+            validate_pwdump_hashfile(
+                hashfile_path,
+                hash_type,
+                progress_callback=progress_callback,
+            ),
+            hash_type,
         )
-    if form.file_type.data == "NetNTLM":
+    if file_type == "NetNTLM":
         return (
-            validate_netntlm_hashfile(hashfile_path),
-            form.netntlm_hash_type.data,
+            validate_netntlm_hashfile(
+                hashfile_path,
+                progress_callback=progress_callback,
+            ),
+            hash_type,
         )
-    if form.file_type.data == "kerberos":
+    if file_type == "kerberos":
         return (
-            validate_kerberos_hashfile(hashfile_path, form.kerberos_hash_type.data),
-            form.kerberos_hash_type.data,
+            validate_kerberos_hashfile(
+                hashfile_path,
+                hash_type,
+                progress_callback=progress_callback,
+            ),
+            hash_type,
         )
-    if form.file_type.data == "shadow":
+    if file_type == "shadow":
         return (
-            validate_shadow_hashfile(hashfile_path, form.shadow_hash_type.data),
-            form.shadow_hash_type.data,
+            validate_shadow_hashfile(
+                hashfile_path,
+                hash_type,
+                progress_callback=progress_callback,
+            ),
+            hash_type,
         )
-    if form.file_type.data == "user_hash":
-        return validate_user_hash_hashfile(hashfile_path), form.hash_type.data
-    if form.file_type.data == "hash_only":
+    if file_type == "user_hash":
         return (
-            validate_hash_only_hashfile(hashfile_path, form.hash_type.data),
-            form.hash_type.data,
+            validate_user_hash_hashfile(
+                hashfile_path,
+                progress_callback=progress_callback,
+            ),
+            hash_type,
+        )
+    if file_type == "hash_only":
+        return (
+            validate_hash_only_hashfile(
+                hashfile_path,
+                hash_type,
+                progress_callback=progress_callback,
+            ),
+            hash_type,
         )
     return "Invalid File Format", None
+
+
+def create_hashfile_from_path(
+    *,
+    hashfile_path: str,
+    hashfile_name: str,
+    domain_id: int,
+    file_type: str,
+    hash_type: str,
+    progress_callback=None,
+) -> tuple[HashfileCreationResult | None, str | None]:
+    """Create and import a shared hashfile from an already-saved file path."""
+
+    validation_error, normalized_hash_type = _validation_result(
+        file_type=file_type,
+        hash_type=hash_type,
+        hashfile_path=hashfile_path,
+        progress_callback=(
+            (lambda current, total: progress_callback("validate", current, total))
+            if progress_callback is not None
+            else None
+        ),
+    )
+    if validation_error:
+        return None, validation_error
+    if not normalized_hash_type:
+        return None, "Hash type is required for this hashfile format."
+
+    hashfile = Hashfiles(name=hashfile_name, domain_id=domain_id)
+    db.session.add(hashfile)
+    db.session.flush()
+
+    if not import_hashfilehashes(
+        hashfile_id=hashfile.id,
+        hashfile_path=hashfile_path,
+        file_type=file_type,
+        hash_type=normalized_hash_type,
+        progress_callback=(
+            (lambda current, total: progress_callback("import", current, total))
+            if progress_callback is not None
+            else None
+        ),
+    ):
+        db.session.rollback()
+        return (
+            None,
+            "Failed importing hashfile. Check file format/hash type and retry.",
+        )
+
+    imported_hash_links = int(
+        db.session.scalar(
+            select(func.count())
+            .select_from(HashfileHashes)
+            .filter_by(hashfile_id=hashfile.id)
+        )
+        or 0
+    )
+    return (
+        HashfileCreationResult(
+            hashfile=hashfile,
+            hash_type=str(normalized_hash_type),
+            imported_hash_links=imported_hash_links,
+        ),
+        None,
+    )
 
 
 def create_hashfile_from_form(
@@ -87,48 +205,27 @@ def create_hashfile_from_form(
         else:
             return None, "You must provide either a hashfile upload or pasted hashes."
 
-        validation_error, hash_type = _validation_result(form, hashfile_path)
-        if validation_error:
-            return None, validation_error
-        if not hash_type:
-            return None, "Hash type is required for this hashfile format."
-
         hashfile_name = form.name.data
         if not hashfile_name and form.hashfile.data:
             hashfile_name = form.hashfile.data.filename
         hashfile_name = hashfile_name or f"hashfile_{secrets.token_hex(4)}.txt"
 
-        hashfile = Hashfiles(name=hashfile_name, domain_id=domain_id)
-        db.session.add(hashfile)
-        db.session.flush()
-
-        if not import_hashfilehashes(
-            hashfile_id=hashfile.id,
+        return create_hashfile_from_path(
             hashfile_path=hashfile_path,
+            hashfile_name=hashfile_name,
+            domain_id=domain_id,
             file_type=form.file_type.data,
-            hash_type=hash_type,
-        ):
-            db.session.rollback()
-            return (
-                None,
-                "Failed importing hashfile. Check file format/hash type and retry.",
-            )
-
-        imported_hash_links = int(
-            db.session.scalar(
-                select(func.count())
-                .select_from(HashfileHashes)
-                .filter_by(hashfile_id=hashfile.id)
-            )
-            or 0
-        )
-        return (
-            HashfileCreationResult(
-                hashfile=hashfile,
-                hash_type=str(hash_type),
-                imported_hash_links=imported_hash_links,
+            hash_type=(
+                _selected_hash_type(
+                    file_type=form.file_type.data,
+                    hash_type=form.hash_type.data,
+                    pwdump_hash_type=form.pwdump_hash_type.data,
+                    netntlm_hash_type=form.netntlm_hash_type.data,
+                    kerberos_hash_type=form.kerberos_hash_type.data,
+                    shadow_hash_type=form.shadow_hash_type.data,
+                )
+                or ""
             ),
-            None,
         )
     finally:
         if hashfile_path and os.path.isfile(hashfile_path):

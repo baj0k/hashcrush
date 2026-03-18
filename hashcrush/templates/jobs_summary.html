@@ -45,9 +45,11 @@
                                 <tr>
                                     <td>Tasks:</td>
                                     <td>
-                                        {% for task_name in ordered_task_names %}
-                                            {{ task_name }} <br>
-                                        {% endfor %}
+                                        <div class="hc-line-list">
+                                            {% for task_name in ordered_task_names %}
+                                            <span>{{ task_name }}</span>
+                                            {% endfor %}
+                                        </div>
                                     </td>
                                 </tr>
                         </tbody>
@@ -91,9 +93,11 @@
                             <tr>
                                 <td>Tasks:</td>
                                 <td>
-                                    {% for task_name in ordered_task_names %}
-                                        {{ task_name }} <br>
-                                    {% endfor %}
+                                    <div class="hc-line-list">
+                                        {% for task_name in ordered_task_names %}
+                                        <span>{{ task_name }}</span>
+                                        {% endfor %}
+                                    </div>
                                 </td>
                             </tr>
                     </tbody>

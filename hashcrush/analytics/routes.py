@@ -1,6 +1,5 @@
 """Flask routes to handle Analytics."""
 import io
-import operator
 from collections import Counter
 
 from flask import (
@@ -138,6 +137,18 @@ def _parse_positive_int(value):
     return parsed if parsed > 0 else None
 
 
+def _format_runtime_display(total_runtime: int) -> str:
+    if total_runtime > 604800:
+        return f"{round(total_runtime / 604800):.0f} week(s)"
+    if total_runtime > 86400:
+        return f"{round(total_runtime / 86400):.0f} day(s)"
+    if total_runtime > 3600:
+        return f"{round(total_runtime / 3600):.0f} hour(s)"
+    if total_runtime > 60:
+        return f"{round(total_runtime / 60):.0f} minute(s)"
+    return "< 1 minute"
+
+
 def _resolve_scope(domain_id: int | None, hashfile_id: int | None):
     visible_hashfiles = db.session.execute(
         select(Hashfiles).order_by(Hashfiles.name.asc())
@@ -214,33 +225,34 @@ def get_analytics():
     scoped_hashfile_ids = scope['scoped_hashfile_ids']
     domain_id = scope['domain_id']
     hashfile_id = scope['hashfile_id']
+    selected_domain_name = next((domain.name for domain in domain_rows if domain.id == domain_id), None)
+    selected_hashfile_name = next((hashfile.name for hashfile in hashfile_rows if hashfile.id == hashfile_id), None)
+    filter_hashfiles = [hashfile for hashfile in hashfile_rows if domain_id is None or hashfile.domain_id == domain_id]
 
     if not scoped_hashfile_ids:
         return render_template(
             'analytics.html',
             title='analytics',
-            fig1_labels=[],
-            fig1_values=[],
-            fig1_percent=0,
-            fig2_labels=[],
-            fig2_values=[],
-            fig3_labels=[],
-            fig3_values=[],
-            fig3_percent=0,
-            fig4_labels=[],
-            fig4_values=[],
-            fig5_labels=[],
-            fig5_values=[],
-            fig6_labels=[],
-            fig6_values=[],
+            analytics_chart_data={
+                'recovered_accounts': {'labels': [], 'values': [], 'center_text': ''},
+                'password_complexity': {'labels': [], 'values': []},
+                'recovered_hashes': {'labels': [], 'values': [], 'center_text': ''},
+                'composition_makeup': {'labels': [], 'values': []},
+                'passwords_count_len': {'labels': [], 'values': []},
+                'top_10_passwords': {'labels': [], 'values': []},
+            },
             fig7_values={},
             fig7_total=0,
             fig8_table=[],
             domains=domain_rows,
             hashfiles=hashfile_rows,
+            filter_hashfiles=filter_hashfiles,
             hashfile_id=hashfile_id,
             domain_id=domain_id,
+            selected_domain_name=selected_domain_name,
+            selected_hashfile_name=selected_hashfile_name,
             total_runtime=0,
+            runtime_display=_format_runtime_display(0),
             total_accounts=format_display(0),
             total_unique_hashes=format_display(0),
         )
@@ -334,22 +346,22 @@ def get_analytics():
     # Figure 4 (Charset Breakdown)
     fig4_labels = []
     fig4_values = []
-    fig4_dict = {
-        f"{label}: {format_display(count)}": count
-        for label, count in cracked_metrics['composition_counts'].items()
-    }
-    fig4_array_sorted = dict(sorted(fig4_dict.items(), key=operator.itemgetter(1), reverse=True))
+    fig4_rows = sorted(
+        cracked_metrics['composition_counts'].items(),
+        key=lambda item: (-item[1], item[0]),
+    )
     limit = 0
     fig4_other = 0
-    for key in fig4_array_sorted:
+    for label, count in fig4_rows:
         if limit <= 3:
-            fig4_labels.append(key)
-            fig4_values.append(fig4_array_sorted[key])
+            fig4_labels.append(f"{label}: {format_display(count)}")
+            fig4_values.append(count)
             limit += 1
         else:
-            fig4_other += fig4_array_sorted[key]
-    fig4_labels.append('Other: ' + str(fig4_other))
-    fig4_values.append(fig4_other)
+            fig4_other += count
+    if fig4_other > 0:
+        fig4_labels.append('Other: ' + str(fig4_other))
+        fig4_values.append(fig4_other)
 
     # Figure 5 (Passwords by Length)
     fig5_labels = []
@@ -364,7 +376,11 @@ def get_analytics():
     # Figure 6 (Top 10 Passwords)
     fig6_labels = []
     fig6_values = []
-    for entry, count in cracked_metrics['password_counts'].most_common(10):
+    top_password_rows = sorted(
+        cracked_metrics['password_counts'].items(),
+        key=lambda item: (-item[1], item[0]),
+    )
+    for entry, count in top_password_rows[:10]:
         if len(fig6_labels) < 10:
             fig6_labels.append(entry)
             fig6_values.append(count)
@@ -386,28 +402,46 @@ def get_analytics():
     return render_template(
         'analytics.html',
         title='analytics',
-        fig1_labels=fig1_labels,
-        fig1_values=fig1_values,
-        fig1_percent=fig1_percent,
-        fig2_labels=fig2_labels,
-        fig2_values=fig2_values,
-        fig3_labels=fig3_labels,
-        fig3_values=fig3_values,
-        fig3_percent=fig3_percent,
-        fig4_labels=fig4_labels,
-        fig4_values=fig4_values,
-        fig5_labels=fig5_labels,
-        fig5_values=fig5_values,
-        fig6_labels=fig6_labels,
-        fig6_values=fig6_values,
+        analytics_chart_data={
+            'recovered_accounts': {
+                'labels': fig1_labels,
+                'values': fig1_values,
+                'center_text': fig1_percent[0] if fig1_percent else '',
+            },
+            'password_complexity': {
+                'labels': fig2_labels,
+                'values': fig2_values,
+            },
+            'recovered_hashes': {
+                'labels': fig3_labels,
+                'values': fig3_values,
+                'center_text': fig3_percent[0] if fig3_percent else '',
+            },
+            'composition_makeup': {
+                'labels': fig4_labels,
+                'values': fig4_values,
+            },
+            'passwords_count_len': {
+                'labels': fig5_labels,
+                'values': fig5_values,
+            },
+            'top_10_passwords': {
+                'labels': fig6_labels,
+                'values': fig6_values,
+            },
+        },
         fig7_values=fig7_values,
         fig7_total=fig7_total,
         fig8_table=fig8_table,
         domains=domain_rows,
         hashfiles=hashfile_rows,
+        filter_hashfiles=filter_hashfiles,
         hashfile_id=hashfile_id,
         domain_id=domain_id,
+        selected_domain_name=selected_domain_name,
+        selected_hashfile_name=selected_hashfile_name,
         total_runtime=total_runtime,
+        runtime_display=_format_runtime_display(total_runtime),
         total_accounts=total_accounts,
         total_unique_hashes=total_unique_hashes,
     )
