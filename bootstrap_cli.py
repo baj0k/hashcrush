@@ -971,7 +971,10 @@ def main(argv: list[str] | None = None) -> int:
             _test_env_path(),
         )
         _print_test_environment_summary(seeded_values)
-        print("You can now run the live test flow with: ./tests/test-all.sh")
+        print(
+            "You can now run the live external smoke flow with: "
+            "HASHCRUSH_E2E_MODE=external PYTHONPATH=. python3 -m pytest -q -m e2e_external -rs"
+        )
     else:
         print(f"Initial admin username: {install_config['admin_username']}")
         print(

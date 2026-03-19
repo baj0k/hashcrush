@@ -61,6 +61,13 @@ def _sha256_text(text: str) -> str:
 
 
 def build_test_config(database_uri: str, runtime_path: Path, storage_path: Path):
+    ssl_root = runtime_path.parent / "ssl"
+    ssl_root.mkdir(parents=True, exist_ok=True)
+    cert_path = ssl_root / "cert.pem"
+    key_path = ssl_root / "key.pem"
+    from hashcrush.container_bootstrap import ensure_tls_certificate
+
+    ensure_tls_certificate(str(cert_path), str(key_path))
     return {
         "SECRET_KEY": TEST_SECRET_KEY,
         "DATA_ENCRYPTION_KEY": TEST_DATA_ENCRYPTION_KEY,
@@ -71,7 +78,8 @@ def build_test_config(database_uri: str, runtime_path: Path, storage_path: Path)
         "SKIP_RUNTIME_BOOTSTRAP": False,
         "RUNTIME_PATH": str(runtime_path),
         "STORAGE_PATH": str(storage_path),
-        "SESSION_COOKIE_SECURE": False,
+        "SSL_CERT_PATH": str(cert_path),
+        "SSL_KEY_PATH": str(key_path),
     }
 
 
@@ -197,12 +205,16 @@ def local_e2e_environment(tmp_path_factory):
     )
     fixture_data = _seed_local_e2e_data(app, storage_path)
 
-    server = make_server("127.0.0.1", 0, app, threaded=True)
+    ssl_context = (
+        app.config["SSL_CERT_PATH"],
+        app.config["SSL_KEY_PATH"],
+    )
+    server = make_server("127.0.0.1", 0, app, threaded=True, ssl_context=ssl_context)
     server_port = server.socket.getsockname()[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    fixture_data["base_url"] = f"http://127.0.0.1:{server_port}"
+    fixture_data["base_url"] = f"https://127.0.0.1:{server_port}"
     yield fixture_data
 
     server.shutdown()
@@ -323,7 +335,9 @@ def external_login(page, external_live_server, external_test_user_credentials):
 @pytest.fixture(scope="session")
 def browser_context_args(browser_context_args):
     base_url = (os.getenv("HASHCRUSH_E2E_BASE_URL") or "").strip().lower()
-    if _external_e2e_enabled() and base_url.startswith("https://") and (not _e2e_verify_tls()):
+    if (not _external_e2e_enabled()):
+        return {**browser_context_args, "ignore_https_errors": True}
+    if base_url.startswith("https://") and (not _e2e_verify_tls()):
         return {**browser_context_args, "ignore_https_errors": True}
     return browser_context_args
 

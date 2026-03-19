@@ -234,11 +234,6 @@ def build_config(overrides: dict[str, object] | None = None) -> dict[str, object
         or file_config.get("app", "trust_x_forwarded_for", fallback="false"),
         False,
     )
-    session_cookie_secure = _parse_bool(
-        os.getenv("HASHCRUSH_SESSION_COOKIE_SECURE")
-        or file_config.get("app", "session_cookie_secure", fallback=""),
-        None,
-    )
     session_cookie_httponly = _parse_bool(
         os.getenv("HASHCRUSH_SESSION_COOKIE_HTTPONLY")
         or file_config.get("app", "session_cookie_httponly", fallback="true"),
@@ -275,7 +270,6 @@ def build_config(overrides: dict[str, object] | None = None) -> dict[str, object
         "AUTH_THROTTLE_WINDOW_SECONDS": auth_throttle_window_seconds,
         "AUTH_THROTTLE_LOCKOUT_SECONDS": auth_throttle_lockout_seconds,
         "TRUST_X_FORWARDED_FOR": trust_x_forwarded_for,
-        "SESSION_COOKIE_SECURE": session_cookie_secure,
         "SESSION_COOKIE_HTTPONLY": session_cookie_httponly,
         "SESSION_COOKIE_SAMESITE": session_cookie_samesite,
         "RUNTIME_PATH": _normalize_dir_path(

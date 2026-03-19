@@ -177,13 +177,6 @@ HASHCRUSH_CONFIG_FIELDS = [
     },
     {
         "section": "app",
-        "key": "session_cookie_secure",
-        "label": "Session Cookie Secure",
-        "env_name": "HASHCRUSH_SESSION_COOKIE_SECURE",
-        "default_display": "Auto-enabled in non-debug/non-testing deployments.",
-    },
-    {
-        "section": "app",
         "key": "session_cookie_httponly",
         "label": "Session Cookie HttpOnly",
         "env_name": "HASHCRUSH_SESSION_COOKIE_HTTPONLY",

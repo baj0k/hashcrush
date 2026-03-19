@@ -14,13 +14,7 @@ HashCrush has two browser-testing modes:
 
 ## Supported Entry Point
 
-Use the host runner wrapper:
-
-```bash
-./tests/test-all.sh
-```
-
-Docker-native Compose entrypoints:
+Preferred Docker-native Compose entrypoints:
 
 ```bash
 COMPOSE_PROJECT_NAME=hashcrush-test-$(date +%s) \
@@ -41,18 +35,27 @@ COMPOSE_PROJECT_NAME=hashcrush-test \
 docker compose --profile test down -v --remove-orphans
 ```
 
-The automated harness injects its own `HASHCRUSH_DATA_ENCRYPTION_KEY`. For manual smoke runs against a real instance, make sure the target app has its production encryption key configured before running the external suite.
+The automated harness injects its own `HASHCRUSH_DATA_ENCRYPTION_KEY`. For manual
+smoke runs against a real instance, make sure the target app has its production
+encryption key configured before running the external suite.
 
-It runs:
+The Compose services run the same two-stage harness internally:
 
 1. non-E2E tests:
 ```bash
-PYTHONPATH=. pytest -q -m "not e2e and not e2e_external" -rs
+python3 -m pytest -q -m "not e2e and not e2e_external" -rs
 ```
-
 2. browser tests:
-- local `e2e` by default
-- external `e2e_external` only when `HASHCRUSH_E2E_MODE=external`
+- local `e2e` in the `test` service
+- HTTPS `e2e_external` smoke in the `test-external` service
+
+Optional host-side direct pytest equivalents:
+
+```bash
+PYTHONPATH=. pytest -q -m "not e2e and not e2e_external" -rs
+PYTHONPATH=. pytest -q -m e2e -rs
+PYTHONPATH=. pytest -q -m e2e_external -rs
+```
 
 Automated tests are PostgreSQL-backed. By default the suite reuses the configured
 HashCrush PostgreSQL database and isolates each test app in its own temporary schema.
@@ -77,13 +80,7 @@ run the automated tests.
 
 ## Local Automated Browser Tests
 
-Default mode:
-
-```bash
-./tests/test-all.sh
-```
-
-Docker-native equivalent:
+Docker-native entrypoint:
 
 ```bash
 COMPOSE_PROJECT_NAME=hashcrush-test-$(date +%s) \
@@ -124,15 +121,6 @@ creating temporary databases instead.
 
 Use external mode only when you want to validate a real running instance.
 
-Typical flow:
-
-```bash
-python3 ./hashcrush.py setup --test
-python3 ./hashcrush.py serve
-export HASHCRUSH_E2E_MODE=external
-./tests/test-all.sh
-```
-
 Docker-native full-stack flow:
 
 ```bash
@@ -155,8 +143,8 @@ In external mode:
   flow creates a shared wordlist, a shared task, and a new domain/job
 
 In the Docker-native full-stack flow, Compose starts the full app stack (`db`,
-`bootstrap`, `web`, and `worker`) and then executes the smoke suite from the
-dedicated `test-external` container.
+`bootstrap`, `web-test`, `nginx-test`, and `worker`) and then executes the
+smoke suite from the dedicated `test-external` container.
 
 External mode validates:
 - real PostgreSQL connectivity
@@ -177,8 +165,8 @@ python3 ./hashcrush.py upgrade
 4. confirm the target URL loads over HTTPS
 5. run:
 ```bash
-export HASHCRUSH_E2E_MODE=external
-./tests/test-all.sh
+COMPOSE_PROJECT_NAME=hashcrush-test-$(date +%s) \
+docker compose --profile test up --build --abort-on-container-exit --exit-code-from test-external test-external
 ```
 
 Expected result:
@@ -190,7 +178,7 @@ Expected result:
 
 ## E2E Skip Policy
 
-The wrapper treats skipped browser tests as a failure by default.
+The Docker-native test services treat skipped browser tests as a failure by default.
 
 Reason:
 - skipped browser tests should not count as a successful full validation run

@@ -51,6 +51,7 @@ def _ensure_runtime_dirs() -> tuple[str, str]:
 
 _EXECUTOR_LOCK_CLASS_ID = 0x48435253
 _EXECUTOR_LOCK_ID = 0x57524B52
+_WORKER_HEARTBEAT_FILENAME = "worker-heartbeat.json"
 
 
 class ExecutorOwnershipError(RuntimeError):
@@ -216,6 +217,43 @@ class LocalExecutorService:
         self._ownership_lease: ExecutorOwnershipLease | None = None
         self._recovered_once = False
 
+    def _heartbeat_path(self) -> str:
+        runtime_root = os.path.abspath(
+            os.path.expanduser(str(self.app.config.get("RUNTIME_PATH") or ""))
+        )
+        return os.path.join(runtime_root, _WORKER_HEARTBEAT_FILENAME)
+
+    def _write_heartbeat(self, *, status: str) -> None:
+        heartbeat_path = self._heartbeat_path()
+        heartbeat_dir = os.path.dirname(heartbeat_path)
+        os.makedirs(heartbeat_dir, exist_ok=True)
+
+        payload = {
+            "pid": os.getpid(),
+            "status": status,
+            "timestamp": time.time(),
+            "active_job_task_id": self._active.job_task_id if self._active else None,
+        }
+        tmp_path = f"{heartbeat_path}.tmp"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+            os.replace(tmp_path, heartbeat_path)
+        except OSError:
+            current_app.logger.warning(
+                "Failed to update worker heartbeat file: %s", heartbeat_path
+            )
+
+    def _remove_heartbeat(self) -> None:
+        heartbeat_path = self._heartbeat_path()
+        try:
+            if os.path.exists(heartbeat_path):
+                os.remove(heartbeat_path)
+        except OSError:
+            current_app.logger.warning(
+                "Failed to remove worker heartbeat file: %s", heartbeat_path
+            )
+
     def start(self) -> None:
         with self._lock:
             if self._thread and self._thread.is_alive():
@@ -265,11 +303,16 @@ class LocalExecutorService:
             self.app.logger.info("Released executor ownership lock.")
 
     def _run_loop(self) -> None:
+        with self.app.app_context():
+            self._remove_heartbeat()
         try:
             while not self._stop_event.is_set():
                 try:
                     with self.app.app_context():
                         self._tick()
+                        self._write_heartbeat(
+                            status="active" if self._active is not None else "idle"
+                        )
                 except Exception:
                     self.app.logger.exception("Local executor tick failed.")
                 finally:
@@ -279,6 +322,7 @@ class LocalExecutorService:
         finally:
             with self.app.app_context():
                 db.session.remove()
+                self._remove_heartbeat()
             self._release_ownership()
 
     def _tick(self) -> None:

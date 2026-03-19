@@ -38,6 +38,5 @@ auth_throttle_lockout_seconds = 900
 # Optional: only enable behind a trusted reverse proxy that sanitizes this header.
 trust_x_forwarded_for = false
 # Optional: session cookie hardening controls.
-session_cookie_secure = true
 session_cookie_httponly = true
 session_cookie_samesite = Lax

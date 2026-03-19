@@ -33,6 +33,7 @@ Then edit `.env` and set:
 - `HASHCRUSH_SECRET_KEY`
 - `HASHCRUSH_DATA_ENCRYPTION_KEY`
 - `HASHCRUSH_INITIAL_ADMIN_PASSWORD`
+- optional: `HASHCRUSH_HTTPS_PORT` to publish HTTPS on a different host port
 - optional: `HASHCRUSH_HASHCAT_VERSION` to override the bundled worker Hashcat version
 
 Safe ways to generate secret keys:
@@ -54,7 +55,7 @@ docker compose up -d --build
 Watch startup:
 
 ```bash
-docker compose logs -f bootstrap web worker
+docker compose logs -f bootstrap web worker nginx
 ```
 
 #### 4) Verify the GPU worker
@@ -80,19 +81,31 @@ Open the app - by default it should be reachable under this URL:
 
 
 ```text
-http://127.0.0.1:8080
+https://127.0.0.1:8443
 ```
+
+That `8443` value comes from `HASHCRUSH_HTTPS_PORT` in `.env`.
+
+The Compose bootstrap step generates a self-signed TLS certificate automatically
+if one is not already present in the shared SSL volume. Your browser will likely
+show a certificate warning unless you replace it with your own certificate.
 
 The Compose stack starts:
 - PostgreSQL
 - a one-shot bootstrap container that applies schema/data upgrades and seeds the initial admin/settings/default tasks
-- a Gunicorn web UI container
+- a Gunicorn web UI container that is internal-only
+- an `nginx` reverse proxy that is the only public entrypoint
 - a worker container
 
 Important notes:
 - `docker compose down` stops the stack and keeps the data volumes
 - `docker compose down -v` wipes the database and uploaded asset volumes
-- the stack serves plain HTTP on port `8080` by default
+- the app is only exposed over HTTPS in the default Compose topology
+- the internal `web` container is not published directly to the host
+
+To replace the generated self-signed cert with your own certificate, mount or
+copy your `cert.pem` and `key.pem` into `/etc/hashcrush/ssl/` for both the
+`bootstrap` and `nginx` services via a Compose override.
 
 ## Future Upgrades and Migrations
 
@@ -127,7 +140,7 @@ Docker Compose is the recommended deployment path. If you do not want to use Doc
 - `/tmp/hashcrush-runtime/...`
 
 Host requirements:
-1. Python 3.10+
+1. Python 3.11+
 2. PostgreSQL running locally
 3. Administrative privileges for local PostgreSQL bootstrap
 4. Hashcat configured with drivers required by your hardware
@@ -233,9 +246,9 @@ Production deploy checklist:
 5. Run `python3 ./hashcrush.py upgrade --dry-run`.
 6. Run `python3 ./hashcrush.py upgrade`.
 7. Restart the app.
-8. Run the external smoke suite:
-   - `export HASHCRUSH_E2E_MODE=external`
-   - `./tests/test-all.sh`
+8. Run the Docker-native external smoke suite with a fresh test project:
+   - `COMPOSE_PROJECT_NAME=hashcrush-test-$(date +%s) \`
+   - `docker compose --profile test up --build --abort-on-container-exit --exit-code-from test-external test-external`
 
 ## Account and Password Management
 - Admins can reset a password of any user.
@@ -245,18 +258,8 @@ Production deploy checklist:
 
 ## Testing
 
-Install test dependencies and Playwright browser:
-```bash
-python3 -m pip install -r requirements.txt -r requirements-test.txt
-python3 -m playwright install chromium
-```
+Preferred Docker-native test entrypoints:
 
-Supported test entrypoint:
-```bash
-./tests/test-all.sh
-```
-
-Docker-native test entrypoints:
 ```bash
 COMPOSE_PROJECT_NAME=hashcrush-test-$(date +%s) \
 docker compose --profile test up --build --abort-on-container-exit --exit-code-from test test
@@ -265,15 +268,23 @@ COMPOSE_PROJECT_NAME=hashcrush-test-$(date +%s) \
 docker compose --profile test up --build --abort-on-container-exit --exit-code-from test-external test-external
 ```
 
-The Docker-native test flow should use a fresh Compose project name per run so it
-gets a fresh PostgreSQL volume and does not inherit queued smoke jobs from an
-earlier attempt.
+These commands keep the test runner and the app-under-test in Docker. The
+`test` service runs the non-E2E suite plus local browser tests, while
+`test-external` runs the non-E2E suite and then an HTTPS smoke test through
+`nginx-test`, `web-test`, and the real worker container.
 
 If you intentionally reuse a fixed project name, clean it first:
 
 ```bash
 COMPOSE_PROJECT_NAME=hashcrush-test \
 docker compose --profile test down -v --remove-orphans
+```
+
+Optional host-side direct pytest setup:
+
+```bash
+python3 -m pip install -r requirements.txt -r requirements-test.txt
+python3 -m playwright install chromium
 ```
 
 Automated tests are PostgreSQL-backed. By default the suite reuses the configured
@@ -283,17 +294,5 @@ If you want to point tests at a different PostgreSQL database, set
 only a fallback for environments where schema creation is not available but temporary
 database creation is.
 
-Local automated browser tests are the default.
-Optional live-instance smoke:
-```bash
-python3 ./hashcrush.py setup --test
-python3 ./hashcrush.py serve
-export HASHCRUSH_E2E_MODE=external
-./tests/test-all.sh
-```
-
-For the Docker/GPU deployment path, run external smoke against the live stack with
-an admin-capable test account so the suite can create and execute a small worker job.
-The Docker-native equivalent is the `test-external` Compose profile command above.
-
-Detailed testing documentation, direct pytest commands, and the post-deploy live smoke checklist are in [tests/README.md](/home/bajok/hashcrush/tests/README.md).
+Detailed testing documentation, direct pytest commands, and the smoke-test
+workflow are in [tests/README.md](/home/bajok/hashcrush/tests/README.md).

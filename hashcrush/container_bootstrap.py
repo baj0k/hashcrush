@@ -4,8 +4,14 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import UTC, datetime, timedelta
+from ipaddress import ip_address
 from pathlib import Path
 
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 from sqlalchemy import select, text
 from sqlalchemy import create_engine
 
@@ -18,10 +24,19 @@ from hashcrush.utils.utils import migrate_sensitive_storage_rows
 
 DEFAULT_DB_WAIT_SECONDS = 60.0
 DEFAULT_DB_POLL_SECONDS = 1.0
+DEFAULT_TLS_CERT_DAYS = 825
+DEFAULT_TLS_DNS_NAMES = ("localhost", "nginx", "nginx-test")
+DEFAULT_TLS_IPS = ("127.0.0.1", "::1")
 
 
-def ensure_runtime_and_storage_dirs(runtime_path: str, storage_path: str) -> None:
-    """Create the runtime and persistent storage tree expected by the app."""
+def ensure_runtime_and_storage_dirs(
+    runtime_path: str,
+    storage_path: str,
+    *,
+    ssl_cert_path: str | None = None,
+    ssl_key_path: str | None = None,
+) -> None:
+    """Create the runtime, storage, and optional TLS tree expected by the app."""
     runtime_root = Path(runtime_path).expanduser().resolve()
     storage_root = Path(storage_path).expanduser().resolve()
 
@@ -37,6 +52,59 @@ def ensure_runtime_and_storage_dirs(runtime_path: str, storage_path: str) -> Non
         ("rules",),
     ):
         (storage_root.joinpath(*relative_path)).mkdir(parents=True, exist_ok=True)
+
+    if ssl_cert_path:
+        ssl_root = Path(ssl_cert_path).expanduser().resolve().parent
+        ssl_root.mkdir(parents=True, exist_ok=True)
+    if ssl_key_path:
+        key_root = Path(ssl_key_path).expanduser().resolve().parent
+        key_root.mkdir(parents=True, exist_ok=True)
+
+
+def ensure_tls_certificate(cert_path: str, key_path: str) -> None:
+    """Create a self-signed TLS certificate if one is not already present."""
+    cert_file = Path(cert_path).expanduser().resolve()
+    key_file = Path(key_path).expanduser().resolve()
+    if cert_file.is_file() and key_file.is_file():
+        return
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = issuer = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "HashCrush Local"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "localhost"),
+        ]
+    )
+
+    san_entries = [x509.DNSName(name) for name in DEFAULT_TLS_DNS_NAMES]
+    san_entries.extend(x509.IPAddress(ip_address(value)) for value in DEFAULT_TLS_IPS)
+
+    now = datetime.now(UTC)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))
+        .not_valid_after(now + timedelta(days=DEFAULT_TLS_CERT_DAYS))
+        .add_extension(x509.SubjectAlternativeName(san_entries), critical=False)
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .sign(private_key, hashes.SHA256())
+    )
+
+    cert_file.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+    key_file.write_bytes(
+        private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+    os.chmod(cert_file, 0o644)
+    os.chmod(key_file, 0o600)
+    print(f"Generated self-signed TLS certificate at {cert_file}.")
 
 
 def wait_for_database(
@@ -125,6 +193,12 @@ def main() -> int:
     storage_path = str(
         os.getenv("HASHCRUSH_STORAGE_PATH") or "/var/lib/hashcrush"
     ).strip()
+    ssl_cert_path = str(
+        os.getenv("HASHCRUSH_SSL_CERT_PATH") or "/etc/hashcrush/ssl/cert.pem"
+    ).strip()
+    ssl_key_path = str(
+        os.getenv("HASHCRUSH_SSL_KEY_PATH") or "/etc/hashcrush/ssl/key.pem"
+    ).strip()
     admin_username = (
         str(os.getenv("HASHCRUSH_INITIAL_ADMIN_USERNAME") or "admin").strip() or "admin"
     )
@@ -137,7 +211,13 @@ def main() -> int:
     )
 
     print("Ensuring runtime and storage directories exist.")
-    ensure_runtime_and_storage_dirs(runtime_path, storage_path)
+    ensure_runtime_and_storage_dirs(
+        runtime_path,
+        storage_path,
+        ssl_cert_path=ssl_cert_path,
+        ssl_key_path=ssl_key_path,
+    )
+    ensure_tls_certificate(ssl_cert_path, ssl_key_path)
 
     print("Waiting for PostgreSQL to accept connections.")
     wait_for_database(database_uri, timeout_seconds=timeout_seconds)

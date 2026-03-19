@@ -22,7 +22,6 @@ def _build_sqlite_bootstrap_app(tmp_path: Path):
             "SKIP_RUNTIME_BOOTSTRAP": True,
             "RUNTIME_PATH": str(runtime_path),
             "STORAGE_PATH": str(storage_path),
-            "SESSION_COOKIE_SECURE": False,
         },
     )
 

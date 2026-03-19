@@ -6,9 +6,20 @@ import tempfile
 from logging.config import dictConfig as loggingDictConfig
 
 from flask import Flask
+from flask.testing import FlaskClient
 from flask_wtf.csrf import CSRFProtect, generate_csrf
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 __version__ = "2.0"
+
+
+class _HttpsFlaskClient(FlaskClient):
+    """Default test client to HTTPS so secure cookies behave like production."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.environ_base.setdefault("wsgi.url_scheme", "https")
+        self.environ_base.setdefault("HTTP_HOST", "localhost")
 
 
 class _SuppressWerkzeugTlsDisconnects(logging.Filter):
@@ -223,24 +234,25 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     if config_overrides:
         app.config.update(config_overrides)
 
-    # Secure cookies by default in non-debug deployments.
-    if app.config.get("SESSION_COOKIE_SECURE") is None:
-        app.config["SESSION_COOKIE_SECURE"] = (not app.config.get("TESTING")) and (
-            not app.debug
-        )
+    # The application is expected to run over HTTPS only.
+    app.config["SESSION_COOKIE_SECURE"] = True
     app.config["SESSION_COOKIE_HTTPONLY"] = bool(
         app.config.get("SESSION_COOKIE_HTTPONLY", True)
     )
     if app.config.get("SESSION_COOKIE_SAMESITE") not in {"Lax", "Strict", "None"}:
         app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-    if (
-        (not app.config.get("TESTING"))
-        and (not app.debug)
-        and (not app.config.get("SESSION_COOKIE_SECURE"))
-    ):
-        app.logger.warning(
-            "SECURITY WARNING: SESSION_COOKIE_SECURE is disabled outside testing/debug."
+
+    if app.config.get("TRUST_X_FORWARDED_FOR"):
+        app.wsgi_app = ProxyFix(
+            app.wsgi_app,
+            x_for=1,
+            x_proto=1,
+            x_host=1,
+            x_port=1,
         )
+        app.config.setdefault("PREFERRED_URL_SCHEME", "https")
+    if app.config.get("TESTING"):
+        app.test_client_class = _HttpsFlaskClient
 
     _warn_insecure_configuration(app)
 

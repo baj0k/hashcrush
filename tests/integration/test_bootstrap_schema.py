@@ -1427,7 +1427,6 @@ def test_production_session_cookie_defaults_are_hardened():
             "SQLALCHEMY_TRACK_MODIFICATIONS": False,
             "ENABLE_LOCAL_EXECUTOR": False,
             "SKIP_RUNTIME_BOOTSTRAP": True,
-            "SESSION_COOKIE_SECURE": None,
         },
     )
 
