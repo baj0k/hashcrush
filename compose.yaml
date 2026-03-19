@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:16
+    image: postgres:${HASHCRUSH_POSTGRES_MAJOR:-16}
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-hashcrush}
@@ -49,8 +49,47 @@ services:
         condition: service_completed_successfully
     environment: *hashcrush-env
     command: ["gunicorn", "--bind", "0.0.0.0:8000", "wsgi:app"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/login', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     ports:
       - "${HASHCRUSH_WEB_PORT:-8080}:8000"
+    volumes:
+      - hashcrush-storage:/var/lib/hashcrush
+      - hashcrush-runtime:/tmp/hashcrush-runtime
+
+  web-test:
+    build:
+      context: .
+    profiles: ["test"]
+    init: true
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
+    environment: *hashcrush-env
+    command: ["gunicorn", "--bind", "0.0.0.0:8000", "wsgi:app"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/login', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     volumes:
       - hashcrush-storage:/var/lib/hashcrush
       - hashcrush-runtime:/tmp/hashcrush-runtime
@@ -83,6 +122,55 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+      args:
+        HASHCRUSH_POSTGRES_MAJOR: ${HASHCRUSH_POSTGRES_MAJOR:-16}
+    profiles: ["test"]
+    init: true
+    restart: "no"
+    shm_size: 1gb
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *hashcrush-env
+      HASHCRUSH_TEST_POSTGRES_URI: "postgresql+psycopg://${POSTGRES_USER:-hashcrush}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-hashcrush}"
+      HASHCRUSH_E2E_MODE: local
+      PYTHONPATH: /app
+    command: ["bash", "./tests/test-all.sh"]
+
+  test-external:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+      args:
+        HASHCRUSH_POSTGRES_MAJOR: ${HASHCRUSH_POSTGRES_MAJOR:-16}
+    profiles: ["test"]
+    init: true
+    restart: "no"
+    shm_size: 1gb
+    depends_on:
+      db:
+        condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
+      web-test:
+        condition: service_healthy
+      worker:
+        condition: service_started
+    environment:
+      <<: *hashcrush-env
+      HASHCRUSH_TEST_POSTGRES_URI: "postgresql+psycopg://${POSTGRES_USER:-hashcrush}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-hashcrush}"
+      HASHCRUSH_E2E_MODE: external
+      HASHCRUSH_E2E_BASE_URL: http://web-test:8000
+      HASHCRUSH_E2E_USERNAME: ${HASHCRUSH_INITIAL_ADMIN_USERNAME:-admin}
+      HASHCRUSH_E2E_PASSWORD: ${HASHCRUSH_INITIAL_ADMIN_PASSWORD:?Set HASHCRUSH_INITIAL_ADMIN_PASSWORD in .env}
+      PYTHONPATH: /app
+    command: ["bash", "./tests/test-all.sh"]
 
 volumes:
   hashcrush-postgres:

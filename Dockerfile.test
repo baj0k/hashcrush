@@ -1,0 +1,33 @@
+FROM python:3.12-bookworm
+
+ARG HASHCRUSH_POSTGRES_MAJOR=16
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        gnupg \
+    && install -d /etc/apt/keyrings \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+        | gpg --dearmor -o /etc/apt/keyrings/postgresql.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+        > /etc/apt/sources.list.d/postgresql.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        postgresql-client-${HASHCRUSH_POSTGRES_MAJOR} \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /app/requirements.txt
+COPY requirements-test.txt /app/requirements-test.txt
+
+RUN python3 -m pip install --no-cache-dir -r /app/requirements.txt -r /app/requirements-test.txt
+RUN python3 -m playwright install --with-deps chromium
+
+COPY . /app

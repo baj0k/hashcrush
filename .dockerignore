@@ -23,6 +23,3 @@ LICENSE
 README.md
 TODO.md
 pyproject.toml
-pytest.ini
-requirements-test.txt
-tests

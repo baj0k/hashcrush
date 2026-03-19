@@ -14,10 +14,31 @@ HashCrush has two browser-testing modes:
 
 ## Supported Entry Point
 
-Use the wrapper:
+Use the host runner wrapper:
 
 ```bash
 ./tests/test-all.sh
+```
+
+Docker-native Compose entrypoints:
+
+```bash
+COMPOSE_PROJECT_NAME=hashcrush-test-$(date +%s) \
+docker compose --profile test up --build --abort-on-container-exit --exit-code-from test test
+
+COMPOSE_PROJECT_NAME=hashcrush-test-$(date +%s) \
+docker compose --profile test up --build --abort-on-container-exit --exit-code-from test-external test-external
+```
+
+Both Docker-native paths should use a fresh Compose project name per run so the
+test stack gets a fresh PostgreSQL volume and does not inherit queued smoke jobs
+or other state from earlier attempts.
+
+If you intentionally reuse a fixed Compose project name, clean it first:
+
+```bash
+COMPOSE_PROJECT_NAME=hashcrush-test \
+docker compose --profile test down -v --remove-orphans
 ```
 
 The automated harness injects its own `HASHCRUSH_DATA_ENCRYPTION_KEY`. For manual smoke runs against a real instance, make sure the target app has its production encryption key configured before running the external suite.
@@ -62,6 +83,13 @@ Default mode:
 ./tests/test-all.sh
 ```
 
+Docker-native equivalent:
+
+```bash
+COMPOSE_PROJECT_NAME=hashcrush-test-$(date +%s) \
+docker compose --profile test up --build --abort-on-container-exit --exit-code-from test test
+```
+
 Equivalent direct command:
 
 ```bash
@@ -83,6 +111,10 @@ What local mode does automatically:
 
 Local mode is the authoritative automated path and should stay green in CI.
 
+In the Docker-native path, the test runner itself also stays in Docker. That flow
+uses the `db` service from `compose.yaml` and runs the Python/Playwright harness
+from the dedicated `test` container.
+
 The local automated path creates a temporary schema in the configured PostgreSQL
 database for each test app instance and drops those schemas at process exit. If that
 is not possible and `HASHCRUSH_TEST_POSTGRES_ADMIN_URI` is set, it falls back to
@@ -101,6 +133,13 @@ export HASHCRUSH_E2E_MODE=external
 ./tests/test-all.sh
 ```
 
+Docker-native full-stack flow:
+
+```bash
+COMPOSE_PROJECT_NAME=hashcrush-test-$(date +%s) \
+docker compose --profile test up --build --abort-on-container-exit --exit-code-from test-external test-external
+```
+
 Equivalent direct command:
 
 ```bash
@@ -112,12 +151,19 @@ In external mode:
 - `hashcrush.py setup --test` writes a ready-to-use `tests/.env.test`
 - the suite targets `HASHCRUSH_E2E_BASE_URL`
 - the suite does not bootstrap its own server or database
+- the configured external test account should be an admin account, because the smoke
+  flow creates a shared wordlist, a shared task, and a new domain/job
+
+In the Docker-native full-stack flow, Compose starts the full app stack (`db`,
+`bootstrap`, `web`, and `worker`) and then executes the smoke suite from the
+dedicated `test-external` container.
 
 External mode validates:
 - real PostgreSQL connectivity
 - real TLS/certificate handling
 - real config/runtime paths
 - real deployment packaging
+- real worker pickup and result import for a small dictionary crack job
 
 Recommended post-deploy smoke sequence:
 
@@ -138,7 +184,8 @@ export HASHCRUSH_E2E_MODE=external
 Expected result:
 - the external smoke suite completes with no skips
 - login works
-- the Jobs page is reachable after login
+- a tiny dictionary cracking job is created and completed by the live worker
+- the smoke job reaches `Completed` with `3/3` recovered
 - logout redirects back to login
 
 ## E2E Skip Policy

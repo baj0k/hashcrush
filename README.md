@@ -256,6 +256,26 @@ Supported test entrypoint:
 ./tests/test-all.sh
 ```
 
+Docker-native test entrypoints:
+```bash
+COMPOSE_PROJECT_NAME=hashcrush-test-$(date +%s) \
+docker compose --profile test up --build --abort-on-container-exit --exit-code-from test test
+
+COMPOSE_PROJECT_NAME=hashcrush-test-$(date +%s) \
+docker compose --profile test up --build --abort-on-container-exit --exit-code-from test-external test-external
+```
+
+The Docker-native test flow should use a fresh Compose project name per run so it
+gets a fresh PostgreSQL volume and does not inherit queued smoke jobs from an
+earlier attempt.
+
+If you intentionally reuse a fixed project name, clean it first:
+
+```bash
+COMPOSE_PROJECT_NAME=hashcrush-test \
+docker compose --profile test down -v --remove-orphans
+```
+
 Automated tests are PostgreSQL-backed. By default the suite reuses the configured
 HashCrush PostgreSQL database and isolates each test app in its own temporary schema.
 If you want to point tests at a different PostgreSQL database, set
@@ -271,5 +291,9 @@ python3 ./hashcrush.py serve
 export HASHCRUSH_E2E_MODE=external
 ./tests/test-all.sh
 ```
+
+For the Docker/GPU deployment path, run external smoke against the live stack with
+an admin-capable test account so the suite can create and execute a small worker job.
+The Docker-native equivalent is the `test-external` Compose profile command above.
 
 Detailed testing documentation, direct pytest commands, and the post-deploy live smoke checklist are in [tests/README.md](/home/bajok/hashcrush/tests/README.md).

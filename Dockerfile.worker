@@ -1,6 +1,7 @@
 FROM nvidia/cuda:12.9.0-devel-ubuntu22.04
 
 ARG HASHCRUSH_HASHCAT_VERSION=7.1.2
+ARG HASHCRUSH_PYTHON_VERSION=3.12.0
 
 ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all \
@@ -12,17 +13,39 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        build-essential \
         ca-certificates \
         curl \
+        libbz2-dev \
+        libffi-dev \
         libgcc-s1 \
+        libgdbm-dev \
         libminizip1 \
+        liblzma-dev \
+        libncursesw5-dev \
+        libreadline-dev \
+        libsqlite3-dev \
+        libssl-dev \
         libstdc++6 \
         libxxhash0 \
         p7zip-full \
-        python3 \
-        python3-pip \
+        tk-dev \
+        uuid-dev \
+        xz-utils \
         zlib1g \
+        zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL -o /tmp/Python.tgz "https://www.python.org/ftp/python/${HASHCRUSH_PYTHON_VERSION}/Python-${HASHCRUSH_PYTHON_VERSION}.tgz" \
+    && tar -xzf /tmp/Python.tgz -C /tmp \
+    && cd "/tmp/Python-${HASHCRUSH_PYTHON_VERSION}" \
+    && ./configure --enable-shared --with-ensurepip=install \
+    && make -j"$(nproc)" \
+    && make install \
+    && ldconfig \
+    && python3 --version \
+    && python3 -m pip --version \
+    && rm -rf "/tmp/Python-${HASHCRUSH_PYTHON_VERSION}" /tmp/Python.tgz
 
 COPY requirements.txt /app/requirements.txt
 
