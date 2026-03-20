@@ -199,7 +199,7 @@
                                     <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{job.id}}" title="Info" aria-label="View job details for {{ job.name }}"></button>
                                 {% endif %}
                                 {% if can_manage_job and job.status != 'Running' and job.status != 'Queued' and job.status != 'Paused' %}
-                                    <a class="fa fa-edit btn btn-warning" href="{{ url_for('jobs.jobs_assigned_hashfile', job_id=job.id) }}" role="button" title="Edit" aria-label="Edit job {{ job.name }}"></a>
+                                    <a class="fa fa-edit btn btn-warning" href="{{ url_for('jobs.jobs_builder', job_id=job.id, tab='basics') }}" role="button" title="Edit" aria-label="Edit job {{ job.name }}"></a>
                                 {% endif %}
                                 {% if can_manage_job %}
                                     <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{job.id}}" title="Delete" aria-label="Delete job {{ job.name }}"></button>

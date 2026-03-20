@@ -1,7 +1,7 @@
 """Flask routes to handle Tasks"""
 import json
 
-from flask import Blueprint, flash, redirect, render_template, url_for
+from flask import Blueprint, flash, redirect, render_template, request, url_for
 from flask_login import login_required
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -10,6 +10,7 @@ from hashcrush.audit import record_audit_event
 from hashcrush.authz import admin_required_redirect, visible_jobs_query
 from hashcrush.models import JobTasks, Rules, TaskGroups, Tasks, Wordlists, db
 from hashcrush.tasks.forms import TasksForm
+from hashcrush.view_utils import append_query_params, safe_relative_url
 
 tasks = Blueprint('tasks', __name__)
 
@@ -39,6 +40,19 @@ def _parse_task_group_task_ids(payload: str | None) -> set[int]:
 
 
 def _render_task_form(template_name, title, tasks_form, task=None, wordlists=None, rules=None):
+    next_url = safe_relative_url(
+        (request.form.get('next') or request.args.get('next'))
+        if request.method == 'POST'
+        else request.args.get('next')
+    )
+    selected_wordlist_id = _parse_positive_int(tasks_form.wl_id.data)
+    selected_rule_id = _parse_positive_int(tasks_form.rule_id.data)
+    add_resource_return_url = append_query_params(
+        url_for('tasks.tasks_add'),
+        next=next_url or url_for('tasks.tasks_list'),
+        selected_wordlist_id=selected_wordlist_id,
+        selected_rule_id=selected_rule_id,
+    )
     return render_template(
         template_name,
         title=title,
@@ -46,6 +60,9 @@ def _render_task_form(template_name, title, tasks_form, task=None, wordlists=Non
         task=task,
         wordlists=wordlists,
         rules=rules,
+        next_url=next_url or url_for('tasks.tasks_list'),
+        add_wordlist_url=url_for('wordlists.wordlists_add', next=add_resource_return_url),
+        add_rule_url=url_for('rules.rules_add', next=add_resource_return_url),
     )
 
 
@@ -56,7 +73,6 @@ def _task_save_conflict_response(template_name, title, tasks_form, task=None, wo
         'danger',
     )
     return _render_task_form(template_name, title, tasks_form, task=task, wordlists=wordlists, rules=rules)
-
 
 @tasks.route("/tasks", methods=['GET', 'POST'])
 @login_required
@@ -111,6 +127,24 @@ def tasks_add():
     tasksForm.rule_id.choices = [('None', 'None')]
     for rule in rules:
         tasksForm.rule_id.choices += [(rule.id, rule.name)]
+
+    next_url = safe_relative_url(
+        (request.form.get('next') or request.args.get('next'))
+        if request.method == 'POST'
+        else request.args.get('next')
+    )
+    available_wordlist_ids = {wordlist.id for wordlist in wordlists}
+    available_rule_ids = {rule.id for rule in rules}
+
+    if request.method == 'GET':
+        selected_wordlist_id = _parse_positive_int(request.args.get('selected_wordlist_id'))
+        selected_rule_id = _parse_positive_int(request.args.get('selected_rule_id'))
+        if selected_wordlist_id in available_wordlist_ids:
+            tasksForm.wl_id.data = str(selected_wordlist_id)
+            tasksForm.hc_attackmode.data = 'dictionary'
+        if selected_rule_id in available_rule_ids:
+            tasksForm.rule_id.data = str(selected_rule_id)
+            tasksForm.hc_attackmode.data = 'dictionary'
 
     if tasksForm.validate_on_submit():
         if tasksForm.hc_attackmode.data == 'dictionary':
@@ -190,8 +224,14 @@ def tasks_add():
             flash(f'Task {tasksForm.name.data} created!', 'success')
         else:
             flash('Invalid attack mode selection.', 'danger')
-        return redirect(url_for('tasks.tasks_list'))
-    return render_template('tasks_add.html', title='Tasks Add', tasksForm=tasksForm)
+        return redirect(next_url or url_for('tasks.tasks_list'))
+    return _render_task_form(
+        'tasks_add.html',
+        'Tasks Add',
+        tasksForm,
+        wordlists=wordlists,
+        rules=rules,
+    )
 
 @tasks.route("/tasks/edit/<int:task_id>", methods=['GET', 'POST'])
 @login_required

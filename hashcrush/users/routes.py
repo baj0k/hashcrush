@@ -2,7 +2,6 @@
 import ipaddress
 import time
 from datetime import UTC, datetime
-from urllib.parse import urlparse
 
 from flask import (
     Blueprint,
@@ -28,6 +27,7 @@ from sqlalchemy.exc import IntegrityError
 from hashcrush.audit import record_audit_event
 from hashcrush.models import AuthThrottle, Jobs, Users, db
 from hashcrush.users.forms import LoginForm, ProfileForm, UsersForm
+from hashcrush.view_utils import safe_relative_url
 
 bcrypt = Bcrypt()
 
@@ -233,12 +233,7 @@ def login_post():
     user.last_login_utc = _utc_now_naive()
     db.session.commit()
     current_app.logger.info('Login succeeded: user=%s.', user.username)
-    next_url = request.args.get("next")
-    if next_url:
-        parsed = urlparse(next_url)
-        # Only allow relative redirects to prevent open-redirect attacks.
-        if parsed.scheme or parsed.netloc:
-            next_url = None
+    next_url = safe_relative_url(request.args.get("next"))
     return redirect(next_url or url_for('main.home'))
 
 @users.route("/logout", methods=['POST'])

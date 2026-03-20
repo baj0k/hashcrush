@@ -1,5 +1,7 @@
 """Integration tests for authentication, authorization, and user management."""
 # ruff: noqa: F403,F405
+import re
+
 from tests.integration.support import *
 
 
@@ -145,6 +147,74 @@ def test_login_throttle_can_trust_x_forwarded_for_when_enabled():
             headers={"X-Forwarded-For": "2.2.2.2"},
         )
         assert blocked.status_code == 429
+
+@pytest.mark.security
+def test_login_csrf_allows_non_default_https_port_behind_proxy():
+    app = _build_app(
+        {
+            "WTF_CSRF_ENABLED": True,
+            "AUTH_THROTTLE_ENABLED": False,
+            "TRUST_X_FORWARDED_FOR": True,
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        forwarded_headers = {
+            "X-Forwarded-For": "1.1.1.1",
+            "X-Forwarded-Proto": "https",
+        }
+
+        response = client.get(
+            "/login",
+            base_url="http://example.test:8443",
+            headers=forwarded_headers,
+        )
+        assert response.status_code == 200
+
+        csrf_match = re.search(
+            r'<input[^>]+name="csrf_token"[^>]+value="([^"]+)"|'
+            r'<input[^>]+value="([^"]+)"[^>]+name="csrf_token"',
+            response.get_data(as_text=True),
+        )
+        assert csrf_match is not None
+
+        login_response = client.post(
+            "/login",
+            base_url="http://example.test:8443",
+            headers={
+                **forwarded_headers,
+                "Referer": "https://example.test:8443/login",
+            },
+            data={
+                "username": "admin",
+                "password": "wrong-password",
+                "csrf_token": csrf_match.group(1) or csrf_match.group(2),
+            },
+        )
+        assert login_response.status_code == 200
+        assert b"The referrer does not match the host." not in login_response.data
+
+@pytest.mark.security
+def test_login_ignores_non_root_relative_next_target():
+    app = _build_app({"AUTH_THROTTLE_ENABLED": False})
+    with app.app_context():
+        db.create_all()
+        _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        response = client.post(
+            "/login?next=jobs",
+            data={"username": "admin", "password": "test-admin-password"},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 302
+        assert response.headers["Location"] == "/"
 
 @pytest.mark.security
 def test_users_add_handles_integrity_error_cleanly(monkeypatch):

@@ -43,13 +43,14 @@ def test_record_audit_event_flushes_after_commit():
     app = _build_app()
     with app.app_context():
         db.create_all()
+        _seed_admin_user()
+        db.session.add(Domains(name="audit-seed-domain"))
 
-        db.session.add(Settings())
         record_audit_event(
-            "settings.create",
-            "settings",
-            target_id="1",
-            summary="Created settings row.",
+            "runtime.seed",
+            "bootstrap",
+            target_id="seed-1",
+            summary="Seeded runtime state.",
             details={"source": "test"},
         )
         assert _count_rows(AuditLog) == 0
@@ -58,7 +59,7 @@ def test_record_audit_event_flushes_after_commit():
 
         entry = _latest_audit_entry()
         assert entry is not None
-        assert entry.event_type == "settings.create"
+        assert entry.event_type == "runtime.seed"
         assert '"source": "test"' in entry.details_json
 
 
@@ -69,13 +70,14 @@ def test_record_audit_event_is_cleared_on_rollback():
     app = _build_app()
     with app.app_context():
         db.create_all()
+        _seed_admin_user()
+        db.session.add(Domains(name="rollback-seed-domain"))
 
-        db.session.add(Settings())
         record_audit_event(
-            "settings.create",
-            "settings",
-            target_id="1",
-            summary="Created settings row.",
+            "runtime.seed",
+            "bootstrap",
+            target_id="seed-1",
+            summary="Seeded runtime state.",
             details={"source": "test"},
         )
         db.session.rollback()

@@ -1,5 +1,8 @@
 """Integration tests for shared tasks, task groups, rules, and wordlists."""
 # ruff: noqa: F403,F405
+import re
+from urllib.parse import parse_qs, urlsplit
+
 from tests.integration.support import *
 
 
@@ -159,10 +162,20 @@ def test_wordlists_add_supports_async_processing_progress(tmp_path):
         assert isinstance(start_payload, dict)
         assert start_payload["state"] in {"queued", "running"}
         assert start_payload["status_url"].startswith("/uploads/operations/")
+        operation_id = start_payload["operation_id"]
+
+        persisted_operation = db.session.get(UploadOperations, operation_id)
+        assert persisted_operation is not None
+        assert persisted_operation.owner_user_id == admin.id
 
         final_payload = _wait_for_upload_operation(client, start_payload["status_url"])
         assert final_payload["success"] is True
         assert final_payload["redirect_url"] == "/wordlists"
+
+        db.session.expire_all()
+        persisted_operation = db.session.get(UploadOperations, operation_id)
+        assert persisted_operation is not None
+        assert persisted_operation.state == "succeeded"
 
         wordlist = _first_row(Wordlists, name="async-wordlist")
         assert wordlist is not None
@@ -627,6 +640,148 @@ def test_tasks_add_allows_admin_to_use_shared_wordlists_and_rules():
         assert entry is not None
         assert entry.event_type == "task.create"
         assert entry.target_id == str(task.id)
+
+
+@pytest.mark.security
+def test_tasks_add_prefills_selected_wordlist_and_rule_from_query_params():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        wordlist = Wordlists(
+            name="prefill-wordlist",
+            type="static",
+            path="/tmp/prefill-wordlist.txt",
+            size=1,
+            checksum="4" * 64,
+        )
+        rule = Rules(
+            name="prefill-rule",
+            path="/tmp/prefill.rule",
+            size=1,
+            checksum="5" * 64,
+        )
+        db.session.add_all([wordlist, rule])
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get(
+            f"/tasks/add?next=/tasks&selected_wordlist_id={wordlist.id}&selected_rule_id={rule.id}"
+        )
+
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert re.search(
+            r'<option(?=[^>]*value="dictionary")(?=[^>]*selected)[^>]*>dictionary</option>',
+            html,
+        )
+        assert re.search(
+            rf'<option(?=[^>]*value="{wordlist.id}")(?=[^>]*selected)[^>]*>{re.escape(wordlist.name)}</option>',
+            html,
+        )
+        assert re.search(
+            rf'<option(?=[^>]*value="{rule.id}")(?=[^>]*selected)[^>]*>{re.escape(rule.name)}</option>',
+            html,
+        )
+
+
+@pytest.mark.security
+def test_wordlists_add_redirects_back_to_tasks_add_with_selected_wordlist():
+    app = _build_app(
+        {
+            "RUNTIME_PATH": "/tmp/hashcrush-runtime-wordlist-return",
+            "STORAGE_PATH": "/tmp/hashcrush-storage-wordlist-return",
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        rule = Rules(
+            name="preserved-rule",
+            path="/tmp/preserved.rule",
+            size=1,
+            checksum="6" * 64,
+        )
+        db.session.add(rule)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/wordlists/add",
+            query_string={
+                "next": f"/tasks/add?next=/tasks&selected_rule_id={rule.id}",
+            },
+            data={
+                "name": "return-wordlist",
+                "upload": (io.BytesIO(b"password\n"), "return-wordlist.txt"),
+            },
+        )
+
+        assert response.status_code == 302
+        location = urlsplit(response.headers["Location"])
+        query = parse_qs(location.query)
+        wordlist = _first_row(Wordlists, name="return-wordlist")
+        assert wordlist is not None
+        assert location.path == "/tasks/add"
+        assert query["next"] == ["/tasks"]
+        assert query["selected_rule_id"] == [str(rule.id)]
+        assert query["selected_wordlist_id"] == [str(wordlist.id)]
+
+
+@pytest.mark.security
+def test_rules_add_redirects_back_to_tasks_add_with_selected_rule():
+    app = _build_app(
+        {
+            "RUNTIME_PATH": "/tmp/hashcrush-runtime-rule-return",
+            "STORAGE_PATH": "/tmp/hashcrush-storage-rule-return",
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        wordlist = Wordlists(
+            name="preserved-wordlist",
+            type="static",
+            path="/tmp/preserved-wordlist.txt",
+            size=1,
+            checksum="7" * 64,
+        )
+        db.session.add(wordlist)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/rules/add",
+            query_string={
+                "next": f"/tasks/add?next=/tasks&selected_wordlist_id={wordlist.id}",
+            },
+            data={
+                "name": "return-rule",
+                "upload": (io.BytesIO(b":\n"), "return.rule"),
+            },
+        )
+
+        assert response.status_code == 302
+        location = urlsplit(response.headers["Location"])
+        query = parse_qs(location.query)
+        rule = _first_row(Rules, name="return-rule")
+        assert rule is not None
+        assert location.path == "/tasks/add"
+        assert query["next"] == ["/tasks"]
+        assert query["selected_wordlist_id"] == [str(wordlist.id)]
+        assert query["selected_rule_id"] == [str(rule.id)]
 
 @pytest.mark.security
 def test_tasks_list_modal_does_not_match_task_group_membership_by_substring():

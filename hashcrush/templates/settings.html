@@ -7,76 +7,12 @@
 {% block content %}
     <nav>
         <div class="nav nav-tabs" id="nav-tab" role="tablist">
-            <a class="nav-link active" id="nav-hashcrush-tab" data-toggle="tab" href="#nav-hashcrush" role="tab" aria-controls="nav-hashcrush" aria-selected="true">HashCrush</a>
-            <a class="nav-link" id="nav-data-tab" data-toggle="tab" href="#nav-data" role="tab" aria-controls="nav-data" aria-selected="false">Data Management</a>
+            <a class="nav-link active" id="nav-data-tab" data-toggle="tab" href="#nav-data" role="tab" aria-controls="nav-data" aria-selected="true">Data Management</a>
             <a class="nav-link" id="nav-info-tab" data-toggle="tab" href="#nav-info" role="tab" aria-controls="nav-info" aria-selected="false">Information</a>
         </div>
     </nav>
     <div class="tab-content" id="nav-tabContent">
-        <div class="tab-pane fade show active" id="nav-hashcrush" role="tabpanel" aria-labelledby="nav-hashcrush-tab">
-            <div class="content-section hc-tab-panel">
-                <p class="text-muted">
-                    Edit <code>config.conf</code> values here. Leave a field empty to unset it and use the default shown.
-                    Environment variables still take precedence over file values.
-                </p>
-                <p class="text-muted">
-                    Config file path: <code>{{ config_path }}</code>
-                    {% if not config_file_exists %}
-                        (file does not exist yet; it will be created when you save)
-                    {% endif %}
-                </p>
-                <p class="text-muted">
-                    Database values can be supplied via <code>HASHCRUSH_DATABASE_URI</code> or
-                    the discrete PostgreSQL fields <code>HASHCRUSH_DB_HOST</code>/<code>HASHCRUSH_DB_PORT</code>/<code>HASHCRUSH_DB_NAME</code>/<code>HASHCRUSH_DB_USERNAME</code>/<code>HASHCRUSH_DB_PASSWORD</code>.
-                </p>
-                <form action="{{ url_for('settings.update_hashcrush_config') }}" method="POST">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <div class="table-responsive">
-                        <table class="table table-sm table-striped">
-                            <thead>
-                                <tr>
-                                    <th scope="col">Setting</th>
-                                    <th scope="col">config.conf Value</th>
-                                    <th scope="col">Default When Empty</th>
-                                    <th scope="col">Environment Override</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for row in config_rows %}
-                                    <tr class="align-middle">
-                                        <td>
-                                            <div class="hc-line-list">
-                                                <code>{{ row.section }}.{{ row.key }}</code>
-                                                <small class="text-muted">{{ row.label }}</small>
-                                            </div>
-                                        </td>
-                                        <td>
-                                            <input
-                                                type="text"
-                                                class="form-control form-control-sm"
-                                                name="{{ row.form_name }}"
-                                                value="{{ row.value }}"
-                                                spellcheck="false"
-                                                autocomplete="off"
-                                            >
-                                        </td>
-                                        <td><code>{{ row.default_display }}</code></td>
-                                        <td>
-                                            <code>{{ row.env_name }}</code>
-                                            {% if row.env_active %}
-                                                <span class="badge badge-warning ml-1">active</span>
-                                            {% endif %}
-                                        </td>
-                                    </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                    <button type="submit" class="btn btn-primary">Save HashCrush Config</button>
-                </form>
-            </div>
-        </div>
-        <div class="tab-pane fade" id="nav-data" role="tabpanel" aria-labelledby="nav-data-tab">
+        <div class="tab-pane fade show active" id="nav-data" role="tabpanel" aria-labelledby="nav-data-tab">
             <div class="content-section hc-tab-panel">
                 <p class="text-muted mb-3">
                     Clearing temp data removes only generated files in <code>{{ temp_folder_path }}/</code>.
@@ -109,6 +45,9 @@
         </div>
         <div class="tab-pane fade" id="nav-info" role="tabpanel" aria-labelledby="nav-info-tab">
             <div class="content-section hc-tab-panel">
+                <p class="text-muted">
+                    Deployment configuration is managed through environment variables and config files at deploy time, not through this UI.
+                </p>
                 <dl>
                     <dt>Application Version (Code):</dt>
                     <dd>{{ application_version }}</dd>

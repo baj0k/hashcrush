@@ -89,7 +89,6 @@ def _seed_local_e2e_data(app, storage_path: Path) -> dict[str, str]:
         Hashes,
         HashfileHashes,
         Hashfiles,
-        Settings,
         Tasks,
         Users,
         Wordlists,
@@ -130,7 +129,7 @@ def _seed_local_e2e_data(app, storage_path: Path) -> dict[str, str]:
             checksum=_sha256_text(wordlist_path.read_text(encoding="utf-8")),
         )
 
-        db.session.add_all([Settings(), admin, operator, domain, wordlist])
+        db.session.add_all([admin, operator, domain, wordlist])
         db.session.commit()
 
         task = Tasks(

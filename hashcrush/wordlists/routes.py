@@ -15,6 +15,7 @@ from hashcrush.utils.utils import (
     get_storage_subdir,
     save_file,
 )
+from hashcrush.view_utils import append_query_params, safe_relative_url
 from hashcrush.wordlists.forms import WordlistsForm
 
 wordlists = Blueprint('wordlists', __name__)
@@ -57,12 +58,24 @@ def _make_stage_progress_callback(
     return callback
 
 
-def _render_wordlists_add_form(form):
+def _render_wordlists_add_form(form, next_url: str | None = None):
     return render_template(
         'wordlists_add.html',
         title='Wordlist Add',
         form=form,
+        next_url=next_url or url_for('wordlists.wordlists_list'),
     )
+
+
+def _wordlist_redirect_target(
+    next_url: str | None,
+    *,
+    fallback_url: str,
+    wordlist_id: int | None = None,
+) -> str:
+    if not next_url:
+        return fallback_url
+    return append_query_params(next_url, selected_wordlist_id=wordlist_id)
 
 
 def _managed_wordlists_dir() -> str:
@@ -102,6 +115,8 @@ def _process_wordlist_upload(
     wordlist_path: str,
     audit_actor: dict[str, object],
     reporter,
+    redirect_url: str | None,
+    fallback_url: str,
 ) -> None:
     try:
         reporter.update(
@@ -179,6 +194,11 @@ def _process_wordlist_upload(
     reporter.complete(
         title='Wordlist ready.',
         detail=f'Shared wordlist "{wordlist.name}" is available.',
+        redirect_url=_wordlist_redirect_target(
+            redirect_url,
+            fallback_url=fallback_url,
+            wordlist_id=wordlist.id,
+        ),
         completion_flashes=[('success', 'Wordlist uploaded!')],
     )
 
@@ -212,44 +232,71 @@ def wordlists_add():
     """Upload a new shared static wordlist."""
 
     form = WordlistsForm()
+    fallback_url = url_for('wordlists.wordlists_list')
+    next_url = safe_relative_url(
+        (request.form.get('next') or request.args.get('next'))
+        if request.method == 'POST'
+        else request.args.get('next')
+    )
 
     if form.validate_on_submit():
         uploaded_file = form.upload.data
         if not uploaded_file or not getattr(uploaded_file, 'filename', ''):
             flash('Select a wordlist file to upload.', 'danger')
-            return _render_wordlists_add_form(form)
+            return _render_wordlists_add_form(form, next_url)
         if not uploaded_file.filename.lower().endswith('.txt'):
             flash('Wordlist uploads must use the .txt extension.', 'danger')
-            return _render_wordlists_add_form(form)
+            return _render_wordlists_add_form(form, next_url)
 
         wordlist_name = _derive_wordlist_name(form.name.data, uploaded_file.filename)
         if not wordlist_name:
             flash('Wordlist name is required.', 'danger')
-            return _render_wordlists_add_form(form)
-        if db.session.scalar(select(Wordlists).filter_by(name=wordlist_name)):
+            return _render_wordlists_add_form(form, next_url)
+        existing_wordlist = db.session.scalar(select(Wordlists).filter_by(name=wordlist_name))
+        if existing_wordlist:
             flash('Wordlist name is already registered.', 'warning')
-            return redirect(url_for('wordlists.wordlists_list'))
+            return redirect(
+                _wordlist_redirect_target(
+                    next_url,
+                    fallback_url=fallback_url,
+                    wordlist_id=existing_wordlist.id,
+                )
+            )
 
         wordlist_path = save_file(_managed_wordlists_dir(), uploaded_file)
         wordlist_path = os.path.abspath(wordlist_path)
-        if db.session.scalar(select(Wordlists).filter_by(path=wordlist_path)):
+        existing_wordlist = db.session.scalar(select(Wordlists).filter_by(path=wordlist_path))
+        if existing_wordlist:
             _remove_managed_wordlist_file(wordlist_path)
             flash('Wordlist is already registered.', 'warning')
-            return redirect(url_for('wordlists.wordlists_list'))
+            return redirect(
+                _wordlist_redirect_target(
+                    next_url,
+                    fallback_url=fallback_url,
+                    wordlist_id=existing_wordlist.id,
+                )
+            )
 
         if _is_async_upload_request():
             operation = current_app.extensions['upload_operations'].start_operation(
                 owner_user_id=getattr(current_user, 'id', None),
-                redirect_url=url_for('wordlists.wordlists_list'),
+                redirect_url=_wordlist_redirect_target(
+                    next_url,
+                    fallback_url=fallback_url,
+                ),
                 worker=(
                     lambda reporter,
                     wordlist_name=wordlist_name,
                     wordlist_path=wordlist_path,
-                    audit_actor=capture_audit_actor(): _process_wordlist_upload(
+                    audit_actor=capture_audit_actor(),
+                    redirect_url=next_url,
+                    fallback_url=fallback_url: _process_wordlist_upload(
                         wordlist_name=wordlist_name,
                         wordlist_path=wordlist_path,
                         audit_actor=audit_actor,
                         reporter=reporter,
+                        redirect_url=redirect_url,
+                        fallback_url=fallback_url,
                     )
                 ),
             )
@@ -269,7 +316,7 @@ def wordlists_add():
             db.session.rollback()
             _remove_managed_wordlist_file(wordlist_path)
             flash('Wordlist could not be uploaded because that name or file already exists. Refresh and retry.', 'danger')
-            return _render_wordlists_add_form(form)
+            return _render_wordlists_add_form(form, next_url)
         record_audit_event(
             'wordlist.create',
             'wordlist',
@@ -283,9 +330,15 @@ def wordlists_add():
             },
         )
         flash('Wordlist uploaded!', 'success')
-        return redirect(url_for('wordlists.wordlists_list'))
+        return redirect(
+            _wordlist_redirect_target(
+                next_url,
+                fallback_url=fallback_url,
+                wordlist_id=wordlist.id,
+            )
+        )
 
-    return _render_wordlists_add_form(form)
+    return _render_wordlists_add_form(form, next_url)
 
 
 @wordlists.route("/wordlists/delete/<int:wordlist_id>", methods=['POST'])

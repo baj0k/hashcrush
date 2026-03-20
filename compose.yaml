@@ -90,7 +90,7 @@ services:
           "CMD",
           "python3",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/login', timeout=2)",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)",
         ]
       interval: 5s
       timeout: 5s
@@ -112,7 +112,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "wget --no-check-certificate -q -O /dev/null https://127.0.0.1/login || exit 1",
+          "wget --no-check-certificate -q -O /dev/null https://127.0.0.1/healthz || exit 1",
         ]
       interval: 5s
       timeout: 5s
@@ -142,7 +142,7 @@ services:
           "CMD",
           "python3",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/login', timeout=2)",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)",
         ]
       interval: 5s
       timeout: 5s
@@ -165,7 +165,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "wget --no-check-certificate -q -O /dev/null https://127.0.0.1/login || exit 1",
+          "wget --no-check-certificate -q -O /dev/null https://127.0.0.1/healthz || exit 1",
         ]
       interval: 5s
       timeout: 5s

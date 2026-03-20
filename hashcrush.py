@@ -148,13 +148,9 @@ def _resolve_ssl_context(app) -> tuple[str, str]:
 
 
 def _runtime_bootstrap_errors(db) -> list[str]:
-    from hashcrush.setup import admin_user_needs_added, settings_needs_added
+    from hashcrush.setup import admin_user_needs_added
 
     errors: list[str] = []
-    if settings_needs_added(db):
-        errors.append(
-            "Settings row is missing. Run `python3 ./hashcrush.py setup` to bootstrap the instance."
-        )
     if admin_user_needs_added(db):
         errors.append(
             "Admin account is missing. Run `python3 ./hashcrush.py setup` to bootstrap the instance."

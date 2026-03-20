@@ -268,16 +268,12 @@ def _build_database_schema() -> None:
 
 
 def _seed_initial_runtime_state(admin_username: str, admin_password: str) -> None:
-    from hashcrush.models import Settings, Users, db
+    from hashcrush.models import Users, db
     from hashcrush.setup import add_default_tasks, default_tasks_need_added
     from hashcrush.users.routes import bcrypt
 
     seed_app = _build_seed_app()
     with seed_app.app_context():
-        if db.session.execute(select(Settings)).scalars().first() is None:
-            db.session.add(Settings())
-            db.session.commit()
-
         has_admin = db.session.execute(
             select(Users).where(Users.admin.is_(True)).limit(1)
         ).scalars().first()
@@ -652,7 +648,6 @@ def _seed_test_environment(
         Jobs,
         JobTasks,
         Rules,
-        Settings,
         Tasks,
         Users,
         Wordlists,
@@ -676,12 +671,6 @@ def _seed_test_environment(
     _write_text_file(hashfile_path, E2E_SAMPLE_HASH + "\n")
 
     with seed_app.app_context():
-        settings = db.session.execute(select(Settings)).scalars().first()
-        if settings is None:
-            settings = Settings()
-            db.session.add(settings)
-            db.session.commit()
-
         admin_user = db.session.execute(
             select(Users).filter_by(username=E2E_ADMIN_USERNAME)
         ).scalars().first()

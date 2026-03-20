@@ -32,36 +32,6 @@ def _assert_heading(page, heading, *, failure_message: str) -> None:
 def _job_row(page, job_name: str):
     return page.locator("article.media.content-section table tbody tr", has_text=job_name).first
 
-
-def _click_button_or_link(page, name: str) -> None:
-    target = page.get_by_role("button", name=name, exact=True)
-    if target.count() == 0:
-        target = page.get_by_role("link", name=name, exact=True)
-    target.click()
-
-
-def _advance_to_tasks_after_hash_upload(page) -> None:
-    tasks_heading = page.get_by_role("heading", name="Tasks")
-    if tasks_heading.count() > 0:
-        expect(tasks_heading).to_be_visible()
-        return
-
-    local_check_heading = page.get_by_role("heading", name="Local Check")
-    if local_check_heading.count() > 0:
-        expect(local_check_heading).to_be_visible()
-        _click_button_or_link(page, "Next")
-        expect(tasks_heading).to_be_visible()
-        return
-
-    alert_text = ""
-    if page.locator(".alert").count() > 0:
-        alert_text = page.locator(".alert").first.inner_text().strip()
-    pytest.fail(
-        "Expected either the Local Check interstitial or the Tasks step after uploading "
-        f"the smoke hashfile (url={page.url}, alert={alert_text!r})"
-    )
-
-
 def _wait_for_job_completion(page, external_live_server: str, job_name: str, *, timeout_seconds: int = 90) -> None:
     deadline = time.monotonic() + timeout_seconds
     last_row_text = ""
@@ -163,27 +133,29 @@ def test_external_worker_cracks_dictionary_job_end_to_end(
         )
     page.locator("#domain_id").select_option("add_new")
     page.get_by_label("New Domain").fill(domain_name)
-    page.get_by_role("button", name="Next", exact=True).click()
+    page.get_by_role("button", name="Create Draft", exact=True).click()
 
-    expect(
-        page.get_by_role("heading", name=re.compile(r"Assign Hashes for"))
-    ).to_be_visible()
+    expect(page).to_have_url(re.compile(r".*/jobs/\d+/builder.*"))
+    expect(page.get_by_role("heading", name="Hashes")).to_be_visible()
     page.locator("select[name='file_type']").select_option("hash_only")
     page.locator("select[name='hash_type']").select_option("0")
     page.locator("#pills-profile-tab").click()
     page.set_input_files("input[name='hashfile']", str(hashfile_path))
-    page.locator("#nav-new-hashfile button[type='submit']").click()
+    page.get_by_role("button", name="Save New Hashfile", exact=True).click()
 
-    _advance_to_tasks_after_hash_upload(page)
+    expect(page.get_by_role("heading", name="Tasks")).to_be_visible()
     page.get_by_role("button", name="Add Task", exact=True).click()
     task_entry = page.locator(".dropdown-menu .dropdown-item", has_text=task_name).first
     expect(task_entry).to_be_visible()
     task_entry.click()
-    expect(page.get_by_role("cell", name=task_name, exact=True)).to_be_visible()
+    expect(
+        page.locator("#tasks").get_by_role("cell", name=task_name, exact=True)
+    ).to_be_visible()
 
-    _click_button_or_link(page, "Next")
+    page.get_by_role("button", name="Create", exact=True).click()
+    expect(page).to_have_url(re.compile(r".*/jobs/\d+/summary.*"))
     expect(page.get_by_role("heading", name="Job Summary")).to_be_visible()
-    page.get_by_role("button", name="Complete", exact=True).click()
+    page.get_by_role("button", name="Accept Job", exact=True).click()
     expect(page).to_have_url(re.compile(r".*/jobs(?:\?.*)?$"))
 
     job_row = _job_row(page, job_name)

@@ -9,6 +9,7 @@
 <div class="content-section">
     <form method="POST" action="" enctype="multipart/form-data" data-upload-progress-form="true">
         {{ form.hidden_tag() }}
+        <input type="hidden" name="next" value="{{ next_url }}">
         <fieldset class="form-group">
             <div class="form-group">
                 {{ form.name.label(class="form-control-label") }}
@@ -46,7 +47,7 @@
             <small class="text-muted d-block mt-2">Large file uploads continue processing after the browser finishes sending the file.</small>
         </div>
         <div class="hc-form-actions">
-            <a class="btn btn-secondary" href="{{ url_for('rules.rules_list') }}">Back</a>
+            <a class="btn btn-secondary" href="{{ next_url }}">Back</a>
             <div class="hc-form-actions-right">
                 {{ form.submit(class="btn btn-primary") }}
             </div>

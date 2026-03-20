@@ -1,5 +1,6 @@
 """Integration tests for jobs, domains, and hashfiles."""
 # ruff: noqa: F403,F405
+import io
 from datetime import datetime, timedelta
 
 from tests.integration.support import *
@@ -244,6 +245,47 @@ def test_jobs_list_displays_eta_and_percent_done_for_active_job():
         assert b"40.3 GH/s" in response.data
         assert b"40252.3 MH/s" not in response.data
 
+
+@pytest.mark.security
+def test_tasks_add_redirects_back_to_job_builder_when_next_is_provided():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="Task Return Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        job = Jobs(
+            name="task-return-job",
+            status="Incomplete",
+            domain_id=domain.id,
+            owner_id=admin.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/tasks/add",
+            data={
+                "name": "task-return-task",
+                "hc_attackmode": "maskmode",
+                "mask": "?l?l?l?l",
+                "next": f"/jobs/{job.id}/builder?tab=tasks",
+                "submit": "Create",
+            },
+        )
+
+        assert response.status_code == 302
+        assert response.headers["Location"].endswith(f"/jobs/{job.id}/builder?tab=tasks")
+        assert _count_rows(Tasks, name="task-return-task") == 1
+
+
 @pytest.mark.security
 def test_jobs_page_displays_active_queue_eta_and_percent_done_columns_for_tasks():
     app = _build_app()
@@ -447,7 +489,7 @@ def test_jobs_assigned_hashfile_existing_hashfile_form_includes_csrf_token():
         client = app.test_client()
         _login_client_as_user(client, owner)
 
-        response = client.get(f"/jobs/{job.id}/assigned_hashfile/")
+        response = client.get(f"/jobs/{job.id}/builder")
         assert response.status_code == 200
         html = response.data.decode("utf-8")
         existing_form_html = html.split('id="nav-existing-hashfile"', 1)[1]
@@ -1439,18 +1481,21 @@ def test_non_owner_can_view_scheduled_jobs_but_cannot_stop_them():
             not in jobs_response.data
         )
 
+        builder_response = client.get(f"/jobs/{job.id}/builder")
+        assert builder_response.status_code == 200
+        assert b"visible-task" in builder_response.data
+        assert b"Read-only view" in builder_response.data
+        assert f"/jobs/{job.id}/assign_task/".encode() not in builder_response.data
+        assert f"/jobs/{job.id}/remove_all_tasks".encode() not in builder_response.data
+
         tasks_response = client.get(f"/jobs/{job.id}/tasks")
-        assert tasks_response.status_code == 200
-        assert b"visible-task" in tasks_response.data
-        assert b"Read-only view" in tasks_response.data
-        assert f"/jobs/{job.id}/assign_task/".encode() not in tasks_response.data
-        assert f"/jobs/{job.id}/remove_all_tasks".encode() not in tasks_response.data
+        assert tasks_response.status_code == 302
+        assert tasks_response.headers["Location"].endswith(f"/jobs/{job.id}/builder?tab=tasks")
 
         summary_response = client.get(f"/jobs/{job.id}/summary")
         assert summary_response.status_code == 200
-        assert b"queued-visible-job" in summary_response.data
-        assert b"Read-only view" in summary_response.data
-        assert b"Only the job owner or an admin can finalize or edit this job." in summary_response.data
+        assert b"Job Summary" in summary_response.data
+        assert b"Only the job owner or an admin can accept this job." in summary_response.data
 
         draft_tasks_response = client.get(f"/jobs/{draft_job.id}/tasks")
         assert draft_tasks_response.status_code == 302
@@ -1536,6 +1581,175 @@ def test_jobs_stop_preserves_completed_tasks_and_running_pid():
         assert completed.status == "Completed"
         assert running.status == "Canceled"
         assert running.worker_pid == 424242
+
+@pytest.mark.security
+def test_hashfiles_add_rejects_oversized_request_before_processing():
+    app = _build_app({"MAX_CONTENT_LENGTH": 128})
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="oversized-upload-domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/hashfiles/add",
+            data={
+                "name": "oversized-hashfile",
+                "domain_id": str(domain.id),
+                "file_type": "hash_only",
+                "hash_type": "0",
+                "hashfile": (io.BytesIO(b"a" * 2048), "oversized.txt"),
+            },
+            headers={"X-Requested-With": "XMLHttpRequest"},
+            content_type="multipart/form-data",
+        )
+
+        assert response.status_code == 413
+        payload = response.get_json()
+        assert payload is not None
+        assert "size limit" in payload["detail"].lower()
+        assert _count_rows(Hashfiles) == 0
+
+@pytest.mark.security
+def test_jobs_start_rejects_completed_job_replay():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="completed-start-domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="completed-start.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = _seed_hash("5f4dcc3b5aa765d61d8327deb882cf99", hash_type=0)
+        _seed_hashfile_hash(hash_id=hash_row.id, hashfile_id=hashfile.id)
+
+        task = Tasks(
+            name="completed-start-task",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a",
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        job = Jobs(
+            name="completed-start-job",
+            status="Completed",
+            domain_id=domain.id,
+            owner_id=admin.id,
+            hashfile_id=hashfile.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        job_task = JobTasks(
+            job_id=job.id,
+            task_id=task.id,
+            status="Completed",
+            command="old-command",
+        )
+        db.session.add(job_task)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(f"/jobs/start/{job.id}", follow_redirects=True)
+
+        assert response.status_code == 200
+        assert b"Only ready or canceled jobs can be started." in response.data
+        db.session.refresh(job)
+        db.session.refresh(job_task)
+        assert job.status == "Completed"
+        assert job_task.status == "Completed"
+        assert job_task.command == "old-command"
+
+@pytest.mark.security
+def test_jobs_start_resets_canceled_job_runtime_metadata():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="restart-domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="restart.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = _seed_hash("5f4dcc3b5aa765d61d8327deb882cf99", hash_type=0)
+        _seed_hashfile_hash(hash_id=hash_row.id, hashfile_id=hashfile.id)
+
+        task = Tasks(
+            name="restart-task",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a",
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        old_started_at = datetime(2024, 1, 2, 3, 4, 5)
+        old_ended_at = old_started_at + timedelta(minutes=12)
+        job = Jobs(
+            name="restart-job",
+            status="Canceled",
+            domain_id=domain.id,
+            owner_id=admin.id,
+            hashfile_id=hashfile.id,
+            started_at=old_started_at,
+            ended_at=old_ended_at,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        job_task = JobTasks(
+            job_id=job.id,
+            task_id=task.id,
+            status="Canceled",
+            started_at=old_started_at,
+            progress='{"Progress":"old"}',
+            benchmark="123 H/s",
+            worker_pid=4242,
+        )
+        db.session.add(job_task)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(f"/jobs/start/{job.id}", follow_redirects=False)
+
+        assert response.status_code == 302
+        db.session.refresh(job)
+        db.session.refresh(job_task)
+        assert job.status == "Queued"
+        assert job.started_at is None
+        assert job.ended_at is None
+        assert job.queued_at is not None
+        assert job_task.status == "Queued"
+        assert job_task.started_at is None
+        assert job_task.progress is None
+        assert job_task.benchmark is None
+        assert job_task.worker_pid is None
+        assert job_task.command is not None
 
 @pytest.mark.security
 def test_stop_job_task_ignores_stale_request_for_completed_task():

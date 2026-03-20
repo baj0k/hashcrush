@@ -25,9 +25,9 @@ from hashcrush.models import (
     JobTasks,
     Rules,
     SchemaVersion,
-    Settings,
     TaskGroups,
     Tasks,
+    UploadOperations,
     Users,
     Wordlists,
     db,
@@ -128,12 +128,8 @@ def _seed_user(
     return user
 
 
-def _seed_settings() -> Settings:
-    settings = Settings(
-    )
-    db.session.add(settings)
-    db.session.commit()
-    return settings
+def _seed_settings() -> None:
+    return None
 
 
 def _login_client_as_user(client, user: Users):

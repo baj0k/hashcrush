@@ -1,16 +1,19 @@
-"""In-process upload operation tracking for async UI progress."""
+"""Database-backed upload operation tracking for async UI progress."""
 
 from __future__ import annotations
 
-import threading
+import json
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Callable
 
 from flask import Flask
+from sqlalchemy import delete
 
-from hashcrush.models import db
+from hashcrush.models import UploadOperations, db, utc_now_naive
 
 
 @dataclass
@@ -27,8 +30,8 @@ class UploadOperationRecord:
     error_message: str | None = None
     completion_flashes: list[tuple[str, str]] = field(default_factory=list)
     completion_flashes_consumed: bool = False
-    created_at: float = field(default_factory=time.time)
-    updated_at: float = field(default_factory=time.time)
+    created_at: datetime = field(default_factory=utc_now_naive)
+    updated_at: datetime = field(default_factory=utc_now_naive)
 
     def to_response_dict(self) -> dict[str, object]:
         """Serialize operation state for JSON polling responses."""
@@ -89,24 +92,87 @@ class UploadOperationReporter:
 
 
 class UploadOperationService:
-    """Track in-process upload/import work for browser polling."""
+    """Track upload/import work for browser polling in persistent storage."""
 
-    def __init__(self, app: Flask, *, retention_seconds: int = 3600):
+    def __init__(
+        self,
+        app: Flask,
+        *,
+        retention_seconds: int = 3600,
+        max_workers: int = 2,
+    ):
         self.app = app
         self.retention_seconds = max(60, int(retention_seconds))
-        self._lock = threading.Lock()
-        self._operations: dict[str, UploadOperationRecord] = {}
+        self._cleanup_interval_seconds = max(
+            30.0, min(300.0, float(self.retention_seconds) / 6.0)
+        )
+        self._last_cleanup_monotonic = 0.0
+        self._executor = ThreadPoolExecutor(
+            max_workers=max(1, int(max_workers)),
+            thread_name_prefix="hashcrush-upload",
+        )
 
-    def _cleanup_expired_locked(self) -> None:
-        cutoff = time.time() - self.retention_seconds
-        expired_ids = [
-            operation_id
-            for operation_id, record in self._operations.items()
-            if record.updated_at < cutoff
-            and record.state in {"succeeded", "failed"}
+    def _serialize_completion_flashes(
+        self, flashes: list[tuple[str, str]] | None
+    ) -> str:
+        normalized = [
+            [str(category), str(message)]
+            for category, message in (flashes or [])
         ]
-        for operation_id in expired_ids:
-            self._operations.pop(operation_id, None)
+        return json.dumps(normalized, separators=(",", ":"))
+
+    def _deserialize_completion_flashes(self, raw_value: str | None) -> list[tuple[str, str]]:
+        if not raw_value:
+            return []
+        try:
+            payload = json.loads(raw_value)
+        except (TypeError, ValueError):
+            return []
+        flashes: list[tuple[str, str]] = []
+        if not isinstance(payload, list):
+            return flashes
+        for item in payload:
+            if not isinstance(item, list | tuple) or len(item) != 2:
+                continue
+            category, message = item
+            flashes.append((str(category), str(message)))
+        return flashes
+
+    def _record_to_snapshot(
+        self, record: UploadOperations | None
+    ) -> UploadOperationRecord | None:
+        if record is None:
+            return None
+        return UploadOperationRecord(
+            id=record.id,
+            owner_user_id=record.owner_user_id,
+            state=record.state,
+            title=record.title,
+            detail=record.detail,
+            percent=record.percent,
+            redirect_url=record.redirect_url,
+            error_message=record.error_message,
+            completion_flashes=self._deserialize_completion_flashes(
+                record.completion_flashes_json
+            ),
+            completion_flashes_consumed=record.completion_flashes_consumed,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+        )
+
+    def _cleanup_expired(self) -> None:
+        now = time.monotonic()
+        if (now - self._last_cleanup_monotonic) < self._cleanup_interval_seconds:
+            return
+        self._last_cleanup_monotonic = now
+        cutoff = utc_now_naive() - timedelta(seconds=self.retention_seconds)
+        db.session.execute(
+            delete(UploadOperations).where(
+                UploadOperations.updated_at < cutoff,
+                UploadOperations.state.in_(("succeeded", "failed")),
+            )
+        )
+        db.session.commit()
 
     def start_operation(
         self,
@@ -117,8 +183,9 @@ class UploadOperationService:
     ) -> UploadOperationRecord:
         """Create a tracked operation and begin background processing."""
 
+        self._cleanup_expired()
         operation_id = uuid.uuid4().hex
-        record = UploadOperationRecord(
+        record = UploadOperations(
             id=operation_id,
             owner_user_id=owner_user_id,
             state="queued",
@@ -126,34 +193,42 @@ class UploadOperationService:
             detail="The server is preparing the uploaded file.",
             percent=0.0,
             redirect_url=redirect_url,
+            completion_flashes_json="[]",
+            completion_flashes_consumed=False,
+            created_at=utc_now_naive(),
+            updated_at=utc_now_naive(),
         )
-        with self._lock:
-            self._cleanup_expired_locked()
-            self._operations[operation_id] = record
+        db.session.add(record)
+        db.session.commit()
 
-        thread = threading.Thread(
-            target=self._run_operation,
-            args=(operation_id, worker),
-            name=f"hashcrush-upload-{operation_id[:8]}",
-            daemon=True,
+        self._executor.submit(self._run_operation, operation_id, worker)
+        return self.get_operation(operation_id) or UploadOperationRecord(
+            id=record.id,
+            owner_user_id=record.owner_user_id,
+            state=record.state,
+            title=record.title,
+            detail=record.detail,
+            percent=record.percent,
+            redirect_url=record.redirect_url,
+            error_message=record.error_message,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
         )
-        thread.start()
-        return self.get_operation(operation_id) or record
 
     def _run_operation(
         self,
         operation_id: str,
         worker: Callable[[UploadOperationReporter], None],
     ) -> None:
-        reporter = UploadOperationReporter(self, operation_id)
-        reporter.update(
-            percent=1,
-            title="Processing file...",
-            detail="The server is preparing the upload for validation.",
-        )
         try:
             with self.app.app_context():
+                reporter = UploadOperationReporter(self, operation_id)
                 try:
+                    reporter.update(
+                        percent=1,
+                        title="Processing file...",
+                        detail="The server is preparing the upload for validation.",
+                    )
                     worker(reporter)
                     snapshot = self.get_operation(operation_id)
                     if snapshot and snapshot.state not in {"succeeded", "failed"}:
@@ -176,25 +251,10 @@ class UploadOperationService:
     def get_operation(self, operation_id: str) -> UploadOperationRecord | None:
         """Return a detached snapshot of an operation."""
 
-        with self._lock:
-            self._cleanup_expired_locked()
-            record = self._operations.get(operation_id)
-            if record is None:
-                return None
-            return UploadOperationRecord(
-                id=record.id,
-                owner_user_id=record.owner_user_id,
-                state=record.state,
-                title=record.title,
-                detail=record.detail,
-                percent=record.percent,
-                redirect_url=record.redirect_url,
-                error_message=record.error_message,
-                completion_flashes=list(record.completion_flashes),
-                completion_flashes_consumed=record.completion_flashes_consumed,
-                created_at=record.created_at,
-                updated_at=record.updated_at,
-            )
+        self._cleanup_expired()
+        return self._record_to_snapshot(
+            db.session.get(UploadOperations, operation_id, populate_existing=True)
+        )
 
     def update_operation(
         self,
@@ -206,18 +266,18 @@ class UploadOperationService:
     ) -> None:
         """Update a running operation."""
 
-        with self._lock:
-            record = self._operations.get(operation_id)
-            if record is None or record.state in {"succeeded", "failed"}:
-                return
-            record.state = "running"
-            if percent is not None:
-                record.percent = max(record.percent, min(99.0, float(percent)))
-            if title is not None:
-                record.title = title
-            if detail is not None:
-                record.detail = detail
-            record.updated_at = time.time()
+        record = db.session.get(UploadOperations, operation_id)
+        if record is None or record.state in {"succeeded", "failed"}:
+            return
+        record.state = "running"
+        if percent is not None:
+            record.percent = max(float(record.percent or 0.0), min(99.0, float(percent)))
+        if title is not None:
+            record.title = title
+        if detail is not None:
+            record.detail = detail
+        record.updated_at = utc_now_naive()
+        db.session.commit()
 
     def complete_operation(
         self,
@@ -230,47 +290,54 @@ class UploadOperationService:
     ) -> None:
         """Mark an operation as successful."""
 
-        with self._lock:
-            record = self._operations.get(operation_id)
-            if record is None:
-                return
-            record.state = "succeeded"
-            record.percent = 100.0
-            record.title = title
-            record.detail = detail
-            if redirect_url is not None:
-                record.redirect_url = redirect_url
-            if completion_flashes is not None:
-                record.completion_flashes = list(completion_flashes)
-                record.completion_flashes_consumed = False
-            record.error_message = None
-            record.updated_at = time.time()
+        record = db.session.get(UploadOperations, operation_id)
+        if record is None:
+            return
+        record.state = "succeeded"
+        record.percent = 100.0
+        record.title = title
+        record.detail = detail
+        if redirect_url is not None:
+            record.redirect_url = redirect_url
+        if completion_flashes is not None:
+            record.completion_flashes_json = self._serialize_completion_flashes(
+                completion_flashes
+            )
+            record.completion_flashes_consumed = False
+        record.error_message = None
+        record.updated_at = utc_now_naive()
+        db.session.commit()
 
     def fail_operation(self, operation_id: str, *, title: str, detail: str) -> None:
         """Mark an operation as failed."""
 
-        with self._lock:
-            record = self._operations.get(operation_id)
-            if record is None:
-                return
-            record.state = "failed"
-            record.percent = 100.0
-            record.title = title
-            record.detail = detail
-            record.error_message = detail
-            record.updated_at = time.time()
+        record = db.session.get(UploadOperations, operation_id)
+        if record is None:
+            return
+        record.state = "failed"
+        record.percent = 100.0
+        record.title = title
+        record.detail = detail
+        record.error_message = detail
+        record.updated_at = utc_now_naive()
+        db.session.commit()
 
     def consume_completion_flashes(self, operation_id: str) -> list[tuple[str, str]]:
         """Return completion flashes exactly once."""
 
-        with self._lock:
-            record = self._operations.get(operation_id)
-            if (
-                record is None
-                or record.state != "succeeded"
-                or record.completion_flashes_consumed
-            ):
-                return []
-            record.completion_flashes_consumed = True
-            record.updated_at = time.time()
-            return list(record.completion_flashes)
+        record = db.session.get(
+            UploadOperations, operation_id, populate_existing=True
+        )
+        if (
+            record is None
+            or record.state != "succeeded"
+            or record.completion_flashes_consumed
+        ):
+            return []
+        flashes = self._deserialize_completion_flashes(record.completion_flashes_json)
+        if not flashes:
+            return []
+        record.completion_flashes_consumed = True
+        record.updated_at = utc_now_naive()
+        db.session.commit()
+        return flashes

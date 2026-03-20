@@ -95,8 +95,8 @@ def test_job_idor_access_denied_for_other_user(
 
     page.get_by_label("Job Name").fill(unique_name("E2E IDOR Job"))
     select_domain(page, e2e_fixture_data["domain_id"])
-    page.get_by_role("button", name="Next").click()
-    match = re.search(r"/jobs/(\d+)/assigned_hashfile", page.url)
+    page.get_by_role("button", name="Create Draft").click()
+    match = re.search(r"/jobs/(\d+)/builder", page.url)
     assert match, f"Could not determine job id for IDOR test from URL: {page.url}"
     job_id = match.group(1)
 
@@ -108,9 +108,9 @@ def test_job_idor_access_denied_for_other_user(
     page.get_by_role("button", name="Login").click()
     expect(page.get_by_role("link", name="Jobs")).to_be_visible()
 
-    page.goto(f"{live_server}/jobs/{job_id}/tasks", wait_until="domcontentloaded")
-    if page.url.startswith(f"{live_server}/jobs/{job_id}/tasks"):
+    page.goto(f"{live_server}/jobs/{job_id}/builder", wait_until="domcontentloaded")
+    if page.url.startswith(f"{live_server}/jobs/{job_id}/builder"):
         unauthorized = page.get_by_text("unauthorized", exact=False)
         forbidden = page.get_by_text("forbidden", exact=False)
         if unauthorized.count() == 0 and forbidden.count() == 0:
-            pytest.fail("Second user can access another user's job tasks; possible IDOR.")
+            pytest.fail("Second user can access another user's draft job builder; possible IDOR.")

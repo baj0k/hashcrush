@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy import func, select
 
@@ -74,6 +75,43 @@ def paginate_scalars(session, stmt, *, page: int, per_page: int = LIST_PAGE_SIZE
         stmt.limit(pagination.per_page).offset(pagination.offset)
     ).scalars().all()
     return rows, pagination
+
+
+def safe_relative_url(raw_url: str | None) -> str | None:
+    """Return a safe same-host relative redirect target or ``None``."""
+
+    if not raw_url:
+        return None
+
+    parsed = urlsplit(raw_url)
+    if parsed.scheme or parsed.netloc:
+        return None
+    if not parsed.path.startswith('/'):
+        return None
+    if '\n' in raw_url or '\r' in raw_url:
+        return None
+    return raw_url
+
+
+def append_query_params(url: str, **params: object | None) -> str:
+    """Return ``url`` with query params merged and ``None`` values removed."""
+
+    parsed = urlsplit(url)
+    query_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    for key, value in params.items():
+        if value in (None, ''):
+            query_params.pop(key, None)
+        else:
+            query_params[key] = str(value)
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urlencode(query_params),
+            parsed.fragment,
+        )
+    )
 
 
 def parse_jobtask_progress(progress_payload: str | None) -> tuple[str | None, str | None]:

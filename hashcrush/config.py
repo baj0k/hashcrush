@@ -265,6 +265,7 @@ def build_config(overrides: dict[str, object] | None = None) -> dict[str, object
         "HASHFILE_MAX_LINE_LENGTH": hashfile_max_line_length,
         "HASHFILE_MAX_TOTAL_LINES": hashfile_max_total_lines,
         "HASHFILE_MAX_TOTAL_BYTES": hashfile_max_total_bytes,
+        "MAX_CONTENT_LENGTH": hashfile_max_total_bytes,
         "AUTH_THROTTLE_ENABLED": auth_throttle_enabled,
         "AUTH_THROTTLE_MAX_ATTEMPTS": auth_throttle_max_attempts,
         "AUTH_THROTTLE_WINDOW_SECONDS": auth_throttle_window_seconds,

@@ -381,7 +381,6 @@ def test_hashcrush_cli_serve_refuses_missing_runtime_bootstrap_state(monkeypatch
 
     captured = capsys.readouterr()
     assert result == 1
-    assert "Settings row is missing" in captured.err
     assert "Admin account is missing" in captured.err
 
 
@@ -405,7 +404,6 @@ def test_hashcrush_cli_worker_refuses_missing_runtime_bootstrap_state(
 
     captured = capsys.readouterr()
     assert result == 1
-    assert "Settings row is missing" in captured.err
     assert "Admin account is missing" in captured.err
 
 
@@ -524,7 +522,7 @@ def test_upgrade_database_migrates_v1_schema_forward_to_current_version():
         result = upgrade_database()
 
         assert inspect(db.engine).has_table(AuditLog.__tablename__)
-        assert [step.version for step in result.applied_steps] == [2, 3, 4, 5, 6]
+        assert [step.version for step in result.applied_steps] == [2, 3, 4, 5, 6, 7]
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -534,6 +532,7 @@ def test_upgrade_database_migrates_v2_schema_forward_to_current_version():
         from hashcrush.db_upgrade import CURRENT_SCHEMA_VERSION, upgrade_database
 
         db.create_all()
+        db.session.execute(text('CREATE TABLE "settings" (id INTEGER PRIMARY KEY)'))
         db.session.execute(
             text(
                 'ALTER TABLE "settings" ADD COLUMN "retention_period" INTEGER NOT NULL DEFAULT 0'
@@ -549,12 +548,8 @@ def test_upgrade_database_migrates_v2_schema_forward_to_current_version():
 
         result = upgrade_database()
 
-        settings_columns = {
-            column["name"] for column in inspect(db.engine).get_columns("settings")
-        }
-        assert "retention_period" not in settings_columns
-        assert "enabled_job_weights" not in settings_columns
-        assert [step.version for step in result.applied_steps] == [3, 4, 5, 6]
+        assert not inspect(db.engine).has_table("settings")
+        assert [step.version for step in result.applied_steps] == [3, 4, 5, 6, 7]
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -606,7 +601,7 @@ def test_upgrade_database_migrates_v3_schema_to_v4_job_task_positions():
         index_names = {
             index["name"] for index in inspect(db.engine).get_indexes("job_tasks")
         }
-        assert [step.version for step in result.applied_steps] == [4, 5, 6]
+        assert [step.version for step in result.applied_steps] == [4, 5, 6, 7]
         assert [row.position for row in persisted] == [0, 1]
         assert "ix_job_tasks_job_id_position" in index_names
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
@@ -632,7 +627,7 @@ def test_upgrade_database_migrates_v5_schema_to_v6_audit_filter_indexes():
         result = upgrade_database()
 
         audit_indexes = {row["name"] for row in inspect(db.engine).get_indexes("audit_logs")}
-        assert [step.version for step in result.applied_steps] == [6]
+        assert [step.version for step in result.applied_steps] == [6, 7]
         assert "ix_audit_logs_actor_username_created_at" in audit_indexes
         assert "ix_audit_logs_target_type_created_at" in audit_indexes
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
@@ -699,7 +694,7 @@ def test_add_default_tasks_no_longer_depend_on_admin_id():
         assert json.loads(task_group.tasks) == [task.id for task in seeded_tasks]
 
 @pytest.mark.security
-def test_seed_initial_runtime_state_creates_settings_admin_and_default_tasks(
+def test_seed_initial_runtime_state_creates_admin_and_default_tasks(
     monkeypatch,
 ):
     bootstrap_module = _load_bootstrap_module()
@@ -718,13 +713,12 @@ def test_seed_initial_runtime_state_creates_settings_admin_and_default_tasks(
         admin = _first_row(Users, username="bootstrap-admin", admin=True)
         assert admin is not None
         assert bcrypt.check_password_hash(admin.password, "LongEnoughBootstrapPassword!")
-        assert _count_rows(Settings) == 1
         assert _count_rows(Tasks) == 10
         assert _first_row(TaskGroups, name="maskmode 1-10") is not None
 
 
 @pytest.mark.security
-def test_runtime_bootstrap_errors_report_missing_settings_and_admin():
+def test_runtime_bootstrap_errors_report_missing_admin():
     cli_module = _load_cli_module()
     app = _build_app()
 
@@ -732,7 +726,6 @@ def test_runtime_bootstrap_errors_report_missing_settings_and_admin():
         db.create_all()
         errors = cli_module._runtime_bootstrap_errors(db)
 
-    assert any("Settings row is missing" in error for error in errors)
     assert any("Admin account is missing" in error for error in errors)
 
 
@@ -1085,67 +1078,10 @@ def test_settings_page_renders_without_csrf_template_failure():
         response = client.get("/settings")
         assert response.status_code == 200
         assert b"csrf_token" in response.data
-        assert b"database.uri" in response.data
-        assert b"database.host" in response.data
-        assert b"app.hashcat_bin" in response.data
-        assert b"Default When Empty" in response.data
-
-@pytest.mark.security
-def test_settings_hashcrush_config_update_persists_values(tmp_path):
-    config_path = tmp_path / "config.conf"
-    config_path.write_text(
-        "[database]\n"
-        "uri = \n"
-        "host = old-db-host\n"
-        "port = 5432\n"
-        "name = old-db-name\n"
-        "username = old-db-user\n"
-        "password = old-db-pass\n\n"
-        "[app]\n"
-        "hashcat_bin = hashcat\n"
-        "hashcat_status_timer = 5\n",
-        encoding="utf-8",
-    )
-
-    app = _build_app({"HASHCRUSH_CONFIG_PATH": str(config_path)})
-    with app.app_context():
-        db.create_all()
-        admin = _seed_admin_user()
-        _seed_settings()
-
-        client = app.test_client()
-        _login_client_as_user(client, admin)
-
-        response = client.post(
-            "/settings/hashcrush_config",
-            data={
-                "cfg__database__uri": "",
-                "cfg__database__host": "new-db-host",
-                "cfg__database__port": "5433",
-                "cfg__database__name": "new-db-name",
-                "cfg__database__username": "new-db-user",
-                "cfg__database__password": "hj\x7f\x7fhashcrush",
-                "cfg__app__hashcat_bin": "/usr/bin/hashcat",
-                "cfg__app__hashcat_status_timer": "10",
-                "cfg__app__runtime_path": "/tmp/hashcrush-runtime-custom",
-                "cfg__app__storage_path": "/var/lib/hashcrush-custom",
-            },
-        )
-        assert response.status_code == 302
-
-        parser = ConfigParser(interpolation=None)
-        parser.read(config_path)
-
-        assert parser.get("database", "uri", fallback="") == ""
-        assert parser.get("database", "host") == "new-db-host"
-        assert parser.get("database", "port") == "5433"
-        assert parser.get("database", "name") == "new-db-name"
-        assert parser.get("database", "username") == "new-db-user"
-        assert parser.get("database", "password") == "hashcrush"
-        assert parser.get("app", "hashcat_bin") == "/usr/bin/hashcat"
-        assert parser.get("app", "hashcat_status_timer") == "10"
-        assert parser.get("app", "runtime_path") == "/tmp/hashcrush-runtime-custom"
-        assert parser.get("app", "storage_path") == "/var/lib/hashcrush-custom"
+        assert b"Data Management" in response.data
+        assert b"Information" in response.data
+        assert b"Save HashCrush Config" not in response.data
+        assert b"Deployment configuration is managed through environment variables and config files" in response.data
 
 @pytest.mark.security
 def test_config_prefers_database_uri_from_config(tmp_path, monkeypatch):
@@ -1433,6 +1369,19 @@ def test_production_session_cookie_defaults_are_hardened():
     assert app.config["SESSION_COOKIE_SECURE"] is True
     assert app.config["SESSION_COOKIE_HTTPONLY"] is True
     assert app.config["SESSION_COOKIE_SAMESITE"] == "Lax"
+
+@pytest.mark.security
+def test_healthz_returns_ok_without_authentication():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+
+    client = app.test_client()
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.data == b"ok\n"
+    assert response.mimetype == "text/plain"
 
 @pytest.mark.security
 def test_database_constraints_and_indexes_exist_on_core_link_tables():

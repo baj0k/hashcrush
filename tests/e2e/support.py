@@ -40,6 +40,17 @@ def detect_login_failure(page) -> tuple[str, str] | None:
 
 
 def assert_login_error_feedback(page) -> None:
+    page.wait_for_load_state("domcontentloaded")
+    alerts = page.locator(".alert")
+    if alerts.count() > 0:
+        alerts.first.wait_for(state="visible")
+        alert_text = alerts.first.inner_text().strip()
+        if (
+            "Login Unsuccessful" in alert_text
+            or "Too many failed login attempts" in alert_text
+        ):
+            return
+
     generic_error = page.get_by_text("Login Unsuccessful", exact=False)
     throttle_error = page.get_by_text("Too many failed login attempts", exact=False)
     if generic_error.count() > 0:

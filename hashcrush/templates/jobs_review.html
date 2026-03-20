@@ -1,0 +1,90 @@
+{% extends "layout.html" %}
+{% block header %}
+<div class="hc-page-header">
+    <h1>Job Summary</h1>
+    <p class="hc-page-intro">
+        Review the job details and accept the final configuration before it is created.
+    </p>
+</div>
+{% endblock header %}
+{% block content %}
+<div class="content-section">
+    <table class="table table-sm">
+        <tbody>
+            <tr>
+                <td>Job Name</td>
+                <td>{{ job.name }}</td>
+            </tr>
+            <tr>
+                <td>Domain</td>
+                <td>{{ domain.name if domain else 'N/A' }}</td>
+            </tr>
+            <tr>
+                <td>Priority</td>
+                <td>{{ priority_display }}</td>
+            </tr>
+            <tr>
+                <td>Hashfile</td>
+                <td>
+                    {% if selected_hashfile %}
+                        {{ selected_hashfile.name }} ({{ cracked_rate }})
+                    {% else %}
+                        <span class="text-muted">Not assigned yet</span>
+                    {% endif %}
+                </td>
+            </tr>
+            <tr>
+                <td>Tasks</td>
+                <td>
+                    {% if ordered_task_names %}
+                    <div class="hc-line-list">
+                        {% for task_name in ordered_task_names %}
+                        <span>{{ task_name }}</span>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <span class="text-muted">No tasks assigned yet</span>
+                    {% endif %}
+                </td>
+            </tr>
+        </tbody>
+    </table>
+
+    {% if not selected_hashfile or not job_tasks %}
+    <p class="text-muted mb-3">
+        Choose a hashfile and assign at least one task before accepting the final job.
+    </p>
+    {% elif can_edit_job and job.status == 'Incomplete' %}
+    <p class="text-muted mb-3">
+        If everything looks right, accept the job and it will move into the ready state.
+    </p>
+    {% elif can_manage_job %}
+    <p class="text-muted mb-3">
+        This job is already {{ job.status.lower() }}. Review the details here or return to the jobs list for runtime actions.
+    </p>
+    {% else %}
+    <p class="text-muted mb-3">
+        Read-only view. Only the job owner or an admin can accept this job.
+    </p>
+    {% endif %}
+
+    {% if can_edit_job and job.status == 'Incomplete' and selected_hashfile and job_tasks %}
+    <form method="POST" action="{{ url_for('jobs.jobs_summary', job_id=job.id) }}">
+        {{ summary_form.hidden_tag() }}
+        <div class="hc-form-actions">
+            <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_builder', job_id=job.id, tab='tasks') }}" role="button">Back to Tasks</a>
+            <div class="hc-form-actions-right">
+                <button class="btn btn-primary" type="submit">Accept Job</button>
+            </div>
+        </div>
+    </form>
+    {% else %}
+    <div class="hc-form-actions">
+        <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_builder', job_id=job.id, tab='tasks') }}" role="button">Back to Tasks</a>
+        <div class="hc-form-actions-right">
+            <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_list') }}" role="button">Back to Jobs</a>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock content %}

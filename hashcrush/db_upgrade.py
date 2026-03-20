@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from sqlalchemy import inspect, text
 
 import hashcrush
-from hashcrush.models import AuditLog, SchemaVersion, db, utc_now_naive
+from hashcrush.models import AuditLog, SchemaVersion, UploadOperations, db, utc_now_naive
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 
 @dataclass(frozen=True)
@@ -246,6 +246,14 @@ def _migration_006_add_audit_filter_indexes() -> None:
         db.session.commit()
 
 
+def _migration_007_replace_settings_with_upload_operations() -> None:
+    """Drop the legacy settings singleton and add persistent upload tracking."""
+    UploadOperations.__table__.create(bind=db.engine, checkfirst=True)
+    if "settings" in inspect(db.engine).get_table_names():
+        db.session.execute(text("DROP TABLE IF EXISTS settings"))
+        db.session.commit()
+
+
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(
         version=1,
@@ -282,6 +290,12 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
         name="add_audit_filter_indexes",
         summary="Add audit-log indexes for actor and target filtering.",
         upgrade=_migration_006_add_audit_filter_indexes,
+    ),
+    MigrationStep(
+        version=7,
+        name="replace_settings_with_upload_operations",
+        summary="Drop the legacy settings singleton and persist async upload state.",
+        upgrade=_migration_007_replace_settings_with_upload_operations,
     ),
 )
 

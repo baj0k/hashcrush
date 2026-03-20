@@ -9,6 +9,7 @@
 <div class="content-section">
     <form method="POST" action="" enctype="multipart/form-data">
         {{ tasksForm.hidden_tag() }}
+        <input type="hidden" name="next" value="{{ next_url }}">
         <fieldset class="form-group">
            <div class="form-group">
                 {{ tasksForm.name.label(class="form-control-label") }}
@@ -49,6 +50,9 @@
                 {% else %}
                     {{ tasksForm.wl_id(class="form-control form-control-lg") }}
                 {% endif %}
+                <div class="hc-inline-actions mt-2">
+                    <a class="btn btn-outline-primary btn-sm" href="{{ add_wordlist_url }}">Add New Wordlist</a>
+                </div>
             </div>
             <div class="form-group hc-hidden" id="rules_div" data-toggle-group-section="task-attack-mode" data-toggle-values="dictionary">
                 {{ tasksForm.rule_id.label(class="form-control-label") }}
@@ -62,6 +66,9 @@
                 {% else %}
                     {{ tasksForm.rule_id(class="form-control form-control-lg") }}
                 {% endif %}
+                <div class="hc-inline-actions mt-2">
+                    <a class="btn btn-outline-primary btn-sm" href="{{ add_rule_url }}">Add New Rule</a>
+                </div>
             </div>
             <div class="form-group hc-hidden" id="maskmode_div" data-toggle-group-section="task-attack-mode" data-toggle-values="maskmode">
                 {{ tasksForm.mask.label(class="form-control-label") }}
@@ -78,7 +85,7 @@
             </div>
         </fieldset>
         <div class="hc-form-actions">
-            <a class="btn btn-secondary" href="{{ url_for('tasks.tasks_list') }}">Back</a>
+            <a class="btn btn-secondary" href="{{ next_url }}">Back</a>
             <div class="hc-form-actions-right">
                 {{ tasksForm.submit(class="btn btn-primary")}}
             </div>

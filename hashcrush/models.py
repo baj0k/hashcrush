@@ -6,7 +6,16 @@ from datetime import UTC, datetime
 
 from flask_login import UserMixin
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 db = SQLAlchemy()
@@ -36,10 +45,43 @@ class Users(db.Model, UserMixin):
     )
 
 
-class Settings(db.Model):
-    """Class object to represent Settings"""
+class UploadOperations(db.Model):
+    """Persistent state for async upload progress polling."""
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    __tablename__ = "upload_operations"
+    __table_args__ = (
+        db.Index(
+            "ix_upload_operations_owner_user_id_updated_at",
+            "owner_user_id",
+            "updated_at",
+        ),
+        db.Index("ix_upload_operations_state_updated_at", "state", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    owner_user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False)
+    percent: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    redirect_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completion_flashes_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="[]"
+    )
+    completion_flashes_consumed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utc_now_naive
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utc_now_naive
+    )
 
 
 class Jobs(db.Model):

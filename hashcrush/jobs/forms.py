@@ -38,7 +38,8 @@ class JobsForm(FlaskForm):
 
     def validate_name(self, name):
         job = db.session.execute(select(Jobs).filter_by(name=name.data)).scalars().first()
-        if job:
+        current_job_id = getattr(self, "current_job_id", None)
+        if job and job.id != current_job_id:
             raise ValidationError(
                 "That job name is taken. Please choose a different one."
             )

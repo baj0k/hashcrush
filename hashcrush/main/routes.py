@@ -1,6 +1,6 @@
 """Flask routes to main page."""
 
-from flask import Blueprint, flash, redirect, url_for
+from flask import Blueprint, Response, flash, redirect, url_for
 from flask_login import current_user, login_required
 
 from hashcrush.audit import record_audit_event
@@ -8,6 +8,11 @@ from hashcrush.models import Jobs, JobTasks, db
 from hashcrush.utils.utils import update_job_task_status
 
 main = Blueprint('main', __name__)
+
+@main.route("/healthz")
+def healthz():
+    """Simple readiness endpoint for container and proxy health checks."""
+    return Response("ok\n", mimetype="text/plain")
 
 @main.route("/")
 @login_required

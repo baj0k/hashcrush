@@ -1,0 +1,527 @@
+{% extends "layout.html" %}
+{% block header %}
+<div class="hc-page-header">
+    <h1>Create a New Job</h1>
+    <p class="hc-page-intro">
+        Build the job in three steps: set the basics, attach hashes, and choose tasks before the final review.
+    </p>
+</div>
+{% endblock header %}
+{% block content %}
+<nav class="mb-4">
+    <div class="nav nav-tabs" id="job-builder-nav" role="tablist">
+        {% if job %}
+            <a class="nav-link{% if active_tab == 'basics' %} active{% endif %}" href="{{ url_for('jobs.jobs_builder', job_id=job.id, tab='basics') }}" role="tab" aria-selected="{{ 'true' if active_tab == 'basics' else 'false' }}">Basics</a>
+            <a class="nav-link{% if active_tab == 'hashes' %} active{% endif %}" href="{{ url_for('jobs.jobs_builder', job_id=job.id, tab='hashes') }}" role="tab" aria-selected="{{ 'true' if active_tab == 'hashes' else 'false' }}">Hashes</a>
+            <a class="nav-link{% if active_tab == 'tasks' %} active{% endif %}" href="{{ url_for('jobs.jobs_builder', job_id=job.id, tab='tasks') }}" role="tab" aria-selected="{{ 'true' if active_tab == 'tasks' else 'false' }}">Tasks</a>
+        {% else %}
+            <a class="nav-link active" href="{{ url_for('jobs.jobs_add') }}" role="tab" aria-selected="true">Basics</a>
+            <span class="nav-link disabled" aria-disabled="true">Hashes</span>
+            <span class="nav-link disabled" aria-disabled="true">Tasks</span>
+        {% endif %}
+    </div>
+</nav>
+
+<div class="tab-content">
+    <section class="tab-pane fade{% if active_tab == 'basics' %} show active{% endif %}" id="basics" role="tabpanel">
+        <div class="content-section">
+            <h2 class="h4">Basics</h2>
+            {% if job and not can_edit_job %}
+                <p class="text-muted">
+                    This job is currently read-only here. Stop or reopen the draft to change its basics.
+                </p>
+                <table class="table table-sm">
+                    <tbody>
+                        <tr>
+                            <td>Status</td>
+                            <td>{{ job.status }}</td>
+                        </tr>
+                        <tr>
+                            <td>Job Name</td>
+                            <td>{{ job.name }}</td>
+                        </tr>
+                        <tr>
+                            <td>Priority</td>
+                            <td>{{ priority_display }}</td>
+                        </tr>
+                        <tr>
+                            <td>Domain</td>
+                            <td>{{ domain.name if domain else 'N/A' }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            {% else %}
+                <form
+                    method="POST"
+                    action="{% if job %}{{ url_for('jobs.jobs_builder_update_basics', job_id=job.id) }}{% else %}{{ url_for('jobs.jobs_add') }}{% endif %}"
+                    enctype="multipart/form-data"
+                >
+                    {{ jobsForm.hidden_tag() }}
+                    <fieldset class="form-group">
+                        {% if job %}
+                        <p class="text-muted">
+                            Draft status: <strong>{{ job.status }}</strong>
+                        </p>
+                        {% endif %}
+                        <div class="form-group">
+                            {{ jobsForm.name.label(class="form-control-label", for="job_name") }}
+                            {% if jobsForm.name.errors %}
+                                {{ jobsForm.name(class="form-control form-control-lg is-invalid", id="job_name") }}
+                                <div class="invalid-feedback">
+                                    {% for error in jobsForm.name.errors %}
+                                        <span>{{ error }}</span>
+                                    {% endfor %}
+                                </div>
+                            {% else %}
+                                {{ jobsForm.name(class="form-control form-control-lg", id="job_name") }}
+                            {% endif %}
+                        </div>
+                        <div class="form-group">
+                            {{ jobsForm.priority.label(class="form-control-label", for="priority") }}
+                            {% if jobsForm.priority.errors %}
+                                {{ jobsForm.priority(class="form-control form-control-lg is-invalid", id="priority") }}
+                                <div class="invalid-feedback">
+                                    {% for error in jobsForm.priority.errors %}
+                                        <span>{{ error }}</span>
+                                    {% endfor %}
+                                </div>
+                            {% else %}
+                                {{ jobsForm.priority(class="form-control form-control-lg", id="priority") }}
+                            {% endif %}
+                        </div>
+                        <div class="form-group">
+                            {{ jobsForm.domain_id.label(class="form-control-label", for="domain_id") }}
+                            {% if jobsForm.domain_id.errors %}
+                                {{ jobsForm.domain_id(class="form-control form-control-lg is-invalid", id="domain_id", data_toggle_target="new_domain_div", data_toggle_value="add_new") }}
+                                <div class="invalid-feedback">
+                                    {% for error in jobsForm.domain_id.errors %}
+                                        <span>{{ error }}</span>
+                                    {% endfor %}
+                                </div>
+                            {% else %}
+                                {{ jobsForm.domain_id(class="form-control form-control-lg", id="domain_id", data_toggle_target="new_domain_div", data_toggle_value="add_new") }}
+                            {% endif %}
+                        </div>
+                        {% if current_user.admin %}
+                        <div class="form-group{% if jobsForm.domain_id.data != 'add_new' %} hc-hidden{% endif %}" id="new_domain_div">
+                            {{ jobsForm.domain_name.label(class="form-control-label", for="domain_name") }}
+                            {% if jobsForm.domain_name.errors %}
+                                {{ jobsForm.domain_name(class="form-control form-control-lg is-invalid", id="domain_name") }}
+                                <div class="invalid-feedback">
+                                    {% for error in jobsForm.domain_name.errors %}
+                                        <span>{{ error }}</span>
+                                    {% endfor %}
+                                </div>
+                            {% else %}
+                                {{ jobsForm.domain_name(class="form-control form-control-lg", id="domain_name") }}
+                            {% endif %}
+                            <small class="form-text text-muted">
+                                If this domain already exists, the existing shared domain will be reused.
+                            </small>
+                        </div>
+                        {% else %}
+                        <small class="form-text text-muted">
+                            Need a new domain? Ask an admin to create it from the Domains page.
+                        </small>
+                        {% endif %}
+                    </fieldset>
+                    <div class="hc-form-actions">
+                        <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_list') }}" role="button" title="Cancel">Cancel</a>
+                        <div class="hc-form-actions-right">
+                            <button class="btn btn-primary" type="submit">
+                                {% if job %}Save Basics{% else %}Create Draft{% endif %}
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            {% endif %}
+        </div>
+    </section>
+
+    <section class="tab-pane fade{% if active_tab == 'hashes' %} show active{% endif %}" id="hashes" role="tabpanel">
+        <div class="content-section">
+            <h2 class="h4">Hashes</h2>
+            {% if not job %}
+                <p class="text-muted mb-0">
+                    Save the draft job basics first, then attach a shared hashfile or upload a new one here.
+                </p>
+            {% else %}
+                {% if selected_hashfile %}
+                <table class="table table-sm">
+                    <tbody>
+                        <tr>
+                            <td>Selected Hashfile</td>
+                            <td>{{ selected_hashfile.name }} {{ hashfile_cracked_rate.get(selected_hashfile.id, '(0/0)') }}</td>
+                        </tr>
+                        <tr>
+                            <td>Domain</td>
+                            <td>{{ domain.name if domain else 'N/A' }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+                {% else %}
+                <p class="text-muted">
+                    No hashfile is attached yet.
+                </p>
+                {% endif %}
+
+                {% if can_edit_job %}
+                <nav>
+                    <div class="nav nav-tabs" id="builder-hash-nav" role="tablist">
+                        {% if job.hashfile_id == None %}
+                            <a class="nav-link active" id="nav-new-hashfile-tab" data-toggle="tab" href="#nav-new-hashfile" role="tab" aria-controls="nav-new-hashfile" aria-selected="true">New Hashfile</a>
+                            <a class="nav-link" id="nav-existing-hashfile-tab" data-toggle="tab" href="#nav-existing-hashfile" role="tab" aria-controls="nav-existing-hashfile" aria-selected="false">Existing Hashfile</a>
+                        {% else %}
+                            <a class="nav-link" id="nav-new-hashfile-tab" data-toggle="tab" href="#nav-new-hashfile" role="tab" aria-controls="nav-new-hashfile" aria-selected="false">New Hashfile</a>
+                            <a class="nav-link active" id="nav-existing-hashfile-tab" data-toggle="tab" href="#nav-existing-hashfile" role="tab" aria-controls="nav-existing-hashfile" aria-selected="true">Existing Hashfile</a>
+                        {% endif %}
+                    </div>
+                </nav>
+                <div class="tab-content" id="builder-hash-tab-content">
+                    {% if job.hashfile_id == None %}
+                        <div class="tab-pane fade show active" id="nav-new-hashfile" role="tabpanel" aria-labelledby="nav-new-hashfile-tab">
+                    {% else %}
+                        <div class="tab-pane fade" id="nav-new-hashfile" role="tabpanel" aria-labelledby="nav-new-hashfile-tab">
+                    {% endif %}
+                        <div class="hc-tab-panel">
+                            <form action="{{ url_for('jobs.jobs_assigned_hashfile', job_id=job.id) }}" method="post" enctype="multipart/form-data">
+                                {{ jobs_new_hashfile_form.hidden_tag() }}
+                                <fieldset class="form-group">
+                                    <div class="form-group">
+                                        {{ jobs_new_hashfile_form.file_type.label(class="form-control-label") }}
+                                        {% if jobs_new_hashfile_form.file_type.errors %}
+                                            {{ jobs_new_hashfile_form.file_type(class="form-control form-control-lg is-invalid", data_toggle_group="job-hashfile-format", data_hide_targets="hashfile_div") }}
+                                            <div class="invalid-feedback">
+                                                {% for error in jobs_new_hashfile_form.file_type.errors %}
+                                                    <span>{{ error }}</span>
+                                                {% endfor %}
+                                            </div>
+                                        {% else %}
+                                            {{ jobs_new_hashfile_form.file_type(class="form-control form-control-lg", data_toggle_group="job-hashfile-format", data_hide_targets="hashfile_div") }}
+                                        {% endif %}
+                                    </div>
+                                    <div class="form-group hc-hidden" id="pwdump_hash_type_div" data-toggle-group-section="job-hashfile-format" data-toggle-values="pwdump">
+                                        {{ jobs_new_hashfile_form.pwdump_hash_type.label(class="form-control-label") }}
+                                        {% if jobs_new_hashfile_form.pwdump_hash_type.errors %}
+                                            {{ jobs_new_hashfile_form.pwdump_hash_type(class="form-control form-control-lg is-invalid", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
+                                            <div class="invalid-feedback">
+                                                {% for error in jobs_new_hashfile_form.pwdump_hash_type.errors %}
+                                                    <span>{{ error }}</span>
+                                                {% endfor %}
+                                            </div>
+                                        {% else %}
+                                            {{ jobs_new_hashfile_form.pwdump_hash_type(class="form-control form-control-lg", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
+                                        {% endif %}
+                                    </div>
+                                    <div class="form-group hc-hidden" id="netntlm_hash_type_div" data-toggle-group-section="job-hashfile-format" data-toggle-values="NetNTLM">
+                                        {{ jobs_new_hashfile_form.netntlm_hash_type.label(class="form-control-label") }}
+                                        {% if jobs_new_hashfile_form.netntlm_hash_type.errors %}
+                                            {{ jobs_new_hashfile_form.netntlm_hash_type(class="form-control form-control-lg is-invalid", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
+                                            <div class="invalid-feedback">
+                                                {% for error in jobs_new_hashfile_form.netntlm_hash_type.errors %}
+                                                    <span>{{ error }}</span>
+                                                {% endfor %}
+                                            </div>
+                                        {% else %}
+                                            {{ jobs_new_hashfile_form.netntlm_hash_type(class="form-control form-control-lg", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
+                                        {% endif %}
+                                    </div>
+                                    <div class="form-group hc-hidden" id="kerberos_hash_type_div" data-toggle-group-section="job-hashfile-format" data-toggle-values="kerberos">
+                                        {{ jobs_new_hashfile_form.kerberos_hash_type.label(class="form-control-label") }}
+                                        {% if jobs_new_hashfile_form.kerberos_hash_type.errors %}
+                                            {{ jobs_new_hashfile_form.kerberos_hash_type(class="form-control form-control-lg is-invalid", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
+                                            <div class="invalid-feedback">
+                                                {% for error in jobs_new_hashfile_form.kerberos_hash_type.errors %}
+                                                    <span>{{ error }}</span>
+                                                {% endfor %}
+                                            </div>
+                                        {% else %}
+                                            {{ jobs_new_hashfile_form.kerberos_hash_type(class="form-control form-control-lg", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
+                                        {% endif %}
+                                    </div>
+                                    <div class="form-group hc-hidden" id="shadow_hash_type_div" data-toggle-group-section="job-hashfile-format" data-toggle-values="shadow">
+                                        {{ jobs_new_hashfile_form.shadow_hash_type.label(class="form-control-label") }}
+                                        {% if jobs_new_hashfile_form.shadow_hash_type.errors %}
+                                            {{ jobs_new_hashfile_form.shadow_hash_type(class="form-control form-control-lg is-invalid", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
+                                            <div class="invalid-feedback">
+                                                {% for error in jobs_new_hashfile_form.shadow_hash_type.errors %}
+                                                    <span>{{ error }}</span>
+                                                {% endfor %}
+                                            </div>
+                                        {% else %}
+                                            {{ jobs_new_hashfile_form.shadow_hash_type(class="form-control form-control-lg", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
+                                        {% endif %}
+                                    </div>
+                                    <div class="form-group hc-hidden" id="hash_type_div" data-toggle-group-section="job-hashfile-format" data-toggle-values="user_hash,hash_only">
+                                        {{ jobs_new_hashfile_form.hash_type.label(class="form-control-label") }}
+                                        {% if jobs_new_hashfile_form.hash_type.errors %}
+                                            {{ jobs_new_hashfile_form.hash_type(class="form-control form-control-lg is-invalid", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
+                                            <div class="invalid-feedback">
+                                                {% for error in jobs_new_hashfile_form.hash_type.errors %}
+                                                    <span>{{ error }}</span>
+                                                {% endfor %}
+                                            </div>
+                                        {% else %}
+                                            {{ jobs_new_hashfile_form.hash_type(class="form-control form-control-lg", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
+                                        {% endif %}
+                                    </div>
+                                    <div class="form-group hc-hidden hc-section-gap" id="hashfile_div">
+                                        <label class="form-control-label" for="hashfilehashes">Hash File Content</label>
+                                        <ul class="nav nav-pills mb-3" id="pills-tab" role="tablist">
+                                            <li class="nav-item" role="presentation">
+                                                <a class="nav-link active" id="pills-home-tab" data-toggle="pill" href="#pills-home" role="tab" aria-controls="pills-home" aria-selected="true">Individual Hashes</a>
+                                            </li>
+                                            <li class="nav-item" role="presentation">
+                                                <a class="nav-link" id="pills-profile-tab" data-toggle="pill" href="#pills-profile" role="tab" aria-controls="pills-profile" aria-selected="false">File Upload</a>
+                                            </li>
+                                        </ul>
+                                        <div class="tab-content" id="pills-tabContent">
+                                            <div class="tab-pane fade show active" id="pills-home" role="tabpanel" aria-labelledby="pills-home-tab">
+                                                <div class="form-group">
+                                                    {{ jobs_new_hashfile_form.name.label(class="form-control-label", for="hashfile_name") }}
+                                                    {% if jobs_new_hashfile_form.name.errors %}
+                                                        {{ jobs_new_hashfile_form.name(class="form-control form-control-lg is-invalid", id="hashfile_name") }}
+                                                        <div class="invalid-feedback">
+                                                            {% for error in jobs_new_hashfile_form.name.errors %}
+                                                                <span>{{ error }}</span>
+                                                            {% endfor %}
+                                                        </div>
+                                                    {% else %}
+                                                        {{ jobs_new_hashfile_form.name(class="form-control form-control-lg", id="hashfile_name") }}
+                                                    {% endif %}
+                                                </div>
+                                                <div class="form-group">
+                                                    {{ jobs_new_hashfile_form.hashfilehashes.label(class="form-control-label") }}
+                                                    {% if jobs_new_hashfile_form.hashfilehashes.errors %}
+                                                        {{ jobs_new_hashfile_form.hashfilehashes(class="form-control form-control-lg is-invalid") }}
+                                                        <div class="invalid-feedback">
+                                                            {% for error in jobs_new_hashfile_form.hashfilehashes.errors %}
+                                                                <span>{{ error }}</span>
+                                                            {% endfor %}
+                                                        </div>
+                                                    {% else %}
+                                                        {{ jobs_new_hashfile_form.hashfilehashes(class="form-control form-control-lg") }}
+                                                    {% endif %}
+                                                </div>
+                                            </div>
+                                            <div class="tab-pane fade" id="pills-profile" role="tabpanel" aria-labelledby="pills-profile-tab">
+                                                <div class="form-group">
+                                                    {{ jobs_new_hashfile_form.hashfile.label() }}
+                                                    {{ jobs_new_hashfile_form.hashfile(class="hc-file-input hc-file-input--wide") }}
+                                                    {% if jobs_new_hashfile_form.hashfile.errors %}
+                                                        {% for error in jobs_new_hashfile_form.hashfile.errors %}
+                                                            <span class="text-danger d-block">{{ error }}</span>
+                                                        {% endfor %}
+                                                    {% endif %}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </fieldset>
+                                <div class="hc-form-actions">
+                                    <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_builder', job_id=job.id, tab='basics') }}" role="button">Back to Basics</a>
+                                    <div class="hc-form-actions-right">
+                                        <button class="btn btn-primary" type="submit">Save New Hashfile</button>
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                    {% if job.hashfile_id == None %}
+                        <div class="tab-pane fade" id="nav-existing-hashfile" role="tabpanel" aria-labelledby="nav-existing-hashfile-tab">
+                    {% else %}
+                        <div class="tab-pane fade show active" id="nav-existing-hashfile" role="tabpanel" aria-labelledby="nav-existing-hashfile-tab">
+                    {% endif %}
+                        <div class="hc-tab-panel">
+                            <form action="{{ url_for('jobs.jobs_assigned_hashfile', job_id=job.id) }}" method="post">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <fieldset class="form-group">
+                                    <div class="form-group">
+                                        <label class="form-control-label" for="hashfile_id">Hashfile</label>
+                                        <select class="form-control form-control-lg" id="hashfile_id" name="hashfile_id">
+                                            {% for hashfile in hashfiles %}
+                                                <option value="{{ hashfile.id }}"{% if hashfile.id == job.hashfile_id %} selected{% endif %}>
+                                                    {{ hashfile_cracked_rate.get(hashfile.id, '(0/0)') }} {{ hashfile.name }}
+                                                </option>
+                                            {% endfor %}
+                                        </select>
+                                    </div>
+                                </fieldset>
+                                <div class="hc-form-actions">
+                                    <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_builder', job_id=job.id, tab='basics') }}" role="button">Back to Basics</a>
+                                    <div class="hc-form-actions-right">
+                                        <button class="btn btn-primary" type="submit">Use Selected Hashfile</button>
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+
+                {% if cracked_hashfiles_hashes %}
+                <div class="mt-4">
+                    <h3 class="h5">Already Cracked in Local Database</h3>
+                    <p class="text-muted">These hashes are already recovered locally and will not need fresh cracking work.</p>
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th scope="col">Username</th>
+                                <th scope="col">Cipher Text</th>
+                                <th scope="col">Plaintext</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for entry in cracked_hashfiles_hashes %}
+                            <tr>
+                                <td>
+                                    {% if entry[1].username %}
+                                        {{ entry[1].username | jinja_hex_decode }}
+                                    {% else %}
+                                        <i>None</i>
+                                    {% endif %}
+                                </td>
+                                <td>{{ entry[0].ciphertext | jinja_ciphertext_decode }}</td>
+                                <td>
+                                    {% if entry[0].plaintext %}
+                                        {{ entry[0].plaintext | jinja_hex_decode }}
+                                    {% else %}
+                                        <i>None</i>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% endif %}
+            {% endif %}
+        </div>
+    </section>
+
+    <section class="tab-pane fade{% if active_tab == 'tasks' %} show active{% endif %}" id="tasks" role="tabpanel">
+        <div class="content-section">
+            <h2 class="h4">Tasks</h2>
+            {% if not job %}
+                <p class="text-muted mb-0">
+                    Save the draft job basics first, then add one or more tasks here.
+                </p>
+            {% else %}
+                {% if not can_manage_job %}
+                <p class="text-muted mb-3">Read-only view. Only the job owner or an admin can edit assigned tasks.</p>
+                {% endif %}
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th scope="col">Task Name</th>
+                            <th scope="col">Type</th>
+                            <th scope="col">Control</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for job_task in job_tasks %}
+                            {% set task = task_by_id.get(job_task.task_id) %}
+                            <tr>
+                                <td>{{ task.name if task else '' }}</td>
+                                <td>{{ task.hc_attackmode if task else '' }}</td>
+                                <td>
+                                    {% if can_edit_job %}
+                                        <form action="{{ url_for('jobs.jobs_move_task_up', job_id=job.id, task_id=job_task.task_id) }}" method="POST" class="d-inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" class="fa fa-arrow-up btn btn-success btn-sm" title="Move Up" aria-label="Move task {{ task.name if task else '' }} up"></button>
+                                        </form>
+                                        <form action="{{ url_for('jobs.jobs_move_task_down', job_id=job.id, task_id=job_task.task_id) }}" method="POST" class="d-inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" class="fa fa-arrow-down btn btn-success btn-sm" title="Move Down" aria-label="Move task {{ task.name if task else '' }} down"></button>
+                                        </form>
+                                        <form action="{{ url_for('jobs.jobs_remove_task', job_id=job.id, task_id=job_task.task_id) }}" method="POST" class="d-inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" class="fa fa-trash btn btn-danger btn-sm" title="Delete" aria-label="Remove task {{ task.name if task else '' }} from job {{ job.name }}"></button>
+                                        </form>
+                                    {% else %}
+                                        <span class="text-muted">Read-only</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                        {% if not job_tasks %}
+                        <tr>
+                            <td colspan="3" class="text-muted">No tasks assigned yet.</td>
+                        </tr>
+                        {% endif %}
+                        {% if can_edit_job %}
+                        <tr>
+                            <td></td>
+                            <td></td>
+                            <td>
+                                <div class="btn-group flex-wrap">
+                                    <div class="dropdown show">
+                                        <a class="btn btn-primary dropdown-toggle" href="#" role="button" id="builderTaskDropdown" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                                            Add Task
+                                        </a>
+                                        <div class="dropdown-menu hc-scroll-dropdown" aria-labelledby="builderTaskDropdown">
+                                            {% for task in available_tasks %}
+                                                <form action="{{ url_for('jobs.jobs_assigned_task', job_id=job.id, task_id=task.id) }}" method="POST" class="m-0">
+                                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                    <button type="submit" class="dropdown-item btn btn-link text-left">{{ task.name }}</button>
+                                                </form>
+                                            {% endfor %}
+                                            {% if not available_tasks %}
+                                                <span class="dropdown-item text-muted">No unassigned tasks available</span>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                    {% if current_user.admin %}
+                                    <a class="btn btn-outline-primary ml-2" href="{{ url_for('tasks.tasks_add', next=url_for('jobs.jobs_builder', job_id=job.id, tab='tasks')) }}" role="button">Add New Task</a>
+                                    {% endif %}
+                                    <div class="dropdown show pl-2">
+                                        <a class="btn btn-primary dropdown-toggle" href="#" role="button" id="builderTaskGroupDropdown" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                                            Add Task Group
+                                        </a>
+                                        <div class="dropdown-menu hc-scroll-dropdown" aria-labelledby="builderTaskGroupDropdown">
+                                            {% for task_group in task_groups %}
+                                                <form action="{{ url_for('jobs.jobs_assign_task_group', job_id=job.id, task_group_id=task_group.id) }}" method="POST" class="m-0">
+                                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                    <button type="submit" class="dropdown-item btn btn-link text-left">{{ task_group.name }}</button>
+                                                </form>
+                                            {% endfor %}
+                                            {% if not task_groups %}
+                                                <span class="dropdown-item text-muted">No task groups available</span>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                    {% if job_tasks %}
+                                    <form action="{{ url_for('jobs.jobs_remove_all_tasks', job_id=job.id) }}" method="POST" class="d-inline pl-2" data-confirm="Delete all assigned tasks for {{ job.name }}?">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="btn btn-danger">Remove All</button>
+                                    </form>
+                                    {% endif %}
+                                </div>
+                            </td>
+                        </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+
+                {% if can_edit_job %}
+                <div class="hc-form-actions">
+                    <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_builder', job_id=job.id, tab='hashes') }}" role="button">Back to Hashes</a>
+                    <div class="hc-form-actions-right">
+                        {% if selected_hashfile and job_tasks %}
+                            <a class="btn btn-primary" href="{{ url_for('jobs.jobs_summary', job_id=job.id) }}" role="button">Create</a>
+                        {% else %}
+                            <button class="btn btn-primary" type="button" disabled>Create</button>
+                        {% endif %}
+                    </div>
+                </div>
+                {% if not selected_hashfile or not job_tasks %}
+                <p class="text-muted mb-0">
+                    Choose a hashfile and assign at least one task before creating the job.
+                </p>
+                {% endif %}
+                {% endif %}
+            {% endif %}
+        </div>
+    </section>
+</div>
+{% endblock content %}

@@ -334,10 +334,12 @@
                         return;
                     }
 
+                    var errorPayload = parseJsonResponse(xhr);
                     restoreSubmitButtons();
                     setUploadStatus(form, {
-                        title: 'Upload failed.',
-                        detail: 'The server returned an unexpected response. Please retry.',
+                        title: (errorPayload && errorPayload.title) || 'Upload failed.',
+                        detail: (errorPayload && (errorPayload.detail || errorPayload.error))
+                            || 'The server returned an unexpected response. Please retry.',
                         percent: 100,
                         label: 'Failed',
                         error: true,

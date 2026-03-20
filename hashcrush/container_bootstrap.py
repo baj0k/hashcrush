@@ -17,7 +17,7 @@ from sqlalchemy import create_engine
 
 from hashcrush import create_app
 from hashcrush.db_upgrade import upgrade_database
-from hashcrush.models import Settings, Users, db
+from hashcrush.models import Users, db
 from hashcrush.setup import add_default_tasks, default_tasks_need_added
 from hashcrush.users.routes import bcrypt
 from hashcrush.utils.utils import migrate_sensitive_storage_rows
@@ -142,10 +142,6 @@ def ensure_seed_data(admin_username: str, admin_password: str) -> None:
         raise RuntimeError(
             "HASHCRUSH_INITIAL_ADMIN_PASSWORD must be at least 14 characters long."
         )
-
-    if db.session.execute(select(Settings)).scalars().first() is None:
-        db.session.add(Settings())
-        db.session.commit()
 
     has_admin = db.session.execute(
         select(Users).where(Users.admin.is_(True)).limit(1)

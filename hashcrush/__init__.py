@@ -5,9 +5,10 @@ import ssl
 import tempfile
 from logging.config import dictConfig as loggingDictConfig
 
-from flask import Flask
+from flask import Flask, jsonify, request
 from flask.testing import FlaskClient
 from flask_wtf.csrf import CSRFProtect, generate_csrf
+from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 __version__ = "2.0"
@@ -87,9 +88,22 @@ def _validate_storage_directories(storage_root: str | None) -> None:
                 f"or create it manually: {storage_dir}"
             )
         if not os.access(storage_dir, os.W_OK):
-            raise RuntimeError(
-                f"Persistent storage directory is not writable by the current process: {storage_dir}"
-            )
+                raise RuntimeError(
+                    f"Persistent storage directory is not writable by the current process: {storage_dir}"
+                )
+
+
+def _format_bytes(size_bytes: int) -> str:
+    """Render a byte count into a compact human-readable string."""
+    units = ["bytes", "KB", "MB", "GB", "TB"]
+    value = float(max(size_bytes, 0))
+    unit_index = 0
+    while value >= 1024 and unit_index < len(units) - 1:
+        value /= 1024
+        unit_index += 1
+    if unit_index == 0:
+        return f"{int(value)} {units[unit_index]}"
+    return f"{value:.2f} {units[unit_index]}"
 
 
 def _ensure_database_schema(app: Flask) -> None:
@@ -247,8 +261,6 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
             app.wsgi_app,
             x_for=1,
             x_proto=1,
-            x_host=1,
-            x_port=1,
         )
         app.config.setdefault("PREFERRED_URL_SCHEME", "https")
     if app.config.get("TESTING"):
@@ -269,6 +281,28 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
 
     csrf = CSRFProtect()
     csrf.init_app(app)
+
+    @app.errorhandler(RequestEntityTooLarge)
+    def handle_request_entity_too_large(error):
+        limit = app.config.get("MAX_CONTENT_LENGTH")
+        detail = "Uploaded payload exceeds the configured size limit."
+        if isinstance(limit, int) and limit > 0:
+            detail = (
+                "Uploaded payload exceeds the configured size limit "
+                f"of {_format_bytes(limit)}."
+            )
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return (
+                jsonify(
+                    {
+                        "title": "Upload too large.",
+                        "detail": detail,
+                        "error": detail,
+                    }
+                ),
+                413,
+            )
+        return detail, 413
 
     from hashcrush.users.routes import bcrypt
 

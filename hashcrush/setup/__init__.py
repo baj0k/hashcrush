@@ -3,7 +3,7 @@ import json
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import func, select
 
-from hashcrush.models import Settings, TaskGroups, Tasks, Users
+from hashcrush.models import TaskGroups, Tasks, Users
 
 
 def default_tasks_need_added(db: SQLAlchemy) -> bool:
@@ -44,8 +44,3 @@ def admin_user_needs_added(db: SQLAlchemy) -> bool:
         db.session.scalar(select(func.count()).select_from(Users).filter_by(admin=True))
         or 0
     ) <= 0
-
-
-def settings_needs_added(db: SQLAlchemy) -> bool:
-    settings = db.session.execute(select(Settings)).scalars().first()
-    return settings is None

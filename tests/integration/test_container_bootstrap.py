@@ -59,7 +59,7 @@ def test_container_bootstrap_seeds_schema_admin_and_default_tasks(tmp_path, monk
         "hashcrush.container_bootstrap.upgrade_database",
         lambda dry_run=False: UpgradeResult(
             starting_version=0,
-            target_version=6,
+            target_version=7,
             applied_steps=(),
             initialized_empty_schema=True,
             dry_run=dry_run,
@@ -79,7 +79,6 @@ def test_container_bootstrap_seeds_schema_admin_and_default_tasks(tmp_path, monk
     with app.app_context():
         assert target_version >= 1
         assert migrated_rows == 0
-        assert _count_rows(Settings) == 1
         assert _count_rows(Users, admin=True) == 1
         assert _count_rows(Tasks) >= 10
 
@@ -103,7 +102,7 @@ def test_container_bootstrap_is_idempotent_for_existing_admin_and_tasks(
         "hashcrush.container_bootstrap.upgrade_database",
         lambda dry_run=False: UpgradeResult(
             starting_version=0,
-            target_version=6,
+            target_version=7,
             applied_steps=(),
             initialized_empty_schema=True,
             dry_run=dry_run,
@@ -118,6 +117,5 @@ def test_container_bootstrap_is_idempotent_for_existing_admin_and_tasks(
     bootstrap_instance(app, "admin", "ContainerAdminPassword!2026")
 
     with app.app_context():
-        assert _count_rows(Settings) == 1
         assert _count_rows(Users, admin=True) == 1
         assert _count_rows(TaskGroups, name="maskmode 1-10") == 1

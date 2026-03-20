@@ -244,7 +244,6 @@ def test_postgres_backup_restore_roundtrip(tmp_path):
             decode_username_from_storage,
         )
 
-        assert _count_rows(Settings) == 1
         assert _count_rows(Users) == 1
         assert _count_rows(Domains) == 1
         assert _count_rows(Hashfiles) == 1
