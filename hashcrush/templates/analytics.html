@@ -2,7 +2,7 @@
 {% block header %}
 <div class="hc-page-header">
     <h1>Analytics</h1>
-    <p class="hc-page-intro">Review recovered account, hash, and password patterns across the shared dataset.</p>
+    <p class="hc-page-intro">Review observed password exposure and recovered-password quality across the shared domain dataset.</p>
 </div>
 {% endblock header %}
 {% block content %}
@@ -62,11 +62,11 @@
                     <button class="dropdown-item" type="button" data-chart-download-all>All Charts</button>
                     <div class="dropdown-divider"></div>
                     <button class="dropdown-item" type="button" data-chart-download="recovered_accounts">Recovered Accounts</button>
-                    <button class="dropdown-item" type="button" data-chart-download="password_complexity">Password Complexity</button>
+                    <button class="dropdown-item" type="button" data-chart-download="password_quality">Recovered Password Quality</button>
                     <button class="dropdown-item" type="button" data-chart-download="recovered_hashes">Recovered Hashes</button>
+                    <button class="dropdown-item" type="button" data-chart-download="password_reuse">Password Reuse</button>
                     <button class="dropdown-item" type="button" data-chart-download="composition_makeup">Composition Makeup</button>
                     <button class="dropdown-item" type="button" data-chart-download="passwords_count_len">Passwords Count by Length</button>
-                    <button class="dropdown-item" type="button" data-chart-download="top_10_passwords">Top 10 Passwords</button>
                 </div>
             </div>
         </div>
@@ -76,12 +76,11 @@
 
 <div class="alert alert-info mb-4" role="alert">
     <h6 class="mb-2">Analytics Definitions</h6>
-    <p class="mb-2">All metrics are scoped by the selected Domain and Hashfile filters.</p>
     <ul class="mb-0">
-        <li><strong>Recovered Accounts</strong> counts account records (rows linked through <code>hashfile_hashes</code>). Recovered % = recovered / (recovered + unrecovered) * 100.</li>
-        <li><strong>Recovered Hashes</strong> uses unique values: recovered side is distinct recovered plaintexts, unrecovered side is distinct unrecovered ciphertexts.</li>
-        <li><strong>Password Complexity</strong> marks a recovered password as meeting complexity when length is at least 8 and at least 3 of 4 character classes exist: lower, upper, digit, symbol.</li>
-        <li><strong>Composition Makeup</strong> is derived from recovered passwords only and groups patterns using <code>?l</code>, <code>?u</code>, <code>?d</code>, and <code>?s</code>. The chart shows the top 4 groups and rolls up the rest into <em>Other</em>.</li>
+        <li><strong>Recovered Accounts</strong> counts scoped account rows linked through <code>hashfile_hashes</code>.</li>
+        <li><strong>Recovered Password Quality</strong> is calculated from recovered passwords only. A password meets the current baseline when length is at least 8 and at least 3 of 4 character classes are present: lower, upper, digit, symbol.</li>
+        <li><strong>Password Reuse</strong> measures recovered account rows that share the same recovered password within the selected scope.</li>
+        <li><strong>Domain Posture Comparison</strong> ranks shared domains using observed weak-password rate, reuse rate, and password-equals-username findings from recovered accounts only.</li>
     </ul>
 </div>
 
@@ -90,6 +89,64 @@
         Charts require JavaScript to render and download.
     </div>
 </noscript>
+
+<div class="card hc-chart-card mb-4">
+    <div class="card-header">Key Findings</div>
+    <div class="card-body">
+        <ul class="hc-findings-list mb-0">
+            {% for finding in findings %}
+            <li>{{ finding }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+</div>
+
+{% if show_domain_comparison %}
+<div class="card hc-chart-card mb-4">
+    <div class="card-header">Domain Posture Comparison</div>
+    <div class="card-body">
+        <p class="text-muted hc-table-note">Observed weakness, reuse, and username-match metrics below are computed from recovered passwords only.</p>
+        <div class="table-responsive">
+            <table class="table table-sm mb-0">
+                <thead>
+                    <tr>
+                        <th scope="col">Domain</th>
+                        <th scope="col">Accounts</th>
+                        <th scope="col">Recovered</th>
+                        <th scope="col">Weak</th>
+                        <th scope="col">Reuse</th>
+                        <th scope="col">User = Pass</th>
+                        <th scope="col">Median Len</th>
+                        <th scope="col">Observed Risk</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in domain_posture_rows %}
+                    <tr{% if row.selected %} class="hc-analytics-row-selected"{% endif %}>
+                        <td>
+                            <a href="{{ url_for('analytics.get_analytics', domain_id=row.id) }}">{{ row.name }}</a>
+                        </td>
+                        <td>{{ row.total_accounts }}</td>
+                        <td>{{ row.recovered_percent_display }}</td>
+                        <td>{{ row.weak_recovered_percent_display }}</td>
+                        <td>{{ row.reused_recovered_percent_display }}</td>
+                        <td>{{ row.username_match_count }}</td>
+                        <td>{{ row.median_length }}</td>
+                        <td>
+                            <span class="hc-risk-chip hc-risk-chip--{{ row.risk_band | lower }}">{{ row.risk_band }}</span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% elif hashfile_id %}
+<div class="alert alert-secondary mb-4" role="alert">
+    Domain comparison is hidden while a single hashfile is selected.
+</div>
+{% endif %}
 
 <div class="hc-chart-grid hc-chart-grid--two">
     <div class="card hc-chart-card">
@@ -110,15 +167,15 @@
 
     <div class="card hc-chart-card">
         <div class="card-header hc-card-header-actions">
-            <span>Password Complexity</span>
+            <span>Recovered Password Quality</span>
             {% if current_user.admin %}
-            <button type="button" class="btn btn-link hc-chart-download" data-chart-download="password_complexity" aria-label="Download Password Complexity chart" title="Download Chart">
+            <button type="button" class="btn btn-link hc-chart-download" data-chart-download="password_quality" aria-label="Download Recovered Password Quality chart" title="Download Chart">
                 <i class="fa fa-download" aria-hidden="true"></i>
             </button>
             {% endif %}
         </div>
         <div class="card-body">
-            <div class="hc-chart-slot" data-chart-slot="password_complexity">
+            <div class="hc-chart-slot" data-chart-slot="password_quality">
                 <p class="text-muted mb-0">Preparing chart...</p>
             </div>
         </div>
@@ -142,42 +199,66 @@
 
     <div class="card hc-chart-card">
         <div class="card-header hc-card-header-actions">
-            <span>Composition Makeup</span>
+            <span>Password Reuse</span>
             {% if current_user.admin %}
-            <button type="button" class="btn btn-link hc-chart-download" data-chart-download="composition_makeup" aria-label="Download Composition Makeup chart" title="Download Chart">
+            <button type="button" class="btn btn-link hc-chart-download" data-chart-download="password_reuse" aria-label="Download Password Reuse chart" title="Download Chart">
                 <i class="fa fa-download" aria-hidden="true"></i>
             </button>
             {% endif %}
         </div>
         <div class="card-body">
-            <div class="hc-chart-slot" data-chart-slot="composition_makeup">
+            <div class="hc-chart-slot" data-chart-slot="password_reuse">
                 <p class="text-muted mb-0">Preparing chart...</p>
             </div>
         </div>
     </div>
 </div>
 
-<div class="hc-chart-grid">
+<div class="hc-chart-grid hc-chart-grid--two">
     <div class="card hc-chart-card">
-        <div class="card-header">General Stats</div>
+        <div class="card-header">Scope Stats</div>
         <div class="card-body">
-            <table class="table">
+            <table class="table mb-0">
                 <tbody>
                     <tr>
-                        <td>Total Accounts:</td>
+                        <td>Total Accounts</td>
                         <td>{{ total_accounts }}</td>
                     </tr>
                     <tr>
-                        <td>Total Unique Hashes:</td>
+                        <td>Total Unique Hashes</td>
                         <td>{{ total_unique_hashes }}</td>
                     </tr>
                     <tr>
-                        <td>Total Runtime:</td>
+                        <td>Total Runtime</td>
                         <td>{{ runtime_display }}</td>
+                    </tr>
+                    <tr>
+                        <td>Recovered Accounts</td>
+                        <td>{{ scope_posture.recovered_accounts }} ({{ scope_posture.recovered_percent }})</td>
+                    </tr>
+                    <tr>
+                        <td>Weak Recovered Passwords</td>
+                        <td>{{ scope_posture.weak_recovered_count }} ({{ scope_posture.weak_recovered_percent }})</td>
+                    </tr>
+                    <tr>
+                        <td>Reused Recovered Passwords</td>
+                        <td>{{ scope_posture.reused_recovered_count }} ({{ scope_posture.reused_recovered_percent }})</td>
+                    </tr>
+                    <tr>
+                        <td>Password Equals Username</td>
+                        <td>{{ scope_posture.username_match_count }}</td>
+                    </tr>
+                    <tr>
+                        <td>Median Recovered Length</td>
+                        <td>{{ scope_posture.median_length }}</td>
+                    </tr>
+                    <tr>
+                        <td>Observed Risk</td>
+                        <td><span class="hc-risk-chip hc-risk-chip--{{ scope_posture.risk_band | lower }}">{{ scope_posture.risk_band }}</span></td>
                     </tr>
                     {% if current_user.admin %}
                     <tr>
-                        <td>Recovered Export:</td>
+                        <td>Recovered Export</td>
                         <td>
                             <div class="hc-inline-actions">
                                 {% if domain_id %}
@@ -193,7 +274,7 @@
                         </td>
                     </tr>
                     <tr>
-                        <td>Unrecovered Export:</td>
+                        <td>Unrecovered Export</td>
                         <td>
                             <div class="hc-inline-actions">
                                 {% if domain_id %}
@@ -229,18 +310,20 @@
             </div>
         </div>
     </div>
+</div>
 
+<div class="hc-chart-grid hc-chart-grid--two">
     <div class="card hc-chart-card">
         <div class="card-header hc-card-header-actions">
-            <span>Top 10 Passwords</span>
+            <span>Composition Makeup</span>
             {% if current_user.admin %}
-            <button type="button" class="btn btn-link hc-chart-download" data-chart-download="top_10_passwords" aria-label="Download Top 10 Passwords chart" title="Download Chart">
+            <button type="button" class="btn btn-link hc-chart-download" data-chart-download="composition_makeup" aria-label="Download Composition Makeup chart" title="Download Chart">
                 <i class="fa fa-download" aria-hidden="true"></i>
             </button>
             {% endif %}
         </div>
         <div class="card-body">
-            <div class="hc-chart-slot hc-chart-slot--wide" data-chart-slot="top_10_passwords">
+            <div class="hc-chart-slot" data-chart-slot="composition_makeup">
                 <p class="text-muted mb-0">Preparing chart...</p>
             </div>
         </div>
@@ -250,7 +333,7 @@
         <div class="card-header">Top 10 Masks</div>
         <div class="card-body">
             {% if fig7_values %}
-            <table class="table">
+            <table class="table mb-0">
                 <thead>
                     <tr>
                         <th scope="col">Mask</th>
@@ -273,22 +356,67 @@
             {% endif %}
         </div>
     </div>
+</div>
+
+{% if current_user.admin %}
+<div class="hc-chart-grid hc-chart-grid--two">
+    <div class="card hc-chart-card">
+        <div class="card-header">Most Reused Recovered Passwords</div>
+        <div class="card-body">
+            {% if reused_password_rows %}
+            <table class="table mb-0">
+                <thead>
+                    <tr>
+                        <th scope="col">Password</th>
+                        <th scope="col">Recovered Accounts</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for password, count in reused_password_rows %}
+                    <tr>
+                        <td>{{ password }}</td>
+                        <td>{{ count }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="text-muted mb-0">No recovered passwords are currently reused in this scope.</p>
+            {% endif %}
+        </div>
+    </div>
 
     <div class="card hc-chart-card">
         <div class="card-header">Accounts Where Password Matches Username</div>
         <div class="card-body">
-            {% if fig8_table %}
-            <div class="hc-pill-grid">
-                {% for entry in fig8_table %}
-                <span class="badge badge-secondary">{{ entry }}</span>
-                {% endfor %}
-            </div>
+            {% if username_match_rows %}
+            <table class="table mb-0">
+                <thead>
+                    <tr>
+                        <th scope="col">Value</th>
+                        <th scope="col">Accounts</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for value, count in username_match_rows %}
+                    <tr>
+                        <td>{{ value }}</td>
+                        <td>{{ count }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
             {% else %}
-            <p class="text-muted mb-0">No recovered accounts in this scope currently match their username.</p>
+            <p class="text-muted mb-0">No recovered accounts in this scope currently match the username.</p>
             {% endif %}
         </div>
     </div>
 </div>
+{% else %}
+<div class="alert alert-secondary mt-4" role="alert">
+    Sensitive recovered-password detail is limited to admin accounts. The posture metrics above remain visible to all authenticated users.
+</div>
+{% endif %}
 
 <script id="analytics-chart-data" type="application/json">{{ analytics_chart_data | tojson }}</script>
 {% endblock content %}

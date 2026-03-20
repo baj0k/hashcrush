@@ -267,6 +267,59 @@ main.container {
     text-decoration: none;
 }
 
+.hc-findings-list {
+    margin: 0;
+    padding-left: 1.25rem;
+}
+
+.hc-findings-list li + li {
+    margin-top: 0.4rem;
+}
+
+.hc-table-note {
+    margin-bottom: 0.75rem;
+}
+
+.hc-analytics-row-selected {
+    background: rgba(172, 161, 103, 0.08);
+}
+
+.hc-risk-chip {
+    display: inline-block;
+    min-width: 5.25rem;
+    padding: 0.2rem 0.6rem;
+    border: 1px solid var(--hc-border-strong);
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    text-align: center;
+    letter-spacing: 0.02em;
+}
+
+.hc-risk-chip--high {
+    color: #d1a6a0;
+    background: rgba(147, 89, 83, 0.18);
+    border-color: rgba(147, 89, 83, 0.45);
+}
+
+.hc-risk-chip--medium {
+    color: #d7c38d;
+    background: rgba(170, 132, 80, 0.16);
+    border-color: rgba(170, 132, 80, 0.42);
+}
+
+.hc-risk-chip--low {
+    color: #b7c895;
+    background: rgba(120, 144, 86, 0.16);
+    border-color: rgba(120, 144, 86, 0.4);
+}
+
+.hc-risk-chip--unknown {
+    color: var(--hc-text);
+    background: rgba(89, 89, 80, 0.22);
+    border-color: rgba(127, 127, 114, 0.45);
+}
+
 .hc-search-row {
     display: flex;
     align-items: stretch;

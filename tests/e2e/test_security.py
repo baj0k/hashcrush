@@ -91,7 +91,7 @@ def test_job_idor_access_denied_for_other_user(
 
     page.get_by_role("link", name="Jobs").click()
     page.get_by_role("link", name="Create a New Job").click()
-    expect(page.get_by_role("heading", name="Create a new Job")).to_be_visible()
+    expect(page.get_by_role("heading", name="Create a New Job")).to_be_visible()
 
     page.get_by_label("Job Name").fill(unique_name("E2E IDOR Job"))
     select_domain(page, e2e_fixture_data["domain_id"])

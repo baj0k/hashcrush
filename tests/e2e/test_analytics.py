@@ -9,8 +9,8 @@ def test_analytics_charts_render_and_download(page, live_server, login):
 
     expect(page.get_by_role("heading", name="Analytics", exact=True)).to_be_visible()
     page.locator("[data-chart-slot='recovered_accounts'] svg").wait_for()
-    page.locator("[data-chart-slot='password_complexity'] svg").wait_for()
-    page.locator("[data-chart-slot='top_10_passwords'] svg").wait_for()
+    page.locator("[data-chart-slot='password_quality'] svg").wait_for()
+    page.locator("[data-chart-slot='password_reuse'] svg").wait_for()
 
     with page.expect_download() as download_info:
         page.get_by_role("button", name="Download Recovered Accounts chart").click()
@@ -28,8 +28,8 @@ def test_external_analytics_charts_render_and_download(
 
     expect(page.get_by_role("heading", name="Analytics", exact=True)).to_be_visible()
     page.locator("[data-chart-slot='recovered_accounts'] svg").wait_for()
-    page.locator("[data-chart-slot='password_complexity'] svg").wait_for()
-    page.locator("[data-chart-slot='top_10_passwords'] svg").wait_for()
+    page.locator("[data-chart-slot='password_quality'] svg").wait_for()
+    page.locator("[data-chart-slot='password_reuse'] svg").wait_for()
 
     with page.expect_download() as download_info:
         page.get_by_role("button", name="Download Recovered Accounts chart").click()

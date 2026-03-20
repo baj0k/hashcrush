@@ -356,7 +356,7 @@ def ensure_external_setup(request):
     page.goto(f"{external_live_server}/login", wait_until="domcontentloaded")
     if "/setup/" in page.url:
         pytest.skip(
-            "Live host is in a removed setup-web flow state; rerun "
+            "Live host is in a legacy removed setup flow state; rerun "
             "`python3 ./hashcrush.py setup` on the current code before external smoke tests."
         )
 

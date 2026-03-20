@@ -1,6 +1,6 @@
 """Flask routes to handle Analytics."""
 import io
-from collections import Counter
+from collections import Counter, defaultdict
 
 from flask import (
     Blueprint,
@@ -80,7 +80,7 @@ def _build_cracked_password_metrics(cracked_rows: list[tuple[str | None, str | N
     length_counts: Counter[int] = Counter()
     password_counts: Counter[str] = Counter()
     mask_counts: Counter[str] = Counter()
-    username_matches: list[str] = []
+    username_match_counts: Counter[str] = Counter()
     blank_label = 'Blank (unset)'
 
     for plaintext_value, username_value in cracked_rows:
@@ -113,16 +113,17 @@ def _build_cracked_password_metrics(cracked_rows: list[tuple[str | None, str | N
 
         decoded_username = _decode_username(username_value)
         if plaintext_value and decoded_username is not None and decoded_plaintext == decoded_username:
-            username_matches.append(decoded_plaintext)
+            username_match_counts[decoded_plaintext] += 1
 
     return {
+        'recovered_accounts': len(cracked_rows),
         'complexity_fails': complexity_fails,
         'complexity_meets': complexity_meets,
         'composition_counts': composition_counts,
         'length_counts': length_counts,
         'password_counts': password_counts,
         'mask_counts': mask_counts,
-        'username_matches': username_matches,
+        'username_match_counts': username_match_counts,
         'blank_label': blank_label,
     }
 
@@ -195,6 +196,258 @@ def _scoped_hash_rows_stmt(scoped_hashfile_ids: list[int]):
     )
 
 
+def _ratio(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round((numerator / denominator) * 100, 1)
+
+
+def _format_percent(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    formatted = f"{value:.1f}%"
+    return formatted.replace(".0%", "%")
+
+
+def _median_from_counts(length_counts: Counter[int]) -> float | None:
+    total = sum(length_counts.values())
+    if total <= 0:
+        return None
+
+    lower_target = (total - 1) // 2
+    upper_target = total // 2
+    lower_value = None
+    seen = 0
+
+    for length in sorted(length_counts):
+        next_seen = seen + length_counts[length]
+        if lower_value is None and lower_target < next_seen:
+            lower_value = length
+        if upper_target < next_seen:
+            upper_value = length
+            if lower_value is None:
+                lower_value = upper_value
+            if lower_value == upper_value:
+                return float(upper_value)
+            return round((lower_value + upper_value) / 2, 1)
+        seen = next_seen
+
+    return None
+
+
+def _posture_risk_band(
+    weak_recovered_percent: float,
+    reused_recovered_percent: float,
+    username_match_count: int,
+    recovered_accounts: int,
+) -> tuple[str, int]:
+    if recovered_accounts <= 0:
+        return ("Unknown", -1)
+
+    score = 0
+    if weak_recovered_percent >= 60:
+        score += 3
+    elif weak_recovered_percent >= 35:
+        score += 2
+    elif weak_recovered_percent >= 15:
+        score += 1
+
+    if reused_recovered_percent >= 40:
+        score += 3
+    elif reused_recovered_percent >= 20:
+        score += 2
+    elif reused_recovered_percent >= 10:
+        score += 1
+
+    if username_match_count >= 10:
+        score += 3
+    elif username_match_count >= 1:
+        score += 2
+
+    if score >= 6:
+        return ("High", score)
+    if score >= 3:
+        return ("Medium", score)
+    return ("Low", score)
+
+
+def _build_posture_summary(total_accounts: int, cracked_metrics: dict[str, object]) -> dict[str, object]:
+    recovered_accounts = int(cracked_metrics['recovered_accounts'])
+    weak_recovered_count = int(cracked_metrics['complexity_fails'])
+    reused_recovered_count = int(
+        sum(
+            count
+            for count in cracked_metrics['password_counts'].values()
+            if count > 1
+        )
+    )
+    reused_password_count = int(
+        sum(
+            1
+            for count in cracked_metrics['password_counts'].values()
+            if count > 1
+        )
+    )
+    username_match_count = int(sum(cracked_metrics['username_match_counts'].values()))
+    weak_recovered_percent = _ratio(weak_recovered_count, recovered_accounts)
+    reused_recovered_percent = _ratio(reused_recovered_count, recovered_accounts)
+    recovered_percent = _ratio(recovered_accounts, total_accounts)
+    median_length = _median_from_counts(cracked_metrics['length_counts'])
+    average_length = None
+    if recovered_accounts > 0:
+        average_length = round(
+            sum(length * count for length, count in cracked_metrics['length_counts'].items())
+            / recovered_accounts,
+            1,
+        )
+    top_password_count = max(cracked_metrics['password_counts'].values(), default=0)
+    risk_band, risk_score = _posture_risk_band(
+        weak_recovered_percent,
+        reused_recovered_percent,
+        username_match_count,
+        recovered_accounts,
+    )
+    return {
+        'total_accounts': total_accounts,
+        'recovered_accounts': recovered_accounts,
+        'unrecovered_accounts': max(total_accounts - recovered_accounts, 0),
+        'recovered_percent': recovered_percent,
+        'weak_recovered_count': weak_recovered_count,
+        'weak_recovered_percent': weak_recovered_percent,
+        'reused_recovered_count': reused_recovered_count,
+        'reused_recovered_percent': reused_recovered_percent,
+        'reused_password_count': reused_password_count,
+        'username_match_count': username_match_count,
+        'username_match_percent': _ratio(username_match_count, recovered_accounts),
+        'median_length': median_length,
+        'average_length': average_length,
+        'top_password_count': top_password_count,
+        'risk_band': risk_band,
+        'risk_score': risk_score,
+    }
+
+
+def _format_length_value(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    if float(value).is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _build_scope_findings(posture_summary: dict[str, object]) -> list[str]:
+    total_accounts = int(posture_summary['total_accounts'])
+    recovered_accounts = int(posture_summary['recovered_accounts'])
+    weak_recovered_count = int(posture_summary['weak_recovered_count'])
+    reused_recovered_count = int(posture_summary['reused_recovered_count'])
+    username_match_count = int(posture_summary['username_match_count'])
+    findings: list[str] = []
+
+    if total_accounts <= 0:
+        return ["No accounts are available in the selected scope yet."]
+
+    if recovered_accounts <= 0:
+        return [
+            "No passwords have been recovered in this scope yet, so quality and reuse analysis is not available.",
+            f"{format_display(total_accounts)} account row(s) remain unrecovered in this scope.",
+        ]
+
+    findings.append(
+        f"{_format_percent(posture_summary['recovered_percent'])} of account rows in this scope are recovered."
+    )
+    if weak_recovered_count > 0:
+        findings.append(
+            f"{_format_percent(posture_summary['weak_recovered_percent'])} of recovered accounts fail the current quality baseline."
+        )
+    else:
+        findings.append("All recovered passwords in this scope currently meet the quality baseline.")
+
+    if reused_recovered_count > 0:
+        findings.append(
+            f"{_format_percent(posture_summary['reused_recovered_percent'])} of recovered accounts reuse a password in this scope."
+        )
+    else:
+        findings.append("No recovered passwords are currently reused in this scope.")
+
+    if username_match_count > 0:
+        findings.append(
+            f"{format_display(username_match_count)} recovered account(s) use a password that matches the username."
+        )
+    else:
+        findings.append("No recovered accounts in this scope currently have password equal to username.")
+
+    return findings[:4]
+
+
+def _build_domain_posture_rows(domain_rows: list[Domains], selected_domain_id: int | None) -> list[dict[str, object]]:
+    domain_ids = [domain.id for domain in domain_rows]
+    if not domain_ids:
+        return []
+
+    status_rows = db.session.execute(
+        select(Hashfiles.domain_id, Hashes.cracked, func.count(Hashes.id))
+        .select_from(Hashes)
+        .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+        .join(Hashfiles, Hashfiles.id == HashfileHashes.hashfile_id)
+        .where(Hashfiles.domain_id.in_(domain_ids))
+        .group_by(Hashfiles.domain_id, Hashes.cracked)
+    ).all()
+    status_counts: dict[int, dict[bool, int]] = defaultdict(lambda: {True: 0, False: 0})
+    for domain_id, cracked, count in status_rows:
+        status_counts[int(domain_id)][bool(cracked)] = int(count)
+
+    cracked_rows_by_domain: dict[int, list[tuple[str | None, str | None]]] = defaultdict(list)
+    cracked_rows = db.session.execute(
+        select(Hashfiles.domain_id, Hashes.plaintext, HashfileHashes.username)
+        .select_from(Hashes)
+        .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+        .join(Hashfiles, Hashfiles.id == HashfileHashes.hashfile_id)
+        .where(Hashfiles.domain_id.in_(domain_ids))
+        .where(Hashes.cracked.is_(True))
+    ).all()
+    for domain_id, plaintext, username in cracked_rows:
+        cracked_rows_by_domain[int(domain_id)].append((plaintext, username))
+
+    comparison_rows: list[dict[str, object]] = []
+    for domain in domain_rows:
+        counts = status_counts.get(domain.id, {True: 0, False: 0})
+        total_accounts = int(counts.get(True, 0)) + int(counts.get(False, 0))
+        cracked_metrics = _build_cracked_password_metrics(
+            cracked_rows_by_domain.get(domain.id, [])
+        )
+        posture_summary = _build_posture_summary(total_accounts, cracked_metrics)
+        comparison_rows.append(
+            {
+                'id': domain.id,
+                'name': domain.name,
+                'selected': domain.id == selected_domain_id,
+                'total_accounts': total_accounts,
+                'recovered_accounts': posture_summary['recovered_accounts'],
+                'recovered_percent': posture_summary['recovered_percent'],
+                'recovered_percent_display': _format_percent(posture_summary['recovered_percent']),
+                'weak_recovered_percent': posture_summary['weak_recovered_percent'],
+                'weak_recovered_percent_display': _format_percent(posture_summary['weak_recovered_percent']),
+                'reused_recovered_percent': posture_summary['reused_recovered_percent'],
+                'reused_recovered_percent_display': _format_percent(posture_summary['reused_recovered_percent']),
+                'username_match_count': posture_summary['username_match_count'],
+                'median_length': _format_length_value(posture_summary['median_length']),
+                'risk_band': posture_summary['risk_band'],
+                'risk_score': posture_summary['risk_score'],
+            }
+        )
+
+    risk_order = {'High': 3, 'Medium': 2, 'Low': 1, 'Unknown': 0}
+    comparison_rows.sort(
+        key=lambda row: (
+            -risk_order.get(str(row['risk_band']), 0),
+            -float(row['weak_recovered_percent']),
+            -float(row['reused_recovered_percent']),
+            str(row['name']).lower(),
+        )
+    )
+    return comparison_rows
+
+
 @analytics.route('/analytics', methods=['GET'])
 @login_required
 def get_analytics():
@@ -228,6 +481,11 @@ def get_analytics():
     selected_domain_name = next((domain.name for domain in domain_rows if domain.id == domain_id), None)
     selected_hashfile_name = next((hashfile.name for hashfile in hashfile_rows if hashfile.id == hashfile_id), None)
     filter_hashfiles = [hashfile for hashfile in hashfile_rows if domain_id is None or hashfile.domain_id == domain_id]
+    domain_posture_rows = (
+        _build_domain_posture_rows(domain_rows, domain_id)
+        if hashfile_id is None
+        else []
+    )
 
     if not scoped_hashfile_ids:
         return render_template(
@@ -235,15 +493,32 @@ def get_analytics():
             title='analytics',
             analytics_chart_data={
                 'recovered_accounts': {'labels': [], 'values': [], 'center_text': ''},
-                'password_complexity': {'labels': [], 'values': []},
+                'password_quality': {'labels': [], 'values': []},
                 'recovered_hashes': {'labels': [], 'values': [], 'center_text': ''},
+                'password_reuse': {'labels': [], 'values': []},
                 'composition_makeup': {'labels': [], 'values': []},
                 'passwords_count_len': {'labels': [], 'values': []},
-                'top_10_passwords': {'labels': [], 'values': []},
             },
             fig7_values={},
             fig7_total=0,
-            fig8_table=[],
+            findings=_build_scope_findings(
+                _build_posture_summary(0, _build_cracked_password_metrics([]))
+            ),
+            scope_posture={
+                'recovered_accounts': format_display(0),
+                'recovered_percent': _format_percent(0.0),
+                'weak_recovered_count': format_display(0),
+                'weak_recovered_percent': _format_percent(0.0),
+                'reused_recovered_count': format_display(0),
+                'reused_recovered_percent': _format_percent(0.0),
+                'username_match_count': format_display(0),
+                'median_length': "N/A",
+                'risk_band': "Unknown",
+            },
+            domain_posture_rows=domain_posture_rows,
+            show_domain_comparison=hashfile_id is None and bool(domain_posture_rows),
+            reused_password_rows=[],
+            username_match_rows=[],
             domains=domain_rows,
             hashfiles=hashfile_rows,
             filter_hashfiles=filter_hashfiles,
@@ -277,7 +552,7 @@ def get_analytics():
     fig1_labels = [row[0] for row in fig1_data]
     fig1_values = [row[1] for row in fig1_data]
     fig1_total = fig1_cracked_cnt + fig1_uncracked_cnt
-    fig1_percent = 0 if fig1_total == 0 else [str(round((fig1_cracked_cnt / fig1_total) * 100, 1)) + '%']
+    fig1_percent = _format_percent(_ratio(fig1_cracked_cnt, fig1_total))
 
     cracked_rows = db.session.execute(
         select(Hashes.plaintext, HashfileHashes.username)
@@ -286,17 +561,26 @@ def get_analytics():
         .where(Hashes.cracked.is_(True))
     ).all()
     cracked_metrics = _build_cracked_password_metrics(cracked_rows)
-    fig2_uncracked_cnt = fig1_uncracked_cnt
     fig2_fails_complexity_cnt = int(cracked_metrics['complexity_fails'])
     fig2_meets_complexity_cnt = int(cracked_metrics['complexity_meets'])
 
     fig2_data = [
-        ("Fails Complexity: " + str(format_display(fig2_fails_complexity_cnt)), fig2_fails_complexity_cnt),
-        ("Meets Complexity: " + str(format_display(fig2_meets_complexity_cnt)), fig2_meets_complexity_cnt),
-        ("Unrecovered: " + str(format_display(fig2_uncracked_cnt)), fig2_uncracked_cnt),
+        ("Fails Quality: " + str(format_display(fig2_fails_complexity_cnt)), fig2_fails_complexity_cnt),
+        ("Meets Quality: " + str(format_display(fig2_meets_complexity_cnt)), fig2_meets_complexity_cnt),
     ]
     fig2_labels = [row[0] for row in fig2_data]
     fig2_values = [row[1] for row in fig2_data]
+
+    fig4_reused_cnt = int(
+        sum(count for count in cracked_metrics['password_counts'].values() if count > 1)
+    )
+    fig4_unique_cnt = max(fig1_cracked_cnt - fig4_reused_cnt, 0)
+    fig4_data = [
+        ("Reused: " + str(format_display(fig4_reused_cnt)), fig4_reused_cnt),
+        ("Unique: " + str(format_display(fig4_unique_cnt)), fig4_unique_cnt),
+    ]
+    fig4_labels = [row[0] for row in fig4_data]
+    fig4_values = [row[1] for row in fig4_data]
 
     # Figure 3 (Recovered Hashes)
     fig3_cracked_cnt = int(
@@ -326,7 +610,7 @@ def get_analytics():
     fig3_labels = [row[0] for row in fig3_data]
     fig3_values = [row[1] for row in fig3_data]
     fig3_total = fig3_cracked_cnt + fig3_uncracked_cnt
-    fig3_percent = 0 if fig3_total == 0 else [str(round((fig3_cracked_cnt / fig3_total) * 100, 1)) + '%']
+    fig3_percent = _format_percent(_ratio(fig3_cracked_cnt, fig3_total))
 
     # General Stats Table
     total_runtime = sum(hashfile.runtime or 0 for hashfile in scope['scoped_hashfiles'])
@@ -340,52 +624,52 @@ def get_analytics():
         )
         or 0
     )
-    total_accounts = format_display(total_accounts)
-    total_unique_hashes = format_display(total_unique_hashes)
+    posture_summary = _build_posture_summary(fig1_total, cracked_metrics)
+    total_accounts_display = format_display(total_accounts)
+    total_unique_hashes_display = format_display(total_unique_hashes)
 
-    # Figure 4 (Charset Breakdown)
-    fig4_labels = []
-    fig4_values = []
-    fig4_rows = sorted(
+    # Figure 5 (Charset Breakdown)
+    fig5_labels = []
+    fig5_values = []
+    fig5_rows = sorted(
         cracked_metrics['composition_counts'].items(),
         key=lambda item: (-item[1], item[0]),
     )
     limit = 0
-    fig4_other = 0
-    for label, count in fig4_rows:
+    fig5_other = 0
+    for label, count in fig5_rows:
         if limit <= 3:
-            fig4_labels.append(f"{label}: {format_display(count)}")
-            fig4_values.append(count)
+            fig5_labels.append(f"{label}: {format_display(count)}")
+            fig5_values.append(count)
             limit += 1
         else:
-            fig4_other += count
-    if fig4_other > 0:
-        fig4_labels.append('Other: ' + str(fig4_other))
-        fig4_values.append(fig4_other)
+            fig5_other += count
+    if fig5_other > 0:
+        fig5_labels.append('Other: ' + str(fig5_other))
+        fig5_values.append(fig5_other)
 
-    # Figure 5 (Passwords by Length)
-    fig5_labels = []
-    fig5_values = []
-    for entry in sorted(cracked_metrics['length_counts']):
-        if len(fig5_labels) < 20:
-            fig5_labels.append(entry)
-            fig5_values.append(cracked_metrics['length_counts'][entry])
-        else:
-            break
-
-    # Figure 6 (Top 10 Passwords)
+    # Figure 6 (Passwords by Length)
     fig6_labels = []
     fig6_values = []
-    top_password_rows = sorted(
-        cracked_metrics['password_counts'].items(),
-        key=lambda item: (-item[1], item[0]),
-    )
-    for entry, count in top_password_rows[:10]:
-        if len(fig6_labels) < 10:
+    for entry in sorted(cracked_metrics['length_counts']):
+        if len(fig6_labels) < 20:
             fig6_labels.append(entry)
-            fig6_values.append(count)
+            fig6_values.append(cracked_metrics['length_counts'][entry])
         else:
             break
+
+    reused_password_rows = [
+        (entry, count)
+        for entry, count in sorted(
+            cracked_metrics['password_counts'].items(),
+            key=lambda item: (-item[1], item[0]),
+        )
+        if count > 1
+    ][:10]
+    username_match_rows = sorted(
+        cracked_metrics['username_match_counts'].items(),
+        key=lambda item: (-item[1], item[0]),
+    )[:10]
 
     # Figure 7 (Top 10 Masks)
     fig7_values = {}
@@ -396,8 +680,17 @@ def get_analytics():
         else:
             break
 
-    # Figure 8 (Users where password == username)
-    fig8_table = cracked_metrics['username_matches']
+    scope_posture = {
+        'recovered_accounts': format_display(posture_summary['recovered_accounts']),
+        'recovered_percent': _format_percent(posture_summary['recovered_percent']),
+        'weak_recovered_count': format_display(posture_summary['weak_recovered_count']),
+        'weak_recovered_percent': _format_percent(posture_summary['weak_recovered_percent']),
+        'reused_recovered_count': format_display(posture_summary['reused_recovered_count']),
+        'reused_recovered_percent': _format_percent(posture_summary['reused_recovered_percent']),
+        'username_match_count': format_display(posture_summary['username_match_count']),
+        'median_length': _format_length_value(posture_summary['median_length']),
+        'risk_band': posture_summary['risk_band'],
+    }
 
     return render_template(
         'analytics.html',
@@ -406,33 +699,38 @@ def get_analytics():
             'recovered_accounts': {
                 'labels': fig1_labels,
                 'values': fig1_values,
-                'center_text': fig1_percent[0] if fig1_percent else '',
+                'center_text': fig1_percent,
             },
-            'password_complexity': {
+            'password_quality': {
                 'labels': fig2_labels,
                 'values': fig2_values,
             },
             'recovered_hashes': {
                 'labels': fig3_labels,
                 'values': fig3_values,
-                'center_text': fig3_percent[0] if fig3_percent else '',
+                'center_text': fig3_percent,
             },
-            'composition_makeup': {
+            'password_reuse': {
                 'labels': fig4_labels,
                 'values': fig4_values,
             },
-            'passwords_count_len': {
+            'composition_makeup': {
                 'labels': fig5_labels,
                 'values': fig5_values,
             },
-            'top_10_passwords': {
+            'passwords_count_len': {
                 'labels': fig6_labels,
                 'values': fig6_values,
             },
         },
         fig7_values=fig7_values,
         fig7_total=fig7_total,
-        fig8_table=fig8_table,
+        findings=_build_scope_findings(posture_summary),
+        scope_posture=scope_posture,
+        domain_posture_rows=domain_posture_rows,
+        show_domain_comparison=hashfile_id is None and bool(domain_posture_rows),
+        reused_password_rows=reused_password_rows,
+        username_match_rows=username_match_rows,
         domains=domain_rows,
         hashfiles=hashfile_rows,
         filter_hashfiles=filter_hashfiles,
@@ -442,8 +740,8 @@ def get_analytics():
         selected_hashfile_name=selected_hashfile_name,
         total_runtime=total_runtime,
         runtime_display=_format_runtime_display(total_runtime),
-        total_accounts=total_accounts,
-        total_unique_hashes=total_unique_hashes,
+        total_accounts=total_accounts_display,
+        total_unique_hashes=total_unique_hashes_display,
     )
 
 

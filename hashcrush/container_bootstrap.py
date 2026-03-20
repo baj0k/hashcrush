@@ -9,6 +9,7 @@ from ipaddress import ip_address
 from pathlib import Path
 
 from cryptography import x509
+from cryptography.fernet import InvalidToken
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
@@ -27,6 +28,18 @@ DEFAULT_DB_POLL_SECONDS = 1.0
 DEFAULT_TLS_CERT_DAYS = 825
 DEFAULT_TLS_DNS_NAMES = ("localhost", "nginx", "nginx-test")
 DEFAULT_TLS_IPS = ("127.0.0.1", "::1")
+
+
+def _data_encryption_key_mismatch_message() -> str:
+    """Explain how to recover from an existing volume using a different key."""
+    return (
+        "Existing encrypted application data could not be decrypted with the current "
+        "HASHCRUSH_DATA_ENCRYPTION_KEY. This usually means the PostgreSQL volume "
+        "contains data created with a different key. If you want a fresh environment, "
+        "run `docker compose down -v --remove-orphans` and start again. If you need to "
+        "keep the existing data, restore the original HASHCRUSH_DATA_ENCRYPTION_KEY "
+        "and rerun bootstrap."
+    )
 
 
 def ensure_runtime_and_storage_dirs(
@@ -164,7 +177,10 @@ def bootstrap_instance(app, admin_username: str, admin_password: str) -> tuple[i
     """Upgrade schema, migrate sensitive rows, and seed runtime state."""
     with app.app_context():
         result = upgrade_database(dry_run=False)
-        migrated_rows = migrate_sensitive_storage_rows()
+        try:
+            migrated_rows = migrate_sensitive_storage_rows()
+        except InvalidToken as exc:
+            raise RuntimeError(_data_encryption_key_mismatch_message()) from exc
         ensure_seed_data(admin_username, admin_password)
     return result.target_version, migrated_rows
 

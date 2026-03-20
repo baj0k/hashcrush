@@ -87,8 +87,11 @@ def test_analytics_page_is_global_but_downloads_require_admin():
         analytics_response = client.get(f"/analytics?domain_id={domain.id}")
         assert analytics_response.status_code == 200
         analytics_html = analytics_response.get_data(as_text=True)
-        assert "General Stats" in analytics_html
-        assert "Total Accounts:" in analytics_html
+        assert "Scope Stats" in analytics_html
+        assert "Total Accounts" in analytics_html
+        assert "Domain Posture Comparison" in analytics_html
+        assert "Sensitive recovered-password detail is limited to admin accounts." in analytics_html
+        assert "Most Reused Recovered Passwords" not in analytics_html
         assert "Download Charts" not in analytics_html
         assert "/analytics/download?type=found" not in analytics_html
         assert "/analytics/download?type=left" not in analytics_html
@@ -96,6 +99,42 @@ def test_analytics_page_is_global_but_downloads_require_admin():
         download_response = client.get("/analytics/download?type=found")
         assert download_response.status_code == 302
         assert download_response.headers["Location"].endswith("/analytics")
+
+
+@pytest.mark.security
+def test_analytics_admin_view_shows_reuse_table_and_password_quality_chart():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="AnalyticsAdminDetailDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="analytics-admin-detail.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        reused_one = _seed_hash("reuse-one", cracked=True, plaintext="SharedPass123!")
+        reused_two = _seed_hash("reuse-two", cracked=True, plaintext="SharedPass123!")
+        unique = _seed_hash("unique", cracked=True, plaintext="UniquePass123!")
+        _seed_hashfile_hash(hash_id=reused_one.id, hashfile_id=hashfile.id, username="alice")
+        _seed_hashfile_hash(hash_id=reused_two.id, hashfile_id=hashfile.id, username="bob")
+        _seed_hashfile_hash(hash_id=unique.id, hashfile_id=hashfile.id, username="charlie")
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get(f"/analytics?domain_id={domain.id}&hashfile_id={hashfile.id}")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Recovered Password Quality" in html
+        assert "Password Reuse" in html
+        assert "Most Reused Recovered Passwords" in html
+        assert "SharedPass123!" in html
+        assert "Accounts Where Password Matches Username" in html
 
 @pytest.mark.security
 def test_analytics_page_renders_upperalphanumeric_and_mixed_categories():

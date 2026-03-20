@@ -47,8 +47,13 @@ def _render_task_form(template_name, title, tasks_form, task=None, wordlists=Non
     )
     selected_wordlist_id = _parse_positive_int(tasks_form.wl_id.data)
     selected_rule_id = _parse_positive_int(tasks_form.rule_id.data)
+    return_target = (
+        url_for('tasks.task_edit', task_id=task.id)
+        if task is not None
+        else url_for('tasks.tasks_add')
+    )
     add_resource_return_url = append_query_params(
-        url_for('tasks.tasks_add'),
+        return_target,
         next=next_url or url_for('tasks.tasks_list'),
         selected_wordlist_id=selected_wordlist_id,
         selected_rule_id=selected_rule_id,
@@ -279,6 +284,13 @@ def task_edit(task_id):
     tasksForm.rule_id.choices += [(rule.id, rule.name) for rule in rules if rule.id != task.rule_id]
 
     tasksForm.submit.label.text = 'Update'
+    next_url = safe_relative_url(
+        (request.form.get('next') or request.args.get('next'))
+        if request.method == 'POST'
+        else request.args.get('next')
+    )
+    available_wordlist_ids = {wordlist.id for wordlist in wordlists}
+    available_rule_ids = {rule.id for rule in rules}
 
     if tasksForm.validate_on_submit():
         previous_name = task.name
@@ -378,15 +390,32 @@ def task_edit(task_id):
             flash(f'Task {tasksForm.name.data} updated!', 'success')
         else:
             flash('Invalid attack mode selection.', 'danger')
-        return redirect(url_for('tasks.tasks_list'))
+        return redirect(next_url or url_for('tasks.tasks_list'))
 
-    tasksForm.name.data = task.name
-    tasksForm.hc_attackmode.data = task.hc_attackmode
-    tasksForm.wl_id.data = str(task.wl_id) if task.wl_id is not None else ''
-    tasksForm.rule_id.data = str(task.rule_id) if isinstance(task.rule_id, int) else 'None'
-    tasksForm.mask.data = task.hc_mask
+    if request.method == 'GET':
+        tasksForm.name.data = task.name
+        tasksForm.hc_attackmode.data = task.hc_attackmode
+        tasksForm.wl_id.data = str(task.wl_id) if task.wl_id is not None else ''
+        tasksForm.rule_id.data = str(task.rule_id) if isinstance(task.rule_id, int) else 'None'
+        tasksForm.mask.data = task.hc_mask
 
-    return render_template('tasks_edit.html', title='Tasks Edit', tasksForm=tasksForm, task=task, wordlists=wordlists, rules=rules)
+        selected_wordlist_id = _parse_positive_int(request.args.get('selected_wordlist_id'))
+        selected_rule_id = _parse_positive_int(request.args.get('selected_rule_id'))
+        if selected_wordlist_id in available_wordlist_ids:
+            tasksForm.wl_id.data = str(selected_wordlist_id)
+            tasksForm.hc_attackmode.data = 'dictionary'
+        if selected_rule_id in available_rule_ids:
+            tasksForm.rule_id.data = str(selected_rule_id)
+            tasksForm.hc_attackmode.data = 'dictionary'
+
+    return _render_task_form(
+        'tasks_edit.html',
+        'Tasks Edit',
+        tasksForm,
+        task=task,
+        wordlists=wordlists,
+        rules=rules,
+    )
 
 @tasks.route("/tasks/delete/<int:task_id>", methods=['POST'])
 @login_required

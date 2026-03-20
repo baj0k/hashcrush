@@ -1,4 +1,4 @@
-"""Flask routes to handle Settings"""
+"""Flask routes for admin runtime operations and instance info."""
 
 import os
 import sys
@@ -55,15 +55,10 @@ def _temp_folder_size_bytes() -> int:
     return total
 
 
-#############################################
-# Settings
-#############################################
-
-
 @settings.route("/settings", methods=["GET"])
 @login_required
 def settings_list():
-    """Function to return list of Settings"""
+    """Render the admin settings page."""
 
     if current_user.admin:
         temp_folder_path = _temp_folder_path()
@@ -90,7 +85,7 @@ def settings_list():
 @settings.route("/settings/clear_temp", methods=["POST"])
 @login_required
 def clear_temp_folder():
-    """Function to clear temp folder"""
+    """Clear generated files from the runtime temp directory."""
     if not current_user.admin:
         abort(403)
 

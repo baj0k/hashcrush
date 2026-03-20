@@ -690,6 +690,77 @@ def test_tasks_add_prefills_selected_wordlist_and_rule_from_query_params():
 
 
 @pytest.mark.security
+def test_tasks_edit_prefills_selected_wordlist_and_rule_from_query_params():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        original_wordlist = Wordlists(
+            name="original-wordlist",
+            type="static",
+            path="/tmp/original-wordlist.txt",
+            size=1,
+            checksum="a" * 64,
+        )
+        original_rule = Rules(
+            name="original-rule",
+            path="/tmp/original.rule",
+            size=1,
+            checksum="b" * 64,
+        )
+        replacement_wordlist = Wordlists(
+            name="replacement-wordlist",
+            type="static",
+            path="/tmp/replacement-wordlist.txt",
+            size=1,
+            checksum="c" * 64,
+        )
+        replacement_rule = Rules(
+            name="replacement-rule",
+            path="/tmp/replacement.rule",
+            size=1,
+            checksum="d" * 64,
+        )
+        db.session.add_all(
+            [original_wordlist, original_rule, replacement_wordlist, replacement_rule]
+        )
+        db.session.commit()
+
+        task = Tasks(
+            name="editable-task",
+            hc_attackmode="dictionary",
+            wl_id=original_wordlist.id,
+            rule_id=original_rule.id,
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get(
+            f"/tasks/edit/{task.id}?next=/tasks&selected_wordlist_id={replacement_wordlist.id}&selected_rule_id={replacement_rule.id}"
+        )
+
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert re.search(
+            r'<option(?=[^>]*value="dictionary")(?=[^>]*selected)[^>]*>dictionary</option>',
+            html,
+        )
+        assert re.search(
+            rf'<option(?=[^>]*value="{replacement_wordlist.id}")(?=[^>]*selected)[^>]*>{re.escape(replacement_wordlist.name)}</option>',
+            html,
+        )
+        assert re.search(
+            rf'<option(?=[^>]*value="{replacement_rule.id}")(?=[^>]*selected)[^>]*>{re.escape(replacement_rule.name)}</option>',
+            html,
+        )
+
+
+@pytest.mark.security
 def test_wordlists_add_redirects_back_to_tasks_add_with_selected_wordlist():
     app = _build_app(
         {
@@ -731,6 +802,69 @@ def test_wordlists_add_redirects_back_to_tasks_add_with_selected_wordlist():
         wordlist = _first_row(Wordlists, name="return-wordlist")
         assert wordlist is not None
         assert location.path == "/tasks/add"
+        assert query["next"] == ["/tasks"]
+        assert query["selected_rule_id"] == [str(rule.id)]
+        assert query["selected_wordlist_id"] == [str(wordlist.id)]
+
+
+@pytest.mark.security
+def test_wordlists_add_redirects_back_to_tasks_edit_with_selected_wordlist():
+    app = _build_app(
+        {
+            "RUNTIME_PATH": "/tmp/hashcrush-runtime-wordlist-edit-return",
+            "STORAGE_PATH": "/tmp/hashcrush-storage-wordlist-edit-return",
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        existing_wordlist = Wordlists(
+            name="existing-wordlist",
+            type="static",
+            path="/tmp/existing-wordlist.txt",
+            size=1,
+            checksum="8" * 64,
+        )
+        rule = Rules(
+            name="preserved-edit-rule",
+            path="/tmp/preserved-edit.rule",
+            size=1,
+            checksum="9" * 64,
+        )
+        db.session.add_all([existing_wordlist, rule])
+        db.session.commit()
+
+        task = Tasks(
+            name="edit-return-task",
+            hc_attackmode="dictionary",
+            wl_id=existing_wordlist.id,
+            rule_id=rule.id,
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/wordlists/add",
+            query_string={
+                "next": f"/tasks/edit/{task.id}?next=/tasks&selected_rule_id={rule.id}",
+            },
+            data={
+                "name": "edit-return-wordlist",
+                "upload": (io.BytesIO(b"password\n"), "edit-return-wordlist.txt"),
+            },
+        )
+
+        assert response.status_code == 302
+        location = urlsplit(response.headers["Location"])
+        query = parse_qs(location.query)
+        wordlist = _first_row(Wordlists, name="edit-return-wordlist")
+        assert wordlist is not None
+        assert location.path == f"/tasks/edit/{task.id}"
         assert query["next"] == ["/tasks"]
         assert query["selected_rule_id"] == [str(rule.id)]
         assert query["selected_wordlist_id"] == [str(wordlist.id)]
@@ -779,6 +913,69 @@ def test_rules_add_redirects_back_to_tasks_add_with_selected_rule():
         rule = _first_row(Rules, name="return-rule")
         assert rule is not None
         assert location.path == "/tasks/add"
+        assert query["next"] == ["/tasks"]
+        assert query["selected_wordlist_id"] == [str(wordlist.id)]
+        assert query["selected_rule_id"] == [str(rule.id)]
+
+
+@pytest.mark.security
+def test_rules_add_redirects_back_to_tasks_edit_with_selected_rule():
+    app = _build_app(
+        {
+            "RUNTIME_PATH": "/tmp/hashcrush-runtime-rule-edit-return",
+            "STORAGE_PATH": "/tmp/hashcrush-storage-rule-edit-return",
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        wordlist = Wordlists(
+            name="preserved-edit-wordlist",
+            type="static",
+            path="/tmp/preserved-edit-wordlist.txt",
+            size=1,
+            checksum="1" * 64,
+        )
+        existing_rule = Rules(
+            name="existing-edit-rule",
+            path="/tmp/existing-edit.rule",
+            size=1,
+            checksum="2" * 64,
+        )
+        db.session.add_all([wordlist, existing_rule])
+        db.session.commit()
+
+        task = Tasks(
+            name="edit-return-rule-task",
+            hc_attackmode="dictionary",
+            wl_id=wordlist.id,
+            rule_id=existing_rule.id,
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/rules/add",
+            query_string={
+                "next": f"/tasks/edit/{task.id}?next=/tasks&selected_wordlist_id={wordlist.id}",
+            },
+            data={
+                "name": "edit-return-rule",
+                "upload": (io.BytesIO(b":\n"), "edit-return.rule"),
+            },
+        )
+
+        assert response.status_code == 302
+        location = urlsplit(response.headers["Location"])
+        query = parse_qs(location.query)
+        rule = _first_row(Rules, name="edit-return-rule")
+        assert rule is not None
+        assert location.path == f"/tasks/edit/{task.id}"
         assert query["next"] == ["/tasks"]
         assert query["selected_wordlist_id"] == [str(wordlist.id)]
         assert query["selected_rule_id"] == [str(rule.id)]

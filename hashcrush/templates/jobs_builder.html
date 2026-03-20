@@ -1,9 +1,23 @@
 {% extends "layout.html" %}
 {% block header %}
 <div class="hc-page-header">
-    <h1>Create a New Job</h1>
+    <h1>
+        {% if not job %}
+            Create a New Job
+        {% elif can_edit_job %}
+            Edit Job
+        {% else %}
+            View Job
+        {% endif %}
+    </h1>
     <p class="hc-page-intro">
-        Build the job in three steps: set the basics, attach hashes, and choose tasks before the final review.
+        {% if not job %}
+            Build the job in three steps: set the basics, attach hashes, and choose tasks before the final review.
+        {% elif can_edit_job %}
+            Update the basics, attached hashes, and assigned tasks before the final review.
+        {% else %}
+            Review the job basics, attached hashes, and assigned tasks.
+        {% endif %}
     </p>
 </div>
 {% endblock header %}
@@ -168,7 +182,7 @@
                 {% if can_edit_job %}
                 <nav>
                     <div class="nav nav-tabs" id="builder-hash-nav" role="tablist">
-                        {% if job.hashfile_id == None %}
+                        {% if active_hashes_tab == 'new' %}
                             <a class="nav-link active" id="nav-new-hashfile-tab" data-toggle="tab" href="#nav-new-hashfile" role="tab" aria-controls="nav-new-hashfile" aria-selected="true">New Hashfile</a>
                             <a class="nav-link" id="nav-existing-hashfile-tab" data-toggle="tab" href="#nav-existing-hashfile" role="tab" aria-controls="nav-existing-hashfile" aria-selected="false">Existing Hashfile</a>
                         {% else %}
@@ -178,13 +192,13 @@
                     </div>
                 </nav>
                 <div class="tab-content" id="builder-hash-tab-content">
-                    {% if job.hashfile_id == None %}
+                    {% if active_hashes_tab == 'new' %}
                         <div class="tab-pane fade show active" id="nav-new-hashfile" role="tabpanel" aria-labelledby="nav-new-hashfile-tab">
                     {% else %}
                         <div class="tab-pane fade" id="nav-new-hashfile" role="tabpanel" aria-labelledby="nav-new-hashfile-tab">
                     {% endif %}
                         <div class="hc-tab-panel">
-                            <form action="{{ url_for('jobs.jobs_assigned_hashfile', job_id=job.id) }}" method="post" enctype="multipart/form-data">
+                            <form action="{{ url_for('jobs.jobs_assigned_hashfile', job_id=job.id) }}" method="post" enctype="multipart/form-data" data-upload-progress-form="true">
                                 {{ jobs_new_hashfile_form.hidden_tag() }}
                                 <fieldset class="form-group">
                                     <div class="form-group">
@@ -318,6 +332,16 @@
                                         </div>
                                     </div>
                                 </fieldset>
+                                <div class="hc-upload-status hc-hidden" data-upload-status aria-live="polite">
+                                    <div class="hc-upload-status-header">
+                                        <span class="hc-upload-status-title" data-upload-status-title>Uploading file...</span>
+                                        <span class="hc-upload-status-detail" data-upload-status-detail>Waiting to start.</span>
+                                    </div>
+                                    <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+                                        <div class="progress-bar" data-upload-progress-bar style="width: 0%" aria-valuenow="0">0%</div>
+                                    </div>
+                                    <small class="text-muted d-block mt-2">Large file uploads continue processing after the browser finishes sending the file.</small>
+                                </div>
                                 <div class="hc-form-actions">
                                     <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_builder', job_id=job.id, tab='basics') }}" role="button">Back to Basics</a>
                                     <div class="hc-form-actions-right">
@@ -327,7 +351,7 @@
                             </form>
                         </div>
                     </div>
-                    {% if job.hashfile_id == None %}
+                    {% if active_hashes_tab == 'new' %}
                         <div class="tab-pane fade" id="nav-existing-hashfile" role="tabpanel" aria-labelledby="nav-existing-hashfile-tab">
                     {% else %}
                         <div class="tab-pane fade show active" id="nav-existing-hashfile" role="tabpanel" aria-labelledby="nav-existing-hashfile-tab">
@@ -508,15 +532,15 @@
                     <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_builder', job_id=job.id, tab='hashes') }}" role="button">Back to Hashes</a>
                     <div class="hc-form-actions-right">
                         {% if selected_hashfile and job_tasks %}
-                            <a class="btn btn-primary" href="{{ url_for('jobs.jobs_summary', job_id=job.id) }}" role="button">Create</a>
+                            <a class="btn btn-primary" href="{{ url_for('jobs.jobs_summary', job_id=job.id) }}" role="button">Review Job</a>
                         {% else %}
-                            <button class="btn btn-primary" type="button" disabled>Create</button>
+                            <button class="btn btn-primary" type="button" disabled>Review Job</button>
                         {% endif %}
                     </div>
                 </div>
                 {% if not selected_hashfile or not job_tasks %}
                 <p class="text-muted mb-0">
-                    Choose a hashfile and assign at least one task before creating the job.
+                    Choose a hashfile and assign at least one task before reviewing the job.
                 </p>
                 {% endif %}
                 {% endif %}

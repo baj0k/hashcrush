@@ -45,6 +45,7 @@ jobs = Blueprint('jobs', __name__)
 ACTIVE_JOB_TASK_MUTATION_STATUSES = {'Running', 'Queued', 'Paused'}
 ACTIVE_JOB_TASK_EXECUTION_STATUSES = {'Running', 'Importing', 'Queued', 'Paused'}
 BUILDER_TABS = {'basics', 'hashes', 'tasks'}
+BUILDER_HASH_TABS = {'new', 'existing'}
 
 
 def _utc_now_naive() -> datetime:
@@ -252,6 +253,14 @@ def _resolve_builder_tab(raw_tab: str | None, *, job: Jobs | None) -> str:
     return 'basics'
 
 
+def _resolve_hashes_tab(raw_tab: str | None, *, job: Jobs | None) -> str:
+    if raw_tab in BUILDER_HASH_TABS:
+        return raw_tab
+    if job is not None and job.hashfile_id is not None:
+        return 'existing'
+    return 'new'
+
+
 def _priority_display(priority: int | None) -> str:
     labels = {
         5: '5 - highest',
@@ -437,10 +446,12 @@ def _render_jobs_builder(
     jobs_form: JobsForm | None = None,
     jobs_new_hashfile_form: JobsNewHashFileForm | None = None,
     active_tab: str = 'basics',
+    active_hashes_tab: str | None = None,
 ):
     jobs_form = _build_jobs_form(job=job, form=jobs_form)
     jobs_new_hashfile_form = jobs_new_hashfile_form or JobsNewHashFileForm()
     active_tab = _resolve_builder_tab(active_tab, job=job)
+    active_hashes_tab = _resolve_hashes_tab(active_hashes_tab, job=job)
     context = _job_builder_context(job)
 
     return render_template(
@@ -450,6 +461,7 @@ def _render_jobs_builder(
         jobsForm=jobs_form,
         jobs_new_hashfile_form=jobs_new_hashfile_form,
         active_tab=active_tab,
+        active_hashes_tab=active_hashes_tab,
         **context,
     )
 
@@ -770,7 +782,12 @@ def jobs_assigned_hashfile(job_id):
         )
         if error_message:
             flash(error_message, 'danger')
-            return _builder_redirect(job.id, 'hashes')
+            return _render_jobs_builder(
+                job=job,
+                jobs_new_hashfile_form=jobs_new_hashfile_form,
+                active_tab='hashes',
+                active_hashes_tab='new',
+            )
 
         hashfile = creation_result.hashfile
         job.hashfile_id = hashfile.id
@@ -797,16 +814,29 @@ def jobs_assigned_hashfile(job_id):
         selected_hashfile = _get_assignable_hashfile(job, request.form.get('hashfile_id'))
         if not selected_hashfile:
             flash('Selected hashfile is invalid for this job domain.', 'danger')
-            return _builder_redirect(job.id, 'hashes')
+            return _render_jobs_builder(
+                job=job,
+                active_tab='hashes',
+                active_hashes_tab='existing',
+            )
 
         job.hashfile_id = selected_hashfile.id
         db.session.commit()
         return _builder_redirect(job.id, 'tasks')
     elif request.method == 'POST' and 'hashfile_id' in request.form:
         flash('Please select a valid hashfile.', 'danger')
-        return _builder_redirect(job.id, 'hashes')
+        return _render_jobs_builder(
+            job=job,
+            active_tab='hashes',
+            active_hashes_tab='existing',
+        )
 
-    return _builder_redirect(job.id, 'hashes')
+    return _render_jobs_builder(
+        job=job,
+        jobs_new_hashfile_form=jobs_new_hashfile_form,
+        active_tab='hashes',
+        active_hashes_tab='new',
+    )
 
 @jobs.route("/jobs/<int:job_id>/assigned_hashfile/<int:hashfile_id>", methods=['GET'])
 @login_required

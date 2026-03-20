@@ -10,7 +10,7 @@ from tests.e2e.support import assert_login_error_feedback
 def test_redirects_to_login(page, live_server):
     page.goto(f"{live_server}/", wait_until="domcontentloaded")
     expect(page).to_have_url(re.compile(r".*/login.*"))
-    expect(page.locator("legend", has_text="Log In")).to_be_visible()
+    expect(page.get_by_role("heading", name="Log In")).to_be_visible()
 
 
 @pytest.mark.e2e

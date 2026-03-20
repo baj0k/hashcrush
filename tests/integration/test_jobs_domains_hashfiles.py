@@ -454,7 +454,8 @@ def test_jobs_assigned_hashfile_validates_domain_but_allows_shared_hashfiles():
             f"/jobs/{job.id}/assigned_hashfile/",
             data={"hashfile_id": str(wrong_domain_hashfile.id)},
         )
-        assert response_wrong_domain.status_code == 302
+        assert response_wrong_domain.status_code == 200
+        assert b"Selected hashfile is invalid for this job domain." in response_wrong_domain.data
         assert db.session.get(Jobs, job.id).hashfile_id == wrong_owner_hashfile.id
 
         response_valid = client.post(
@@ -1373,7 +1374,8 @@ def test_jobs_assigned_hashfile_failed_import_rolls_back_hashfile_row(monkeypatc
                 "submit": "Next",
             },
         )
-        assert response.status_code == 302
+        assert response.status_code == 200
+        assert b"Failed importing hashfile." in response.data
 
         db.session.refresh(job)
         assert job.hashfile_id is None
@@ -1494,7 +1496,7 @@ def test_non_owner_can_view_scheduled_jobs_but_cannot_stop_them():
 
         summary_response = client.get(f"/jobs/{job.id}/summary")
         assert summary_response.status_code == 200
-        assert b"Job Summary" in summary_response.data
+        assert b"Review Job" in summary_response.data
         assert b"Only the job owner or an admin can accept this job." in summary_response.data
 
         draft_tasks_response = client.get(f"/jobs/{draft_job.id}/tasks")

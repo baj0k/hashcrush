@@ -13,11 +13,11 @@ def test_job_name_required_validation(page, live_server, login, e2e_fixture_data
     login()
     page.get_by_role("link", name="Jobs").click()
     page.get_by_role("link", name="Create a New Job").click()
-    expect(page.get_by_role("heading", name="Create a new Job")).to_be_visible()
+    expect(page.get_by_role("heading", name="Create a New Job")).to_be_visible()
 
     select_domain(page, e2e_fixture_data["domain_id"])
     page.get_by_role("button", name="Create Draft").click()
-    expect(page.get_by_role("heading", name="Create a new Job")).to_be_visible()
+    expect(page.get_by_role("heading", name="Create a New Job")).to_be_visible()
 
 
 @pytest.mark.e2e
@@ -25,7 +25,7 @@ def test_job_name_xss_is_escaped(page, live_server, login, e2e_fixture_data):
     login()
     page.get_by_role("link", name="Jobs").click()
     page.get_by_role("link", name="Create a New Job").click()
-    expect(page.get_by_role("heading", name="Create a new Job")).to_be_visible()
+    expect(page.get_by_role("heading", name="Create a New Job")).to_be_visible()
 
     xss_token = uuid.uuid4().hex[:6]
     xss_payload = f'<script id="x{xss_token}">1</script>'
@@ -47,7 +47,7 @@ def test_hashfile_validation_rejects_invalid_hash(page, live_server, login, e2e_
     login()
     page.get_by_role("link", name="Jobs").click()
     page.get_by_role("link", name="Create a New Job").click()
-    expect(page.get_by_role("heading", name="Create a new Job")).to_be_visible()
+    expect(page.get_by_role("heading", name="Create a New Job")).to_be_visible()
 
     page.get_by_label("Job Name").fill(unique_name("E2E Invalid Hash Test"))
     select_domain(page, e2e_fixture_data["domain_id"])
@@ -58,7 +58,8 @@ def test_hashfile_validation_rejects_invalid_hash(page, live_server, login, e2e_
     page.locator("select[name='hash_type']").select_option("0")
     page.locator("textarea[name='hashfilehashes']").fill("short")
     page.get_by_role("button", name="Save New Hashfile").click()
-    expect(page).to_have_url(re.compile(r".*/builder.*"))
+    expect(page).to_have_url(re.compile(r".*/assigned_hashfile/.*"))
+    expect(page.get_by_role("heading", name="Hashes")).to_be_visible()
     if page.locator(".alert-danger").count() > 0:
         expect(page.locator(".alert-danger")).to_be_visible()
 
@@ -68,7 +69,7 @@ def test_hashfile_upload_example_file(page, live_server, login, e2e_fixture_data
     login()
     page.get_by_role("link", name="Jobs").click()
     page.get_by_role("link", name="Create a New Job").click()
-    expect(page.get_by_role("heading", name="Create a new Job")).to_be_visible()
+    expect(page.get_by_role("heading", name="Create a New Job")).to_be_visible()
 
     page.get_by_label("Job Name").fill(unique_name("E2E Upload Example Hashfile"))
     select_domain(page, e2e_fixture_data["domain_id"])
@@ -89,7 +90,7 @@ def test_hashfile_upload_example_pwdump(page, live_server, login, e2e_fixture_da
     login()
     page.get_by_role("link", name="Jobs").click()
     page.get_by_role("link", name="Create a New Job").click()
-    expect(page.get_by_role("heading", name="Create a new Job")).to_be_visible()
+    expect(page.get_by_role("heading", name="Create a New Job")).to_be_visible()
 
     page.get_by_label("Job Name").fill(unique_name("E2E Upload Example Pwdump"))
     select_domain(page, e2e_fixture_data["domain_id"])

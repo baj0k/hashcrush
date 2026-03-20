@@ -105,7 +105,7 @@ def test_external_worker_cracks_dictionary_job_end_to_end(
     page.goto(f"{external_live_server}/tasks/add", wait_until="domcontentloaded")
     _assert_heading(
         page,
-        "Add Tasks",
+        "Create Task",
         failure_message=(
             "External worker smoke test requires an admin account so it can create a shared task"
         ),
@@ -121,7 +121,7 @@ def test_external_worker_cracks_dictionary_job_end_to_end(
     _assert_heading(
         page,
         re.compile(r"Create a New Job", re.IGNORECASE),
-        failure_message="Could not open the new job wizard for the external worker smoke test",
+        failure_message="Could not open the new job builder for the external worker smoke test",
     )
     page.get_by_label("Job Name").fill(job_name)
     if page.locator("#priority").count() > 0:
@@ -152,9 +152,9 @@ def test_external_worker_cracks_dictionary_job_end_to_end(
         page.locator("#tasks").get_by_role("cell", name=task_name, exact=True)
     ).to_be_visible()
 
-    page.get_by_role("button", name="Create", exact=True).click()
+    page.get_by_role("button", name="Review Job", exact=True).click()
     expect(page).to_have_url(re.compile(r".*/jobs/\d+/summary.*"))
-    expect(page.get_by_role("heading", name="Job Summary")).to_be_visible()
+    expect(page.get_by_role("heading", name="Review Job")).to_be_visible()
     page.get_by_role("button", name="Accept Job", exact=True).click()
     expect(page).to_have_url(re.compile(r".*/jobs(?:\?.*)?$"))
 

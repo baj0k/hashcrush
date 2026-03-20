@@ -14,7 +14,7 @@ def test_job_creation_flow(page, live_server, login, e2e_fixture_data):
     task_name = e2e_fixture_data["task_name"]
     page.get_by_role("link", name="Jobs").click()
     page.get_by_role("link", name="Create a New Job").click()
-    expect(page.get_by_role("heading", name="Create a new Job")).to_be_visible()
+    expect(page.get_by_role("heading", name="Create a New Job")).to_be_visible()
 
     page.get_by_label("Job Name").fill(unique_name("E2E Job"))
     if page.locator("#priority").count() > 0:
@@ -45,9 +45,9 @@ def test_job_creation_flow(page, live_server, login, e2e_fixture_data):
     expect(
         page.locator("#tasks").get_by_role("cell", name=task_name, exact=True)
     ).to_be_visible()
-    page.get_by_role("button", name="Create", exact=True).click()
+    page.get_by_role("button", name="Review Job", exact=True).click()
     expect(page).to_have_url(re.compile(r".*/jobs/\d+/summary.*"))
-    expect(page.get_by_role("heading", name="Job Summary")).to_be_visible()
+    expect(page.get_by_role("heading", name="Review Job")).to_be_visible()
     page.get_by_role("button", name="Accept Job", exact=True).click()
     expect(page).to_have_url(re.compile(r".*/jobs(?:\?.*)?$"))
 
@@ -64,7 +64,7 @@ def test_tasks_add_can_create_wordlist_and_rule_inline(page, live_server, login,
     rule_path.write_text(":\n", encoding="utf-8")
 
     page.goto(f"{live_server}/tasks/add", wait_until="domcontentloaded")
-    expect(page.get_by_role("heading", name="Add Tasks")).to_be_visible()
+    expect(page.get_by_role("heading", name="Create Task")).to_be_visible()
     page.get_by_label("Attack Mode").select_option("dictionary")
 
     expect(page.get_by_role("link", name="Add New Wordlist")).to_be_visible()
@@ -76,7 +76,7 @@ def test_tasks_add_can_create_wordlist_and_rule_inline(page, live_server, login,
     page.get_by_role("button", name="Upload", exact=True).click()
 
     expect(page).to_have_url(re.compile(r".*/tasks/add.*selected_wordlist_id=.*"))
-    expect(page.get_by_role("heading", name="Add Tasks")).to_be_visible()
+    expect(page.get_by_role("heading", name="Create Task")).to_be_visible()
     expect(page.locator("#wl_id option:checked")).to_have_text(wordlist_name)
 
     expect(page.get_by_role("link", name="Add New Rule")).to_be_visible()
@@ -88,6 +88,6 @@ def test_tasks_add_can_create_wordlist_and_rule_inline(page, live_server, login,
     page.get_by_role("button", name="Upload", exact=True).click()
 
     expect(page).to_have_url(re.compile(r".*/tasks/add.*selected_rule_id=.*"))
-    expect(page.get_by_role("heading", name="Add Tasks")).to_be_visible()
+    expect(page.get_by_role("heading", name="Create Task")).to_be_visible()
     expect(page.locator("#wl_id option:checked")).to_have_text(wordlist_name)
     expect(page.locator("#rule_id option:checked")).to_have_text(rule_name)

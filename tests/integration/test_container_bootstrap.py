@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from cryptography.fernet import InvalidToken
+
 from hashcrush.db_upgrade import UpgradeResult
 
 from tests.integration.support import *
@@ -119,3 +121,35 @@ def test_container_bootstrap_is_idempotent_for_existing_admin_and_tasks(
     with app.app_context():
         assert _count_rows(Users, admin=True) == 1
         assert _count_rows(TaskGroups, name="maskmode 1-10") == 1
+
+
+@pytest.mark.security
+def test_container_bootstrap_reports_data_encryption_key_mismatch(tmp_path, monkeypatch):
+    from hashcrush.container_bootstrap import (
+        bootstrap_instance,
+        ensure_runtime_and_storage_dirs,
+    )
+
+    runtime_path = tmp_path / "runtime"
+    storage_path = tmp_path / "storage"
+    ensure_runtime_and_storage_dirs(str(runtime_path), str(storage_path))
+    app = _build_sqlite_bootstrap_app(tmp_path)
+    with app.app_context():
+        db.create_all()
+    monkeypatch.setattr(
+        "hashcrush.container_bootstrap.upgrade_database",
+        lambda dry_run=False: UpgradeResult(
+            starting_version=0,
+            target_version=7,
+            applied_steps=(),
+            initialized_empty_schema=True,
+            dry_run=dry_run,
+        ),
+    )
+    monkeypatch.setattr(
+        "hashcrush.container_bootstrap.migrate_sensitive_storage_rows",
+        lambda: (_ for _ in ()).throw(InvalidToken()),
+    )
+
+    with pytest.raises(RuntimeError, match="HASHCRUSH_DATA_ENCRYPTION_KEY"):
+        bootstrap_instance(app, "admin", "ContainerAdminPassword!2026")

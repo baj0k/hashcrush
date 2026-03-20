@@ -326,11 +326,11 @@
     function buildFallbackCharts(message, compact) {
         return {
             recovered_accounts: donutPlaceholder('Recovered Accounts', 'recovered_accounts', message, compact),
-            password_complexity: donutPlaceholder('Password Complexity', 'password_complexity', message, compact),
+            password_quality: donutPlaceholder('Recovered Password Quality', 'password_quality', message, compact),
             recovered_hashes: donutPlaceholder('Recovered Hashes', 'recovered_hashes', message, compact),
+            password_reuse: donutPlaceholder('Password Reuse', 'password_reuse', message, compact),
             composition_makeup: donutPlaceholder('Composition Makeup', 'composition_makeup', message, compact),
-            passwords_count_len: barPlaceholder('Passwords Count by Length', 'passwords_count_len', message, compact),
-            top_10_passwords: barPlaceholder('Top 10 Passwords', 'top_10_passwords', message, compact)
+            passwords_count_len: barPlaceholder('Passwords Count by Length', 'passwords_count_len', message, compact)
         };
     }
 
@@ -357,17 +357,17 @@
                     compact: compact
                 });
             }, donutPlaceholder('Recovered Accounts', 'recovered_accounts', 'Unable to render chart.', compact)),
-            password_complexity: safeChart(function () {
+            password_quality: safeChart(function () {
                 return createDonutChart({
-                    key: 'password_complexity',
-                    title: 'Password Complexity',
-                    labels: payload.password_complexity.labels,
-                    values: payload.password_complexity.values,
+                    key: 'password_quality',
+                    title: 'Recovered Password Quality',
+                    labels: payload.password_quality.labels,
+                    values: payload.password_quality.values,
                     centerText: '',
-                    colors: [palette.danger, palette.warning, palette.success],
+                    colors: [palette.danger, palette.success],
                     compact: compact
                 });
-            }, donutPlaceholder('Password Complexity', 'password_complexity', 'Unable to render chart.', compact)),
+            }, donutPlaceholder('Recovered Password Quality', 'password_quality', 'Unable to render chart.', compact)),
             recovered_hashes: safeChart(function () {
                 return createDonutChart({
                     key: 'recovered_hashes',
@@ -379,6 +379,17 @@
                     compact: compact
                 });
             }, donutPlaceholder('Recovered Hashes', 'recovered_hashes', 'Unable to render chart.', compact)),
+            password_reuse: safeChart(function () {
+                return createDonutChart({
+                    key: 'password_reuse',
+                    title: 'Password Reuse',
+                    labels: payload.password_reuse.labels,
+                    values: payload.password_reuse.values,
+                    centerText: '',
+                    colors: [palette.warning, palette.success],
+                    compact: compact
+                });
+            }, donutPlaceholder('Password Reuse', 'password_reuse', 'Unable to render chart.', compact)),
             composition_makeup: safeChart(function () {
                 return createDonutChart({
                     key: 'composition_makeup',
@@ -399,17 +410,7 @@
                     barColor: palette.success,
                     compact: compact
                 });
-            }, barPlaceholder('Passwords Count by Length', 'passwords_count_len', 'Unable to render chart.', compact)),
-            top_10_passwords: safeChart(function () {
-                return createHorizontalBarChart({
-                    key: 'top_10_passwords',
-                    title: 'Top 10 Passwords',
-                    labels: payload.top_10_passwords.labels,
-                    values: payload.top_10_passwords.values,
-                    barColor: palette.warningSoft,
-                    compact: compact
-                });
-            }, barPlaceholder('Top 10 Passwords', 'top_10_passwords', 'Unable to render chart.', compact))
+            }, barPlaceholder('Passwords Count by Length', 'passwords_count_len', 'Unable to render chart.', compact))
         };
     }
 
