@@ -1,8 +1,6 @@
 """Flask routes to handle Jobs"""
 
 import json
-from collections import defaultdict
-from datetime import UTC, datetime
 
 from flask import (
     Blueprint,
@@ -13,606 +11,63 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
 from hashcrush.audit import record_audit_event
-from hashcrush.authz import PUBLIC_JOB_VIEW_STATUSES, visible_jobs_query
 from hashcrush.domains.service import resolve_or_create_shared_domain
 from hashcrush.hashfiles.service import create_hashfile_from_form
-from hashcrush.jobs.forms import JobsForm, JobsNewHashFileForm, JobSummaryForm
+from hashcrush.jobs.access import (
+    _can_manage_job,
+    _can_view_job,
+    _normalize_task_id_list,
+    _require_job_allows_task_mutation,
+)
+from hashcrush.jobs.builder_service import (
+    _build_jobs_form,
+    _builder_redirect,
+    _render_job_review,
+    _render_jobs_builder,
+)
+from hashcrush.jobs.forms import JobsNewHashFileForm, JobSummaryForm
+from hashcrush.jobs.queries import (
+    _build_jobs_list_context,
+    _get_assignable_hashfile,
+    _job_task_ordering,
+    _next_job_task_position,
+    _selected_hashfile_local_hits,
+)
+from hashcrush.jobs.transitions import (
+    JobTransitionError,
+    delete_job_with_tasks,
+    finalize_job,
+    pause_job_execution,
+    queue_job_for_start,
+    resume_job_execution,
+    stop_job_execution,
+)
 from hashcrush.models import (
-    Domains,
-    Hashes,
-    HashfileHashes,
     Hashfiles,
     Jobs,
     JobTasks,
     TaskGroups,
     Tasks,
-    Users,
     db,
 )
-from hashcrush.utils.utils import build_hashcat_command
-from hashcrush.view_utils import (
-    LIST_PAGE_SIZE,
-    paginate_scalars,
-    parse_jobtask_progress,
-    parse_page_arg,
-)
+from hashcrush.view_utils import LIST_PAGE_SIZE, parse_page_arg
 
 jobs = Blueprint('jobs', __name__)
-ACTIVE_JOB_TASK_MUTATION_STATUSES = {'Running', 'Queued', 'Paused'}
-ACTIVE_JOB_TASK_EXECUTION_STATUSES = {'Running', 'Importing', 'Queued', 'Paused'}
-BUILDER_TABS = {'basics', 'hashes', 'tasks'}
-BUILDER_HASH_TABS = {'new', 'existing'}
-
-
-def _utc_now_naive() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
-
-
-def _can_manage_job(job: Jobs | None) -> bool:
-    return bool(job and (current_user.admin or job.owner_id == current_user.id))
-
-
-def _job_is_publicly_viewable(job: Jobs | None) -> bool:
-    return bool(job and job.status in PUBLIC_JOB_VIEW_STATUSES)
-
-
-def _can_view_job(job: Jobs | None) -> bool:
-    return bool(job and (_can_manage_job(job) or _job_is_publicly_viewable(job)))
-
-
-def _visible_jobs_query():
-    return visible_jobs_query()
-
-
-def _job_allows_task_mutation(job: Jobs) -> bool:
-    return job.status not in ACTIVE_JOB_TASK_MUTATION_STATUSES
-
-
-def _require_job_allows_task_mutation(job: Jobs) -> bool:
-    if _job_allows_task_mutation(job):
-        return True
-    flash('You cannot edit assigned tasks while the job is running, queued, or paused.', 'danger')
-    return False
-
-
-def _parse_positive_int(raw_value) -> int | None:
-    try:
-        parsed = int(raw_value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed > 0 else None
-
-
-def _normalize_task_id_list(raw_values) -> list[int]:
-    if not isinstance(raw_values, list):
-        return []
-    normalized: list[int] = []
-    for value in raw_values:
-        parsed = _parse_positive_int(value)
-        if parsed is None or parsed in normalized:
-            continue
-        normalized.append(parsed)
-    return normalized
-
-
-def _visible_hashfiles_for_job(job: Jobs) -> list[Hashfiles]:
-    return db.session.execute(
-        select(Hashfiles).filter_by(domain_id=job.domain_id)
-    ).scalars().all()
-
-
-def _build_active_jobs_summary():
-    active_jobs = db.session.execute(
-        _visible_jobs_query()
-        .where(Jobs.status.in_(('Running', 'Queued')))
-        .order_by(
-            case((Jobs.status == 'Running', 0), else_=1),
-            Jobs.priority.desc(),
-            Jobs.queued_at.asc(),
-            Jobs.id.asc(),
-        )
-    ).scalars().all()
-    running_jobs = [job for job in active_jobs if job.status == 'Running']
-    queued_jobs = [job for job in active_jobs if job.status == 'Queued']
-    active_job_ids = [job.id for job in active_jobs]
-    owner_ids = sorted({job.owner_id for job in active_jobs})
-    domain_ids = sorted({job.domain_id for job in active_jobs})
-
-    active_owner_names = {
-        row.id: row.username
-        for row in (
-            db.session.execute(
-                select(Users.id, Users.username).where(Users.id.in_(owner_ids))
-            ).all()
-            if owner_ids
-            else []
-        )
-    }
-    active_domain_names = {
-        row.id: row.name
-        for row in (
-            db.session.execute(
-                select(Domains.id, Domains.name).where(Domains.id.in_(domain_ids))
-            ).all()
-            if domain_ids
-            else []
-        )
-    }
-
-    active_job_tasks = (
-        db.session.execute(
-            select(JobTasks)
-            .where(JobTasks.job_id.in_(active_job_ids))
-            .order_by(JobTasks.job_id.asc(), *_job_task_ordering())
-        ).scalars().all()
-        if active_job_ids
-        else []
-    )
-    active_task_ids = sorted({job_task.task_id for job_task in active_job_tasks})
-    task_names = {
-        row.id: row.name
-        for row in (
-            db.session.execute(
-                select(Tasks.id, Tasks.name).where(Tasks.id.in_(active_task_ids))
-            ).all()
-            if active_task_ids
-            else []
-        )
-    }
-
-    hashfile_ids = [job.hashfile_id for job in active_jobs if job.hashfile_id]
-    hashfile_stats = {}
-    if hashfile_ids:
-        stats_rows = db.session.execute(
-            select(
-                HashfileHashes.hashfile_id,
-                func.count(Hashes.id).label('total_count'),
-                func.sum(case((Hashes.cracked.is_(True), 1), else_=0)).label('cracked_count'),
-            )
-            .select_from(HashfileHashes)
-            .join(Hashes, Hashes.id == HashfileHashes.hash_id)
-            .where(HashfileHashes.hashfile_id.in_(hashfile_ids))
-            .group_by(HashfileHashes.hashfile_id)
-        ).all()
-        hashfile_stats = {
-            row.hashfile_id: (int(row.cracked_count or 0), int(row.total_count or 0))
-            for row in stats_rows
-        }
-
-    active_job_recovered = {}
-    for job in active_jobs:
-        cracked, total = hashfile_stats.get(job.hashfile_id, (0, 0))
-        active_job_recovered[job.id] = f'{cracked}/{total}'
-
-    active_job_task_runtime_progress: dict[int, dict[str, str]] = {}
-    active_job_task_rows_by_job_id: dict[int, list[dict[str, object]]] = defaultdict(list)
-    active_job_progress_summary: dict[int, dict[str, int]] = defaultdict(
-        lambda: {'total': 0, 'completed': 0, 'running': 0}
-    )
-    for job_task in active_job_tasks:
-        percent_done, eta = parse_jobtask_progress(job_task.progress)
-        active_job_task_runtime_progress[job_task.id] = {
-            'percent_done': percent_done or 'N/A',
-            'eta': eta or 'N/A',
-        }
-        active_job_task_rows_by_job_id[job_task.job_id].append(
-            {
-                'job_task': job_task,
-                'task_name': task_names.get(job_task.task_id, ''),
-            }
-        )
-        active_job_progress_summary[job_task.job_id]['total'] += 1
-        if job_task.status == 'Completed':
-            active_job_progress_summary[job_task.job_id]['completed'] += 1
-        elif job_task.status in ('Running', 'Importing'):
-            active_job_progress_summary[job_task.job_id]['running'] += 1
-
-    return {
-        'running_jobs': running_jobs,
-        'queued_jobs': queued_jobs,
-        'active_domain_names': active_domain_names,
-        'active_owner_names': active_owner_names,
-        'active_job_task_rows_by_job_id': active_job_task_rows_by_job_id,
-        'active_job_progress_summary': active_job_progress_summary,
-        'active_job_task_runtime_progress': active_job_task_runtime_progress,
-        'active_job_recovered': active_job_recovered,
-    }
-
-def _visible_domains_query():
-    return select(Domains).order_by(Domains.name)
-
-
-def _job_task_ordering():
-    return (JobTasks.position.asc(), JobTasks.id.asc())
-
-
-def _next_job_task_position(job_id: int) -> int:
-    current_max = db.session.scalar(
-        select(func.max(JobTasks.position)).where(JobTasks.job_id == job_id)
-    )
-    return int(current_max if current_max is not None else -1) + 1
-
-
-def _builder_location(job_id: int, section: str | None = None) -> str:
-    if section:
-        return url_for('jobs.jobs_builder', job_id=job_id, tab=section)
-    return url_for('jobs.jobs_builder', job_id=job_id)
-
-
-def _builder_redirect(job_id: int, section: str | None = None):
-    return redirect(_builder_location(job_id, section))
-
-
-def _resolve_builder_tab(raw_tab: str | None, *, job: Jobs | None) -> str:
-    if raw_tab in BUILDER_TABS and (job is not None or raw_tab == 'basics'):
-        return raw_tab
-    return 'basics'
-
-
-def _resolve_hashes_tab(raw_tab: str | None, *, job: Jobs | None) -> str:
-    if raw_tab in BUILDER_HASH_TABS:
-        return raw_tab
-    if job is not None and job.hashfile_id is not None:
-        return 'existing'
-    return 'new'
-
-
-def _priority_display(priority: int | None) -> str:
-    labels = {
-        5: '5 - highest',
-        4: '4 - higher',
-        3: '3 - normal',
-        2: '2 - lower',
-        1: '1 - lowest',
-    }
-    return labels.get(priority, '3 - normal')
-
-
-def _build_jobs_form(*, job: Jobs | None = None, form: JobsForm | None = None) -> JobsForm:
-    jobs_form = form or JobsForm()
-    domains = db.session.execute(_visible_domains_query()).scalars().all()
-    jobs_form.domain_id.choices = [("", "--SELECT--")] + [
-        (str(domain.id), domain.name) for domain in domains
-    ]
-    if current_user.admin:
-        jobs_form.domain_id.choices.append(("add_new", "Add New Domain"))
-    jobs_form.current_job_id = job.id if job else None
-
-    if job is not None and request.method == 'GET':
-        jobs_form.name.data = job.name
-        jobs_form.priority.data = str(job.priority)
-        jobs_form.domain_id.data = str(job.domain_id)
-        jobs_form.domain_name.data = ""
-
-    return jobs_form
-
-
-def _hashfile_rate_rows(hashfiles: list[Hashfiles]) -> dict[int, str]:
-    if not hashfiles:
-        return {}
-
-    hashfile_ids = [hashfile.id for hashfile in hashfiles]
-    stats_rows = (
-        db.session.execute(
-            select(
-                HashfileHashes.hashfile_id,
-                func.count(Hashes.id).label('total_count'),
-                func.sum(case((Hashes.cracked.is_(True), 1), else_=0)).label('cracked_count'),
-            )
-            .select_from(HashfileHashes)
-            .join(Hashes, Hashes.id == HashfileHashes.hash_id)
-            .where(HashfileHashes.hashfile_id.in_(hashfile_ids))
-            .group_by(HashfileHashes.hashfile_id)
-        ).all()
-        if hashfile_ids
-        else []
-    )
-    stats_by_hashfile_id = {
-        row.hashfile_id: (int(row.cracked_count or 0), int(row.total_count or 0))
-        for row in stats_rows
-    }
-    return {
-        hashfile.id: f"({stats_by_hashfile_id.get(hashfile.id, (0, 0))[0]}/{stats_by_hashfile_id.get(hashfile.id, (0, 0))[1]})"
-        for hashfile in hashfiles
-    }
-
-
-def _selected_hashfile_local_hits(hashfile_id: int | None):
-    if not hashfile_id:
-        return []
-    return (
-        db.session.execute(
-            select(Hashes, HashfileHashes)
-            .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
-            .where(Hashes.cracked.is_(True))
-            .where(HashfileHashes.hashfile_id == hashfile_id)
-        )
-        .tuples()
-        .all()
-    )
-
-
-def _ordered_job_task_names(job_tasks: list[JobTasks]) -> list[str]:
-    task_ids = sorted({job_task.task_id for job_task in job_tasks})
-    task_rows = (
-        db.session.execute(
-            select(Tasks.id, Tasks.name).where(Tasks.id.in_(task_ids))
-        ).all()
-        if task_ids
-        else []
-    )
-    task_names = {row.id: row.name for row in task_rows}
-    return [
-        task_names[job_task.task_id]
-        for job_task in job_tasks
-        if job_task.task_id in task_names
-    ]
-
-
-def _job_builder_context(job: Jobs | None):
-    can_manage_job = bool(job is None or _can_manage_job(job))
-    can_edit_job = bool(job is not None and can_manage_job and _job_allows_task_mutation(job))
-
-    context = {
-        'hashfiles': [],
-        'hashfile_cracked_rate': {},
-        'selected_hashfile': None,
-        'cracked_hashfiles_hashes': [],
-        'job_tasks': [],
-        'task_groups': [],
-        'task_by_id': {},
-        'available_tasks': [],
-        'ordered_task_names': [],
-        'cracked_rate': '0/0',
-        'domain': None,
-        'can_manage_job': can_manage_job,
-        'can_edit_job': can_edit_job,
-        'priority_display': _priority_display(job.priority) if job else None,
-    }
-
-    if job is None:
-        return context
-
-    hashfiles = _visible_hashfiles_for_job(job)
-    hashfile_cracked_rate = _hashfile_rate_rows(hashfiles)
-    selected_hashfile = db.session.get(Hashfiles, job.hashfile_id) if job.hashfile_id else None
-    if selected_hashfile and selected_hashfile.domain_id != job.domain_id:
-        selected_hashfile = None
-    cracked_hashfiles_hashes = _selected_hashfile_local_hits(
-        selected_hashfile.id if selected_hashfile else None
-    )
-
-    tasks = db.session.execute(select(Tasks).order_by(Tasks.name.asc())).scalars().all()
-    job_tasks = db.session.execute(
-        select(JobTasks).filter_by(job_id=job.id).order_by(*_job_task_ordering())
-    ).scalars().all()
-    task_groups = db.session.execute(
-        select(TaskGroups).order_by(TaskGroups.name.asc())
-    ).scalars().all()
-    task_by_id = {task.id: task for task in tasks}
-    assigned_task_ids = {job_task.task_id for job_task in job_tasks}
-    available_tasks = [task for task in tasks if task.id not in assigned_task_ids]
-    ordered_task_names = _ordered_job_task_names(job_tasks)
-    domain = db.session.get(Domains, job.domain_id)
-
-    cracked_rate = '0/0'
-    if selected_hashfile:
-        cracked_cnt = int(
-            db.session.scalar(
-                select(func.count())
-                .select_from(Hashes)
-                .outerjoin(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
-                .where(Hashes.cracked.is_(True))
-                .where(HashfileHashes.hashfile_id == selected_hashfile.id)
-            )
-            or 0
-        )
-        hash_total = int(
-            db.session.scalar(
-                select(func.count())
-                .select_from(Hashes)
-                .outerjoin(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
-                .where(HashfileHashes.hashfile_id == selected_hashfile.id)
-            )
-            or 0
-        )
-        cracked_rate = f'{cracked_cnt}/{hash_total}'
-
-    context.update(
-        {
-            'hashfiles': hashfiles,
-            'hashfile_cracked_rate': hashfile_cracked_rate,
-            'selected_hashfile': selected_hashfile,
-            'cracked_hashfiles_hashes': cracked_hashfiles_hashes,
-            'job_tasks': job_tasks,
-            'task_groups': task_groups,
-            'task_by_id': task_by_id,
-            'available_tasks': available_tasks,
-            'ordered_task_names': ordered_task_names,
-            'cracked_rate': cracked_rate,
-            'domain': domain,
-        }
-    )
-    return context
-
-
-def _render_jobs_builder(
-    *,
-    job: Jobs | None = None,
-    jobs_form: JobsForm | None = None,
-    jobs_new_hashfile_form: JobsNewHashFileForm | None = None,
-    active_tab: str = 'basics',
-    active_hashes_tab: str | None = None,
-):
-    jobs_form = _build_jobs_form(job=job, form=jobs_form)
-    jobs_new_hashfile_form = jobs_new_hashfile_form or JobsNewHashFileForm()
-    active_tab = _resolve_builder_tab(active_tab, job=job)
-    active_hashes_tab = _resolve_hashes_tab(active_hashes_tab, job=job)
-    context = _job_builder_context(job)
-
-    return render_template(
-        'jobs_builder.html',
-        title='Jobs',
-        job=job,
-        jobsForm=jobs_form,
-        jobs_new_hashfile_form=jobs_new_hashfile_form,
-        active_tab=active_tab,
-        active_hashes_tab=active_hashes_tab,
-        **context,
-    )
-
-
-def _render_job_review(job: Jobs, *, summary_form: JobSummaryForm | None = None):
-    context = _job_builder_context(job)
-    return render_template(
-        'jobs_review.html',
-        title='Job Summary',
-        job=job,
-        summary_form=summary_form or JobSummaryForm(),
-        **context,
-    )
-
-
-def _get_assignable_hashfile(job: Jobs, raw_hashfile_id) -> Hashfiles | None:
-    hashfile_id = _parse_positive_int(raw_hashfile_id)
-    if hashfile_id is None:
-        return None
-
-    return db.session.scalar(
-        select(Hashfiles).where(
-            Hashfiles.id == hashfile_id,
-            Hashfiles.domain_id == job.domain_id,
-        )
-    )
 
 @jobs.route("/jobs", methods=['GET', 'POST'])
 @login_required
 def jobs_list():
     """Function to return list of Jobs"""
     page = parse_page_arg(request.args.get('page'))
-    jobs, pagination = paginate_scalars(
-        db.session,
-        _visible_jobs_query().order_by(Jobs.created_at.desc()),
-        page=page,
-        per_page=LIST_PAGE_SIZE,
-    )
-    visible_job_ids = [job.id for job in jobs]
-    domain_ids = sorted({job.domain_id for job in jobs})
-    owner_ids = sorted({job.owner_id for job in jobs})
-    hashfile_ids = sorted({job.hashfile_id for job in jobs if job.hashfile_id})
-    domain_names = {
-        row.id: row.name
-        for row in (
-            db.session.execute(
-                select(Domains.id, Domains.name).where(Domains.id.in_(domain_ids))
-            ).all()
-            if domain_ids
-            else []
-        )
-    }
-    owner_names = {
-        row.id: row.username
-        for row in (
-            db.session.execute(
-                select(Users.id, Users.username).where(Users.id.in_(owner_ids))
-            ).all()
-            if owner_ids
-            else []
-        )
-    }
-    hashfile_names = {
-        row.id: row.name
-        for row in (
-            db.session.execute(
-                select(Hashfiles.id, Hashfiles.name).where(Hashfiles.id.in_(hashfile_ids))
-            ).all()
-            if hashfile_ids
-            else []
-        )
-    }
-    job_tasks = (
-        db.session.execute(
-            select(JobTasks)
-            .where(JobTasks.job_id.in_(visible_job_ids))
-            .order_by(JobTasks.job_id.asc(), *_job_task_ordering())
-        ).scalars().all()
-        if visible_job_ids
-        else []
-    )
-    visible_task_ids = sorted({job_task.task_id for job_task in job_tasks})
-    task_rows = (
-        db.session.execute(
-            select(Tasks.id, Tasks.name).where(Tasks.id.in_(visible_task_ids))
-        ).all()
-        if visible_task_ids
-        else []
-    )
-    task_names = {row.id: row.name for row in task_rows}
-    task_names_by_job_id: dict[int, list[str]] = defaultdict(list)
-    for job_task in job_tasks:
-        task_name = task_names.get(job_task.task_id)
-        if task_name:
-            task_names_by_job_id[job_task.job_id].append(task_name)
-    hashfile_stats = {}
-    if hashfile_ids:
-        stats_rows = (
-            db.session.execute(
-                select(
-                    HashfileHashes.hashfile_id,
-                    func.count(Hashes.id).label('total_count'),
-                    func.sum(case((Hashes.cracked.is_(True), 1), else_=0)).label('cracked_count'),
-                )
-                .select_from(HashfileHashes)
-                .join(Hashes, Hashes.id == HashfileHashes.hash_id)
-                .where(HashfileHashes.hashfile_id.in_(hashfile_ids))
-                .group_by(HashfileHashes.hashfile_id)
-            )
-            .all()
-        )
-        hashfile_stats = {
-            row.hashfile_id: (int(row.cracked_count or 0), int(row.total_count or 0))
-            for row in stats_rows
-        }
-    job_recovered = {}
-    for job in jobs:
-        cracked, total = hashfile_stats.get(job.hashfile_id, (0, 0))
-        job_recovered[job.id] = f'{cracked}/{total}'
-
-    # Surface latest active task telemetry per job for jobs table (ETA + % done).
-    status_rank = {'Running': 0, 'Importing': 1, 'Paused': 2, 'Queued': 3}
-    job_runtime_progress: dict[int, dict[str, str]] = {}
-    for job_task in job_tasks:
-        if job_task.status not in status_rank:
-            continue
-
-        percent_done, eta = parse_jobtask_progress(job_task.progress)
-        existing = job_runtime_progress.get(job_task.job_id)
-        if existing and existing['rank'] <= status_rank[job_task.status]:
-            continue
-
-        job_runtime_progress[job_task.job_id] = {
-            'percent_done': percent_done or 'N/A',
-            'eta': eta or 'N/A',
-            'rank': status_rank[job_task.status],
-        }
-    active_summary = _build_active_jobs_summary()
-
+    context = _build_jobs_list_context(page=page, per_page=LIST_PAGE_SIZE)
     return render_template(
         'jobs.html',
         title='Jobs',
-        jobs=jobs,
-        domain_names=domain_names,
-        owner_names=owner_names,
-        hashfile_names=hashfile_names,
-        task_names_by_job_id=task_names_by_job_id,
-        job_runtime_progress=job_runtime_progress,
-        job_recovered=job_recovered,
-        pagination=pagination,
-        **active_summary,
+        **context,
     )
 
 @jobs.route("/jobs/add", methods=['GET', 'POST'])
@@ -1090,12 +545,7 @@ def jobs_delete(job_id):
 
     job = db.get_or_404(Jobs, job_id)
     if _can_manage_job(job):
-        deleted_job_name = job.name
-        deleted_job_status = job.status
-        deleted_owner_id = job.owner_id
-        db.session.execute(delete(JobTasks).filter_by(job_id=job_id))
-
-        db.session.delete(job)
+        audit_details = delete_job_with_tasks(job)
         try:
             db.session.commit()
         except IntegrityError:
@@ -1105,12 +555,12 @@ def jobs_delete(job_id):
         record_audit_event(
             'job.delete',
             'job',
-            target_id=job_id,
-            summary=f'Deleted job "{deleted_job_name}".',
+            target_id=audit_details['job_id'],
+            summary=f'Deleted job "{audit_details["job_name"]}".',
             details={
-                'job_name': deleted_job_name,
-                'previous_status': deleted_job_status,
-                'owner_id': deleted_owner_id,
+                'job_name': audit_details['job_name'],
+                'previous_status': audit_details['previous_status'],
+                'owner_id': audit_details['owner_id'],
             },
         )
         flash('Job has been deleted!', 'success')
@@ -1150,11 +600,7 @@ def jobs_summary(job_id):
         return redirect(url_for('jobs.jobs_summary', job_id=job.id))
 
     if form.validate_on_submit():
-        for job_task in job_tasks:
-            job_task.status = 'Ready'
-
-        job.status = 'Ready'
-        job.updated_at = _utc_now_naive()
+        finalize_job(job, job_tasks)
         db.session.commit()
         record_audit_event(
             'job.finalize',
@@ -1189,37 +635,16 @@ def jobs_start(job_id):
         flash('You do not have rights to start this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
-    if not job_tasks:
-        flash('Error in starting job', 'danger')
-        return redirect(url_for('jobs.jobs_list'))
-
-    if job.status not in ('Ready', 'Canceled'):
-        flash('Only ready or canceled jobs can be started.', 'danger')
-        return redirect(url_for('jobs.jobs_list'))
-
-    previous_status = job.status
-    job.status = 'Queued'
-    job.queued_at = _utc_now_naive()
-    job.started_at = None
-    job.ended_at = None
-    visible_task_ids = set(db.session.scalars(select(Tasks.id)).all())
-    for job_task in job_tasks:
-        if job_task.task_id not in visible_task_ids:
-            db.session.rollback()
-            flash('One or more assigned tasks are invalid or no longer available.', 'danger')
-            return _builder_redirect(job.id, 'tasks')
-        job_task.status = 'Queued'
-        job_task.priority = job.priority
-        job_task.started_at = None
-        job_task.progress = None
-        job_task.benchmark = None
-        job_task.worker_pid = None
-        try:
-            job_task.command = build_hashcat_command(job.id, job_task.task_id)
-        except ValueError as e:
-            db.session.rollback()
-            flash(str(e), 'danger')
+    try:
+        previous_status = queue_job_for_start(job, job_tasks)
+    except JobTransitionError as error:
+        db.session.rollback()
+        flash(str(error), 'danger')
+        if error.builder_tab:
+            return _builder_redirect(job.id, error.builder_tab)
+        if job.status in ('Ready', 'Canceled'):
             return redirect(url_for('jobs.jobs_summary', job_id=job.id))
+        return redirect(url_for('jobs.jobs_list'))
 
     db.session.commit()
     record_audit_event(
@@ -1250,31 +675,25 @@ def jobs_stop(job_id):
         flash('You do not have rights to stop this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
-    if job.status in ('Running', 'Queued', 'Paused'):
-        previous_status = job.status
-        job.status = 'Canceled'
-        job.ended_at = _utc_now_naive()
+    try:
+        previous_status, canceled_task_count = stop_job_execution(job, job_tasks)
+    except JobTransitionError as error:
+        flash(str(error), 'danger')
+        return redirect(url_for('jobs.jobs_list'))
 
-        for job_task in job_tasks:
-            if job_task.status in ACTIVE_JOB_TASK_EXECUTION_STATUSES:
-                job_task.status = 'Canceled'
-        db.session.commit()
-        record_audit_event(
-            'job.stop',
-            'job',
-            target_id=job.id,
-            summary=f'Stopped job "{job.name}".',
-            details={
-                'job_name': job.name,
-                'previous_status': previous_status,
-                'canceled_task_count': sum(
-                    1 for job_task in job_tasks if job_task.status == 'Canceled'
-                ),
-            },
-        )
-        flash('Job has been stopped!', 'success')
-    else:
-        flash('Job is not actively running.', 'danger')
+    db.session.commit()
+    record_audit_event(
+        'job.stop',
+        'job',
+        target_id=job.id,
+        summary=f'Stopped job "{job.name}".',
+        details={
+            'job_name': job.name,
+            'previous_status': previous_status,
+            'canceled_task_count': canceled_task_count,
+        },
+    )
+    flash('Job has been stopped!', 'success')
     return redirect(url_for('jobs.jobs_list'))
 
 @jobs.route("/jobs/pause/<int:job_id>", methods=['POST'])
@@ -1291,15 +710,12 @@ def jobs_pause(job_id):
         flash('You do not have rights to pause this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
-    if job.status not in ('Running', 'Queued'):
-        flash('Job is not running or queued.', 'danger')
+    try:
+        previous_status = pause_job_execution(job, job_tasks)
+    except JobTransitionError as error:
+        flash(str(error), 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
-    previous_status = job.status
-    job.status = 'Paused'
-    for job_task in job_tasks:
-        if job_task.status in ('Running', 'Importing', 'Queued'):
-            job_task.status = 'Paused'
     db.session.commit()
     record_audit_event(
         'job.pause',
@@ -1326,26 +742,11 @@ def jobs_resume(job_id):
         flash('You do not have rights to resume this job!', 'danger')
         return redirect(url_for('jobs.jobs_list'))
 
-    if job.status != 'Paused':
-        flash('Job is not paused.', 'danger')
+    try:
+        previous_status, new_status = resume_job_execution(job, job_tasks)
+    except JobTransitionError as error:
+        flash(str(error), 'danger')
         return redirect(url_for('jobs.jobs_list'))
-
-    previous_status = job.status
-    for job_task in job_tasks:
-        if job_task.status == 'Paused':
-            job_task.status = 'Queued'
-
-    has_running = any(task.status in ('Running', 'Importing') for task in job_tasks)
-    has_queued = any(task.status == 'Queued' for task in job_tasks)
-
-    if has_running:
-        job.status = 'Running'
-    elif has_queued:
-        job.status = 'Queued'
-        job.queued_at = _utc_now_naive()
-    else:
-        # Fallback: if every task completed/canceled while paused, leave current job state unchanged.
-        job.status = 'Paused'
 
     db.session.commit()
     record_audit_event(
@@ -1356,7 +757,7 @@ def jobs_resume(job_id):
         details={
             'job_name': job.name,
             'previous_status': previous_status,
-            'new_status': job.status,
+            'new_status': new_status,
         },
     )
     flash('Job has been resumed!', 'success')

@@ -10,10 +10,9 @@ from flask import current_app
 from sqlalchemy import func, select
 
 from hashcrush.models import HashfileHashes, Hashfiles, db
-from hashcrush.utils.utils import (
-    get_runtime_subdir,
+from hashcrush.hashfiles.validation import (
     import_hashfilehashes,
-    save_file,
+    normalize_hashfile_file_type,
     validate_hash_only_hashfile,
     validate_kerberos_hashfile,
     validate_netntlm_hashfile,
@@ -21,6 +20,8 @@ from hashcrush.utils.utils import (
     validate_shadow_hashfile,
     validate_user_hash_hashfile,
 )
+from hashcrush.utils.file_ops import save_file
+from hashcrush.utils.storage_paths import get_runtime_subdir
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,7 @@ def _selected_hash_type(
     kerberos_hash_type: str | None = None,
     shadow_hash_type: str | None = None,
 ) -> str | None:
+    file_type = normalize_hashfile_file_type(file_type)
     if file_type == "pwdump":
         return pwdump_hash_type
     if file_type == "NetNTLM":
@@ -61,6 +63,7 @@ def _validation_result(
     hashfile_path: str,
     progress_callback=None,
 ) -> tuple[str | None, str | None]:
+    file_type = normalize_hashfile_file_type(file_type)
     if file_type == "pwdump":
         return (
             validate_pwdump_hashfile(
@@ -126,6 +129,7 @@ def create_hashfile_from_path(
     progress_callback=None,
 ) -> tuple[HashfileCreationResult | None, str | None]:
     """Create and import a shared hashfile from an already-saved file path."""
+    file_type = normalize_hashfile_file_type(file_type) or file_type
 
     validation_error, normalized_hash_type = _validation_result(
         file_type=file_type,

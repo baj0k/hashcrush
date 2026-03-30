@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 
 from hashcrush.audit import record_audit_event
 from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles, db
-from hashcrush.utils.utils import (
+from hashcrush.utils.secret_storage import (
     decode_ciphertext_from_storage,
     decode_plaintext_from_storage,
     decode_username_from_storage,

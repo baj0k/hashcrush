@@ -16,7 +16,7 @@ from flask_login import current_user, login_required
 import hashcrush
 from hashcrush.audit import record_audit_event
 from hashcrush.db_upgrade import get_schema_status
-from hashcrush.utils.utils import get_runtime_subdir
+from hashcrush.utils.storage_paths import get_runtime_subdir
 
 settings = Blueprint("settings", __name__)
 

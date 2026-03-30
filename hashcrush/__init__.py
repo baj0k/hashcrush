@@ -172,21 +172,21 @@ def _warn_insecure_configuration(app: Flask) -> None:
 
 def jinja_hex_decode(text):
     """Jinja2 filter to decode stored plaintext with legacy fallback."""
-    from hashcrush.utils.utils import decode_plaintext_from_storage
+    from hashcrush.utils.secret_storage import decode_plaintext_from_storage
 
     return decode_plaintext_from_storage(text)
 
 
 def jinja_ciphertext_decode(text):
     """Jinja2 filter to decode stored ciphertext with legacy fallback."""
-    from hashcrush.utils.utils import decode_ciphertext_from_storage
+    from hashcrush.utils.secret_storage import decode_ciphertext_from_storage
 
     return decode_ciphertext_from_storage(text)
 
 
 def jinja_format_hashcat_speed(text):
     """Jinja2 filter to render hashcat speed strings in readable units."""
-    from hashcrush.utils.utils import format_hashcat_speed
+    from hashcrush.executor.hashcat_command import format_hashcat_speed
 
     return format_hashcat_speed(text)
 

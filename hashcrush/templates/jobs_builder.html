@@ -226,6 +226,10 @@
                                         {% else %}
                                             {{ jobs_new_hashfile_form.pwdump_hash_type(class="form-control form-control-lg", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
                                         {% endif %}
+                                        <small class="form-text text-muted">
+                                            Supports Windows pwdump lines like
+                                            <code>Administrator:500:LMHASH:NTHASH:::</code>. HashCrush imports the NT hash field and ignores the LM placeholder.
+                                        </small>
                                     </div>
                                     <div class="form-group hc-hidden" id="netntlm_hash_type_div" data-toggle-group-section="job-hashfile-format" data-toggle-values="NetNTLM">
                                         {{ jobs_new_hashfile_form.netntlm_hash_type.label(class="form-control-label") }}

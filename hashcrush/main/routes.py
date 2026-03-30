@@ -5,7 +5,7 @@ from flask_login import current_user, login_required
 
 from hashcrush.audit import record_audit_event
 from hashcrush.models import Jobs, JobTasks, db
-from hashcrush.utils.utils import update_job_task_status
+from hashcrush.jobs.status import update_job_task_status
 
 main = Blueprint('main', __name__)
 

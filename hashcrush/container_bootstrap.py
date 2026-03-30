@@ -21,7 +21,7 @@ from hashcrush.db_upgrade import upgrade_database
 from hashcrush.models import Users, db
 from hashcrush.setup import add_default_tasks, default_tasks_need_added
 from hashcrush.users.routes import bcrypt
-from hashcrush.utils.utils import migrate_sensitive_storage_rows
+from hashcrush.utils.secret_storage import migrate_sensitive_storage_rows
 
 DEFAULT_DB_WAIT_SECONDS = 60.0
 DEFAULT_DB_POLL_SECONDS = 1.0

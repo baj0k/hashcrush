@@ -216,7 +216,7 @@ def _migration_005_encrypt_sensitive_hash_material() -> None:
         )
         db.session.commit()
 
-    from hashcrush.utils.utils import migrate_sensitive_storage_rows
+    from hashcrush.utils.secret_storage import migrate_sensitive_storage_rows
 
     migrate_sensitive_storage_rows()
 

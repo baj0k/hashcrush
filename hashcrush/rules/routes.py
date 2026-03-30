@@ -10,12 +10,12 @@ from hashcrush.audit import capture_audit_actor, record_audit_event
 from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Rules, Tasks, db
 from hashcrush.rules.forms import RulesForm
-from hashcrush.utils.utils import (
+from hashcrush.utils.file_ops import (
     get_filehash,
     get_linecount,
-    get_storage_subdir,
     save_file,
 )
+from hashcrush.utils.storage_paths import get_storage_subdir
 from hashcrush.view_utils import append_query_params, safe_relative_url
 
 rules = Blueprint('rules', __name__)

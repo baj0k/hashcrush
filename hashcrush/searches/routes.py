@@ -18,10 +18,10 @@ from hashcrush import jinja_ciphertext_decode, jinja_hex_decode
 from hashcrush.audit import record_audit_event
 from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles, db
 from hashcrush.searches.forms import SearchForm
-from hashcrush.utils.utils import (
+from hashcrush.utils.file_ops import get_md5_hash
+from hashcrush.utils.secret_storage import (
     decode_ciphertext_from_storage,
     get_ciphertext_search_digest,
-    get_md5_hash,
     get_plaintext_search_digest,
     get_username_search_digest,
 )

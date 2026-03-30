@@ -737,6 +737,25 @@ def test_hashfiles_page_allows_admin_to_add_shared_hashfiles():
 
 
 @pytest.mark.security
+def test_hashfiles_add_form_mentions_windows_pwdump_format():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get("/hashfiles/add")
+
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Windows pwdump" in html
+        assert "Administrator:500:LMHASH:NTHASH:::" in html
+
+
+@pytest.mark.security
 def test_hashfiles_add_supports_async_processing_progress():
     app = _build_app()
     with app.app_context():

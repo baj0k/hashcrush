@@ -1299,6 +1299,28 @@ def test_hashfile_validator_rejects_too_many_lines(tmp_path):
         assert isinstance(error, str)
         assert "too many lines" in error.lower()
 
+
+@pytest.mark.security
+def test_pwdump_validator_accepts_impacket_secretsdump_sample(tmp_path):
+    from hashcrush.utils.utils import validate_pwdump_hashfile
+
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+
+        path = tmp_path / "secretsdump.txt"
+        path.write_text(
+            "Administrator:500:aad3b435b51404eeaad3b435b51404ee:"
+            "31d6cfe0d16ae931b73c59d7e0c089c0:::\n",
+            encoding="utf-8",
+        )
+
+        assert (
+            validate_pwdump_hashfile(str(path), "1000")
+            is False
+        )
+
+
 @pytest.mark.security
 def test_import_user_hash_dcc2_preserves_username_association(tmp_path):
     app = _build_app()
@@ -1335,6 +1357,49 @@ def test_import_user_hash_dcc2_preserves_username_association(tmp_path):
         assert decode_ciphertext_from_storage(imported_hash.ciphertext).startswith(
             "$DCC2$10240#alice#"
         )
+
+
+@pytest.mark.security
+def test_import_secretsdump_alias_uses_nt_hash_and_preserves_username(tmp_path):
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="SecretsdumpDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="secretsdump.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_path = tmp_path / "secretsdump.txt"
+        hash_path.write_text(
+            "Administrator:500:aad3b435b51404eeaad3b435b51404ee:"
+            "5f4dcc3b5aa765d61d8327deb882cf99:::\n",
+            encoding="utf-8",
+        )
+
+        assert import_hashfilehashes(
+            hashfile_id=hashfile.id,
+            hashfile_path=str(hash_path),
+            file_type="secretsdump",
+            hash_type="1000",
+        )
+
+        association = _first_row(HashfileHashes, hashfile_id=hashfile.id)
+        assert association is not None
+        assert decode_username_from_storage(association.username) == "Administrator"
+
+        imported_hash = db.session.get(Hashes, association.hash_id)
+        assert imported_hash is not None
+        assert (
+            decode_ciphertext_from_storage(imported_hash.ciphertext)
+            == "5f4dcc3b5aa765d61d8327deb882cf99"
+        )
+
 
 @pytest.mark.security
 def test_netntlm_validator_still_rejects_duplicate_user_host(tmp_path):

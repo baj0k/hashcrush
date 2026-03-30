@@ -55,6 +55,10 @@
             <div class="form-group hc-hidden" id="pwdump_hash_type_div" data-toggle-group-section="hashfile-format" data-toggle-values="pwdump">
                 {{ hashfilesForm.pwdump_hash_type.label(class="form-control-label") }}
                 {{ hashfilesForm.pwdump_hash_type(class="form-control form-control-lg", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
+                <small class="form-text text-muted">
+                    Supports Windows pwdump lines like
+                    <code>Administrator:500:LMHASH:NTHASH:::</code>. HashCrush imports the NT hash field and ignores the LM placeholder.
+                </small>
             </div>
             <div class="form-group hc-hidden" id="netntlm_hash_type_div" data-toggle-group-section="hashfile-format" data-toggle-values="NetNTLM">
                 {{ hashfilesForm.netntlm_hash_type.label(class="form-control-label") }}

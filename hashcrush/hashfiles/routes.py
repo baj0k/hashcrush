@@ -21,9 +21,11 @@ from hashcrush.audit import capture_audit_actor, record_audit_event
 from hashcrush.authz import admin_required_redirect, visible_jobs_query
 from hashcrush.domains.service import resolve_or_create_shared_domain
 from hashcrush.hashfiles.forms import HashfilesAddForm
+from hashcrush.hashfiles.validation import normalize_hashfile_file_type
 from hashcrush.hashfiles.service import create_hashfile_from_form, create_hashfile_from_path
 from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles, Jobs, db
-from hashcrush.utils.utils import get_runtime_subdir, save_file
+from hashcrush.utils.file_ops import save_file
+from hashcrush.utils.storage_paths import get_runtime_subdir
 from hashcrush.view_utils import LIST_PAGE_SIZE, paginate_scalars, parse_page_arg
 
 hashfiles = Blueprint('hashfiles', __name__)
@@ -435,15 +437,16 @@ def hashfiles_add():
 
     if request.method == 'POST' and form.validate_on_submit():
         if _is_async_upload_request() and form.hashfile.data:
+            normalized_file_type = normalize_hashfile_file_type(form.file_type.data)
             hash_type = (
                 form.pwdump_hash_type.data
-                if form.file_type.data == 'pwdump'
+                if normalized_file_type == 'pwdump'
                 else form.netntlm_hash_type.data
-                if form.file_type.data == 'NetNTLM'
+                if normalized_file_type == 'NetNTLM'
                 else form.kerberos_hash_type.data
-                if form.file_type.data == 'kerberos'
+                if normalized_file_type == 'kerberos'
                 else form.shadow_hash_type.data
-                if form.file_type.data == 'shadow'
+                if normalized_file_type == 'shadow'
                 else form.hash_type.data
             )
             runtime_tmp_dir = get_runtime_subdir('tmp')
@@ -462,7 +465,7 @@ def hashfiles_add():
                     ),
                     domain_selection=form.domain_id.data,
                     new_domain_name=form.domain_name.data,
-                    file_type=form.file_type.data,
+                    file_type=(normalized_file_type or form.file_type.data),
                     hash_type=(hash_type or ''),
                     audit_actor=capture_audit_actor(): _process_hashfile_upload(
                         staged_hashfile_path=staged_hashfile_path,
