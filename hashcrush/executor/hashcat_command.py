@@ -106,6 +106,7 @@ def build_hashcat_argv(job_id, task_id, hashcat_bin=None):
         str(status_timer),
         "--outfile-format",
         "1,3",
+        "--outfile-autohex-disable",
         "--outfile",
         crack_file,
     ]
