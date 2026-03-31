@@ -16,6 +16,7 @@ from hashcrush.models import Hashes, HashfileHashes, db
 
 _PLAINTEXT_HEX_PATTERN = re.compile(r"^[0-9a-f]+$")
 _HASHCAT_AUTOHEX_PATTERN = re.compile(r"^\$HEX\[([0-9A-Fa-f]*)\]$")
+_GENERIC_HEX_PATTERN = re.compile(r"^[0-9A-Fa-f]+$")
 
 
 def is_plaintext_hex_encoded(value: str | None) -> bool:
@@ -29,17 +30,43 @@ def is_plaintext_hex_encoded(value: str | None) -> bool:
     return bool(_PLAINTEXT_HEX_PATTERN.fullmatch(value))
 
 
+def _looks_like_printable_password(value: str) -> bool:
+    if value == "":
+        return True
+    if not any(character not in "0123456789abcdefABCDEF" for character in value):
+        return False
+    printable_count = sum(1 for character in value if character.isprintable())
+    return (printable_count / len(value)) >= 0.85
+
+
+def _decode_hashcat_hex_text(value: str) -> str | None:
+    if len(value) % 2 != 0 or not _GENERIC_HEX_PATTERN.fullmatch(value):
+        return None
+    try:
+        raw_bytes = bytes.fromhex(value)
+    except (TypeError, ValueError):
+        return None
+
+    for encoding in ("utf-8", "latin-1"):
+        try:
+            decoded_value = raw_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        if _looks_like_printable_password(decoded_value):
+            return decoded_value
+    return None
+
+
 def normalize_recovered_plaintext(value: str | None) -> str | None:
     """Decode hashcat $HEX[...] wrappers back to plaintext when present."""
     if value is None:
         return None
     match = _HASHCAT_AUTOHEX_PATTERN.fullmatch(value)
-    if not match:
-        return value
-    try:
-        return bytes.fromhex(match.group(1)).decode("latin-1")
-    except (TypeError, ValueError):
-        return value
+    if match:
+        decoded_value = _decode_hashcat_hex_text(match.group(1))
+        return decoded_value if decoded_value is not None else value
+    decoded_value = _decode_hashcat_hex_text(value)
+    return decoded_value if decoded_value is not None else value
 
 
 def get_ciphertext_search_digest(value: str | None) -> str | None:

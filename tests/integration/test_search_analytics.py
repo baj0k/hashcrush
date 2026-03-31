@@ -103,6 +103,43 @@ def test_analytics_download_found_includes_decoded_plaintext_and_username():
 
 
 @pytest.mark.security
+def test_analytics_download_found_decodes_stored_plain_hex_plaintext():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+        domain = Domains(name="AnalyticsPlainHexExportDomain")
+        db.session.add(domain)
+        db.session.commit()
+        hashfile = Hashfiles(name="plainhex-export.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = _seed_hash(
+            "analytics-plainhex-ciphertext",
+            cracked=True,
+            plaintext="506173733a313233",
+        )
+        _seed_hashfile_hash(
+            hash_id=hash_row.id,
+            hashfile_id=hashfile.id,
+            username="domain.test\\BAJOK",
+        )
+
+        client = app.test_client()
+        _login_client_as_user(client, user)
+
+        response = client.get(
+            f"/analytics/download?type=found&domain_id={domain.id}&hashfile_id={hashfile.id}"
+        )
+        assert response.status_code == 200
+        assert response.get_data(as_text=True) == (
+            "domain.test\\BAJOK:analytics-plainhex-ciphertext:Pass:123\n"
+        )
+
+
+@pytest.mark.security
 def test_analytics_download_reused_hash_accounts_includes_all_matching_rows():
     app = _build_app()
     with app.app_context():
