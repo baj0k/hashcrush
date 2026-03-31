@@ -66,6 +66,17 @@ services:
       HASHCRUSH_INITIAL_ADMIN_USERNAME: ${HASHCRUSH_INITIAL_ADMIN_USERNAME:-admin}
       HASHCRUSH_INITIAL_ADMIN_PASSWORD: ${HASHCRUSH_INITIAL_ADMIN_PASSWORD:?Set HASHCRUSH_INITIAL_ADMIN_PASSWORD in .env}
       HASHCRUSH_BOOTSTRAP_DB_WAIT_SECONDS: ${HASHCRUSH_BOOTSTRAP_DB_WAIT_SECONDS:-60}
+      HASHCRUSH_UPLOAD_OPERATION_RETENTION_SECONDS: ${HASHCRUSH_UPLOAD_OPERATION_RETENTION_SECONDS:-3600}
+      HASHCRUSH_UPLOAD_OPERATION_LEASE_SECONDS: ${HASHCRUSH_UPLOAD_OPERATION_LEASE_SECONDS:-300}
+      HASHCRUSH_UPLOAD_WORKER_POLL_INTERVAL_SECONDS: ${HASHCRUSH_UPLOAD_WORKER_POLL_INTERVAL_SECONDS:-2}
+      HASHCRUSH_UPLOAD_WORKER_HEARTBEAT_MAX_AGE_SECONDS: ${HASHCRUSH_UPLOAD_WORKER_HEARTBEAT_MAX_AGE_SECONDS:-30}
+      HASHCRUSH_WEB_WORKERS: ${HASHCRUSH_WEB_WORKERS:-2}
+      HASHCRUSH_WEB_THREADS: ${HASHCRUSH_WEB_THREADS:-4}
+      HASHCRUSH_WEB_TIMEOUT_SECONDS: ${HASHCRUSH_WEB_TIMEOUT_SECONDS:-120}
+      HASHCRUSH_WEB_GRACEFUL_TIMEOUT_SECONDS: ${HASHCRUSH_WEB_GRACEFUL_TIMEOUT_SECONDS:-30}
+      HASHCRUSH_WEB_KEEPALIVE_SECONDS: ${HASHCRUSH_WEB_KEEPALIVE_SECONDS:-5}
+      HASHCRUSH_WEB_MAX_REQUESTS: ${HASHCRUSH_WEB_MAX_REQUESTS:-1000}
+      HASHCRUSH_WEB_MAX_REQUESTS_JITTER: ${HASHCRUSH_WEB_MAX_REQUESTS_JITTER:-100}
     command: ["python3", "-m", "hashcrush.container_bootstrap"]
     volumes:
       - hashcrush-storage:/var/lib/hashcrush
@@ -83,7 +94,7 @@ services:
       bootstrap:
         condition: service_completed_successfully
     environment: *hashcrush-env
-    command: ["gunicorn", "--bind", "0.0.0.0:8000", "wsgi:app"]
+    command: ["gunicorn", "--config", "/app/docker/gunicorn.conf.py", "wsgi:app"]
     healthcheck:
       test:
         [
@@ -135,7 +146,7 @@ services:
       bootstrap:
         condition: service_completed_successfully
     environment: *hashcrush-env
-    command: ["gunicorn", "--bind", "0.0.0.0:8000", "wsgi:app"]
+    command: ["gunicorn", "--config", "/app/docker/gunicorn.conf.py", "wsgi:app"]
     healthcheck:
       test:
         [
@@ -173,6 +184,37 @@ services:
     volumes:
       - hashcrush-ssl:/etc/hashcrush/ssl:ro
       - ./docker/nginx/test.conf:/etc/nginx/conf.d/default.conf:ro
+
+  upload-worker:
+    build:
+      context: .
+    init: true
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
+    environment:
+      <<: *hashcrush-env
+      HASHCRUSH_ENABLE_INLINE_UPLOAD_WORKER: 0
+    command:
+      [
+        "python3",
+        "./hashcrush.py",
+        "upload-worker",
+        "--poll-interval",
+        "${HASHCRUSH_UPLOAD_WORKER_POLL_INTERVAL_SECONDS:-2}",
+      ]
+    healthcheck:
+      test: ["CMD", "python3", "/app/docker/upload_worker_healthcheck.py"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    volumes:
+      - hashcrush-storage:/var/lib/hashcrush
+      - hashcrush-runtime:/tmp/hashcrush-runtime
 
   worker:
     build:
@@ -246,6 +288,8 @@ services:
       bootstrap:
         condition: service_completed_successfully
       nginx-test:
+        condition: service_healthy
+      upload-worker:
         condition: service_healthy
       worker:
         condition: service_healthy

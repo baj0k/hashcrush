@@ -34,30 +34,6 @@ def _async_operation_response(operation):
     return jsonify(payload), 202
 
 
-def _make_stage_progress_callback(
-    reporter,
-    *,
-    title: str,
-    detail: str,
-    start_percent: float,
-    end_percent: float,
-):
-    progress_span = max(0.0, float(end_percent) - float(start_percent))
-
-    def callback(processed: int, total: int) -> None:
-        if total > 0:
-            fraction = max(0.0, min(1.0, float(processed) / float(total)))
-        else:
-            fraction = 1.0 if processed else 0.0
-        reporter.update(
-            percent=start_percent + (progress_span * fraction),
-            title=title,
-            detail=detail,
-        )
-
-    return callback
-
-
 def _render_wordlists_add_form(form, next_url: str | None = None):
     return render_template(
         'wordlists_add.html',
@@ -107,100 +83,6 @@ def _derive_wordlist_name(form_name: str | None, uploaded_filename: str | None) 
     if not filename:
         return ''
     return os.path.splitext(filename)[0]
-
-
-def _process_wordlist_upload(
-    *,
-    wordlist_name: str,
-    wordlist_path: str,
-    audit_actor: dict[str, object],
-    reporter,
-    redirect_url: str | None,
-    fallback_url: str,
-) -> None:
-    try:
-        reporter.update(
-            percent=5,
-            title='Processing wordlist...',
-            detail='Computing the uploaded file checksum.',
-        )
-        checksum = get_filehash(
-            wordlist_path,
-            progress_callback=_make_stage_progress_callback(
-                reporter,
-                title='Processing wordlist...',
-                detail='Computing the uploaded file checksum.',
-                start_percent=5,
-                end_percent=55,
-            ),
-        )
-        size = get_linecount(
-            wordlist_path,
-            progress_callback=_make_stage_progress_callback(
-                reporter,
-                title='Processing wordlist...',
-                detail='Counting wordlist entries.',
-                start_percent=55,
-                end_percent=92,
-            ),
-        )
-        reporter.update(
-            percent=95,
-            title='Saving wordlist...',
-            detail='Registering the wordlist in the database.',
-        )
-        wordlist = Wordlists(
-            name=wordlist_name,
-            type='static',
-            path=wordlist_path,
-            checksum=checksum,
-            size=size,
-        )
-        db.session.add(wordlist)
-        db.session.commit()
-    except IntegrityError:
-        db.session.rollback()
-        _remove_managed_wordlist_file(wordlist_path)
-        reporter.fail(
-            title='Wordlist upload failed.',
-            detail='Wordlist could not be uploaded because that name or file already exists. Refresh and retry.',
-        )
-        return
-    except Exception:
-        db.session.rollback()
-        _remove_managed_wordlist_file(wordlist_path)
-        current_app.logger.exception(
-            'Failed processing async wordlist upload for %s', wordlist_name
-        )
-        reporter.fail(
-            title='Wordlist upload failed.',
-            detail='The server hit an unexpected error while processing the wordlist.',
-        )
-        return
-
-    record_audit_event(
-        'wordlist.create',
-        'wordlist',
-        target_id=wordlist.id,
-        summary=f'Uploaded shared wordlist "{wordlist.name}".',
-        details={
-            'wordlist_name': wordlist.name,
-            'path': wordlist.path,
-            'type': wordlist.type,
-            'size': wordlist.size,
-        },
-        actor=audit_actor,
-    )
-    reporter.complete(
-        title='Wordlist ready.',
-        detail=f'Shared wordlist "{wordlist.name}" is available.',
-        redirect_url=_wordlist_redirect_target(
-            redirect_url,
-            fallback_url=fallback_url,
-            wordlist_id=wordlist.id,
-        ),
-        completion_flashes=[('success', 'Wordlist uploaded!')],
-    )
 
 
 @wordlists.route("/wordlists", methods=['GET'])
@@ -280,25 +162,18 @@ def wordlists_add():
         if _is_async_upload_request():
             operation = current_app.extensions['upload_operations'].start_operation(
                 owner_user_id=getattr(current_user, 'id', None),
+                operation_type='wordlist_upload',
                 redirect_url=_wordlist_redirect_target(
                     next_url,
                     fallback_url=fallback_url,
                 ),
-                worker=(
-                    lambda reporter,
-                    wordlist_name=wordlist_name,
-                    wordlist_path=wordlist_path,
-                    audit_actor=capture_audit_actor(),
-                    redirect_url=next_url,
-                    fallback_url=fallback_url: _process_wordlist_upload(
-                        wordlist_name=wordlist_name,
-                        wordlist_path=wordlist_path,
-                        audit_actor=audit_actor,
-                        reporter=reporter,
-                        redirect_url=redirect_url,
-                        fallback_url=fallback_url,
-                    )
-                ),
+                payload={
+                    'wordlist_name': wordlist_name,
+                    'wordlist_path': wordlist_path,
+                    'audit_actor': capture_audit_actor(),
+                    'redirect_url': next_url,
+                    'fallback_url': fallback_url,
+                },
             )
             return _async_operation_response(operation)
 

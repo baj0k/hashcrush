@@ -229,6 +229,43 @@ def build_config(overrides: dict[str, object] | None = None) -> dict[str, object
         fallback=900,
         minimum=1,
     )
+    enable_inline_upload_worker = _parse_bool(
+        os.getenv("HASHCRUSH_ENABLE_INLINE_UPLOAD_WORKER")
+        or file_config.get("app", "enable_inline_upload_worker", fallback=""),
+        None,
+    )
+    upload_operation_retention_seconds = _parse_int(
+        os.getenv("HASHCRUSH_UPLOAD_OPERATION_RETENTION_SECONDS")
+        or file_config.get(
+            "app",
+            "upload_operation_retention_seconds",
+            fallback="3600",
+        ),
+        fallback=3600,
+        minimum=60,
+    )
+    upload_operation_lease_seconds = _parse_int(
+        os.getenv("HASHCRUSH_UPLOAD_OPERATION_LEASE_SECONDS")
+        or file_config.get("app", "upload_operation_lease_seconds", fallback="300"),
+        fallback=300,
+        minimum=30,
+    )
+    upload_inline_max_workers = _parse_int(
+        os.getenv("HASHCRUSH_UPLOAD_INLINE_MAX_WORKERS")
+        or file_config.get("app", "upload_inline_max_workers", fallback="2"),
+        fallback=2,
+        minimum=1,
+    )
+    upload_worker_poll_interval_seconds = _parse_int(
+        os.getenv("HASHCRUSH_UPLOAD_WORKER_POLL_INTERVAL_SECONDS")
+        or file_config.get(
+            "app",
+            "upload_worker_poll_interval_seconds",
+            fallback="2",
+        ),
+        fallback=2,
+        minimum=1,
+    )
     trust_x_forwarded_for = _parse_bool(
         os.getenv("HASHCRUSH_TRUST_X_FORWARDED_FOR")
         or file_config.get("app", "trust_x_forwarded_for", fallback="false"),
@@ -270,6 +307,11 @@ def build_config(overrides: dict[str, object] | None = None) -> dict[str, object
         "AUTH_THROTTLE_MAX_ATTEMPTS": auth_throttle_max_attempts,
         "AUTH_THROTTLE_WINDOW_SECONDS": auth_throttle_window_seconds,
         "AUTH_THROTTLE_LOCKOUT_SECONDS": auth_throttle_lockout_seconds,
+        "ENABLE_INLINE_UPLOAD_WORKER": enable_inline_upload_worker,
+        "UPLOAD_OPERATION_RETENTION_SECONDS": upload_operation_retention_seconds,
+        "UPLOAD_OPERATION_LEASE_SECONDS": upload_operation_lease_seconds,
+        "UPLOAD_INLINE_MAX_WORKERS": upload_inline_max_workers,
+        "UPLOAD_WORKER_POLL_INTERVAL_SECONDS": upload_worker_poll_interval_seconds,
         "TRUST_X_FORWARDED_FOR": trust_x_forwarded_for,
         "SESSION_COOKIE_HTTPONLY": session_cookie_httponly,
         "SESSION_COOKIE_SAMESITE": session_cookie_samesite,

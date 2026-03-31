@@ -241,12 +241,19 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
         "RUNTIME_PATH", os.path.join(tempfile.gettempdir(), "hashcrush-runtime")
     )
     app.config.setdefault("STORAGE_PATH", os.path.join("/var", "lib", "hashcrush"))
+    app.config.setdefault("UPLOAD_OPERATION_RETENTION_SECONDS", 3600)
+    app.config.setdefault("UPLOAD_OPERATION_LEASE_SECONDS", 300)
+    app.config.setdefault("UPLOAD_INLINE_MAX_WORKERS", 2)
+    app.config.setdefault("UPLOAD_WORKER_POLL_INTERVAL_SECONDS", 2)
 
     if testing:
         app.config["TESTING"] = True
 
     if config_overrides:
         app.config.update(config_overrides)
+
+    if app.config.get("ENABLE_INLINE_UPLOAD_WORKER") is None:
+        app.config["ENABLE_INLINE_UPLOAD_WORKER"] = bool(app.config.get("TESTING"))
 
     # The application is expected to run over HTTPS only.
     app.config["SESSION_COOKIE_SECURE"] = True

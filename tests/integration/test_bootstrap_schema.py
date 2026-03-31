@@ -522,7 +522,7 @@ def test_upgrade_database_migrates_v1_schema_forward_to_current_version():
         result = upgrade_database()
 
         assert inspect(db.engine).has_table(AuditLog.__tablename__)
-        assert [step.version for step in result.applied_steps] == [2, 3, 4, 5, 6, 7]
+        assert [step.version for step in result.applied_steps] == [2, 3, 4, 5, 6, 7, 8]
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -549,7 +549,7 @@ def test_upgrade_database_migrates_v2_schema_forward_to_current_version():
         result = upgrade_database()
 
         assert not inspect(db.engine).has_table("settings")
-        assert [step.version for step in result.applied_steps] == [3, 4, 5, 6, 7]
+        assert [step.version for step in result.applied_steps] == [3, 4, 5, 6, 7, 8]
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -601,7 +601,7 @@ def test_upgrade_database_migrates_v3_schema_to_v4_job_task_positions():
         index_names = {
             index["name"] for index in inspect(db.engine).get_indexes("job_tasks")
         }
-        assert [step.version for step in result.applied_steps] == [4, 5, 6, 7]
+        assert [step.version for step in result.applied_steps] == [4, 5, 6, 7, 8]
         assert [row.position for row in persisted] == [0, 1]
         assert "ix_job_tasks_job_id_position" in index_names
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
@@ -627,7 +627,7 @@ def test_upgrade_database_migrates_v5_schema_to_v6_audit_filter_indexes():
         result = upgrade_database()
 
         audit_indexes = {row["name"] for row in inspect(db.engine).get_indexes("audit_logs")}
-        assert [step.version for step in result.applied_steps] == [6, 7]
+        assert [step.version for step in result.applied_steps] == [6, 7, 8]
         assert "ix_audit_logs_actor_username_created_at" in audit_indexes
         assert "ix_audit_logs_target_type_created_at" in audit_indexes
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION

@@ -22,7 +22,7 @@ from hashcrush.authz import admin_required_redirect, visible_jobs_query
 from hashcrush.domains.service import resolve_or_create_shared_domain
 from hashcrush.hashfiles.forms import HashfilesAddForm
 from hashcrush.hashfiles.validation import normalize_hashfile_file_type
-from hashcrush.hashfiles.service import create_hashfile_from_form, create_hashfile_from_path
+from hashcrush.hashfiles.service import create_hashfile_from_form
 from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles, Jobs, db
 from hashcrush.utils.file_ops import save_file
 from hashcrush.utils.storage_paths import get_runtime_subdir
@@ -42,55 +42,6 @@ def _async_operation_response(operation):
         operation_id=operation.id,
     )
     return jsonify(payload), 202
-
-
-def _remove_staged_hashfile_file(staged_path: str) -> None:
-    if staged_path and os.path.isfile(staged_path):
-        try:
-            os.remove(staged_path)
-        except OSError:
-            current_app.logger.warning(
-                'Failed removing staged hash upload file: %s', staged_path
-            )
-
-
-def _make_hashfile_progress_callback(reporter):
-    stage_config = {
-        'validate': (
-            5.0,
-            28.0,
-            'Validating hashfile...',
-            'Checking the uploaded hashfile format.',
-        ),
-        'import': (
-            28.0,
-            96.0,
-            'Importing hashes...',
-            'Loading hashes into the shared dataset.',
-        ),
-    }
-
-    def callback(stage: str, current: int, total: int) -> None:
-        start_percent, end_percent, title, detail = stage_config.get(
-            stage,
-            (
-                5.0,
-                95.0,
-                'Processing hashfile...',
-                'The server is processing the uploaded hashfile.',
-            ),
-        )
-        if total > 0:
-            fraction = max(0.0, min(1.0, float(current) / float(total)))
-        else:
-            fraction = 1.0 if current else 0.0
-        reporter.update(
-            percent=start_percent + ((end_percent - start_percent) * fraction),
-            title=title,
-            detail=detail,
-        )
-
-    return callback
 
 
 def _count_orphan_uncracked_hashes_for_hashfiles(hashfile_ids: list[int]) -> int:
@@ -209,108 +160,6 @@ def _render_hashfiles_add_form(form, domains):
         title='Hashfiles Add',
         hashfilesForm=form,
         domains=domains,
-    )
-
-
-def _process_hashfile_upload(
-    *,
-    staged_hashfile_path: str,
-    hashfile_name: str,
-    domain_selection: str,
-    new_domain_name: str | None,
-    file_type: str,
-    hash_type: str,
-    audit_actor: dict[str, object],
-    reporter,
-) -> None:
-    domain_result = None
-    try:
-        reporter.update(
-            percent=4,
-            title='Preparing hashfile...',
-            detail='Resolving the selected shared domain.',
-        )
-        domain_result, domain_error = resolve_or_create_shared_domain(
-            domain_selection,
-            new_domain_name=new_domain_name,
-            allow_create=True,
-        )
-        if domain_error or domain_result is None:
-            db.session.rollback()
-            reporter.fail(
-                title='Hashfile upload failed.',
-                detail=domain_error or 'Selected domain is invalid or no longer available.',
-            )
-            return
-
-        creation_result, error_message = create_hashfile_from_path(
-            hashfile_path=staged_hashfile_path,
-            hashfile_name=hashfile_name,
-            domain_id=domain_result.domain.id,
-            file_type=file_type,
-            hash_type=hash_type,
-            progress_callback=_make_hashfile_progress_callback(reporter),
-        )
-        if error_message or creation_result is None:
-            db.session.rollback()
-            reporter.fail(
-                title='Hashfile upload failed.',
-                detail=error_message or 'Failed importing hashfile. Check file format/hash type and retry.',
-            )
-            return
-
-        hashfile = creation_result.hashfile
-        db.session.commit()
-    except Exception:
-        db.session.rollback()
-        current_app.logger.exception(
-            'Failed processing async hashfile upload for %s', hashfile_name
-        )
-        reporter.fail(
-            title='Hashfile upload failed.',
-            detail='The server hit an unexpected error while processing the hashfile.',
-        )
-        return
-    finally:
-        _remove_staged_hashfile_file(staged_hashfile_path)
-
-    flashes: list[tuple[str, str]] = []
-    if domain_result.created:
-        record_audit_event(
-            'domain.create',
-            'domain',
-            target_id=domain_result.domain.id,
-            summary=f'Created shared domain "{domain_result.domain.name}" from hashfile creation.',
-            details={
-                'domain_name': domain_result.domain.name,
-                'source': 'hashfiles.add',
-            },
-            actor=audit_actor,
-        )
-    elif domain_selection == 'add_new':
-        flashes.append(
-            ('info', f'Using existing shared domain "{domain_result.domain.name}".')
-        )
-
-    record_audit_event(
-        'hashfile.create',
-        'hashfile',
-        target_id=hashfile.id,
-        summary=f'Registered shared hashfile "{hashfile.name}".',
-        details={
-            'hashfile_name': hashfile.name,
-            'domain_id': domain_result.domain.id,
-            'domain_name': domain_result.domain.name,
-            'hash_type': creation_result.hash_type,
-            'imported_hash_links': creation_result.imported_hash_links,
-        },
-        actor=audit_actor,
-    )
-    flashes.append(('success', 'Hashfile created!'))
-    reporter.complete(
-        title='Hashfile ready.',
-        detail=f'Shared hashfile "{hashfile.name}" is available.',
-        completion_flashes=flashes,
     )
 
 
@@ -454,30 +303,21 @@ def hashfiles_add():
             staged_hashfile_path = save_file(runtime_tmp_dir, form.hashfile.data)
             operation = current_app.extensions['upload_operations'].start_operation(
                 owner_user_id=getattr(current_user, 'id', None),
+                operation_type='hashfile_upload',
                 redirect_url=url_for('hashfiles.hashfiles_list'),
-                worker=(
-                    lambda reporter,
-                    staged_hashfile_path=staged_hashfile_path,
-                    hashfile_name=(
+                payload={
+                    'staged_hashfile_path': staged_hashfile_path,
+                    'hashfile_name': (
                         form.name.data
                         or form.hashfile.data.filename
                         or 'uploaded-hashfile.txt'
                     ),
-                    domain_selection=form.domain_id.data,
-                    new_domain_name=form.domain_name.data,
-                    file_type=(normalized_file_type or form.file_type.data),
-                    hash_type=(hash_type or ''),
-                    audit_actor=capture_audit_actor(): _process_hashfile_upload(
-                        staged_hashfile_path=staged_hashfile_path,
-                        hashfile_name=hashfile_name,
-                        domain_selection=domain_selection,
-                        new_domain_name=new_domain_name,
-                        file_type=file_type,
-                        hash_type=hash_type,
-                        audit_actor=audit_actor,
-                        reporter=reporter,
-                    )
-                ),
+                    'domain_selection': form.domain_id.data,
+                    'new_domain_name': form.domain_name.data,
+                    'file_type': normalized_file_type or form.file_type.data,
+                    'hash_type': hash_type or '',
+                    'audit_actor': capture_audit_actor(),
+                },
             )
             return _async_operation_response(operation)
 

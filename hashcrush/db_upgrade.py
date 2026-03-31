@@ -9,7 +9,7 @@ from sqlalchemy import inspect, text
 import hashcrush
 from hashcrush.models import AuditLog, SchemaVersion, UploadOperations, db, utc_now_naive
 
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 
 
 @dataclass(frozen=True)
@@ -254,6 +254,63 @@ def _migration_007_replace_settings_with_upload_operations() -> None:
         db.session.commit()
 
 
+def _add_column_if_missing(
+    table_name: str, column_name: str, definition_sql: str
+) -> None:
+    inspector = inspect(db.engine)
+    if table_name not in inspector.get_table_names():
+        return
+    column_names = {column["name"] for column in inspector.get_columns(table_name)}
+    if column_name in column_names:
+        return
+    db.session.execute(
+        text(
+            f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition_sql}"
+        )
+    )
+    db.session.commit()
+
+
+def _migration_008_expand_upload_operations_queue_metadata() -> None:
+    """Add queue metadata for the dedicated upload worker."""
+    inspector = inspect(db.engine)
+    if "upload_operations" not in inspector.get_table_names():
+        UploadOperations.__table__.create(bind=db.engine, checkfirst=True)
+        return
+
+    _add_column_if_missing(
+        "upload_operations",
+        "operation_type",
+        "VARCHAR(64) NOT NULL DEFAULT 'legacy_inline'",
+    )
+    _add_column_if_missing(
+        "upload_operations",
+        "payload_json",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )
+    _add_column_if_missing(
+        "upload_operations",
+        "lease_expires_at",
+        "TIMESTAMP NULL",
+    )
+    _add_column_if_missing(
+        "upload_operations",
+        "attempt_count",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    if "ix_upload_operations_state_lease_created_at" not in _index_names(
+        "upload_operations"
+    ):
+        db.session.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_upload_operations_state_lease_created_at "
+                "ON upload_operations (state, lease_expires_at, created_at)"
+            )
+        )
+        db.session.commit()
+
+
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(
         version=1,
@@ -296,6 +353,12 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
         name="replace_settings_with_upload_operations",
         summary="Drop the legacy settings singleton and persist async upload state.",
         upgrade=_migration_007_replace_settings_with_upload_operations,
+    ),
+    MigrationStep(
+        version=8,
+        name="expand_upload_operations_queue_metadata",
+        summary="Add queue metadata for the dedicated upload worker.",
+        upgrade=_migration_008_expand_upload_operations_queue_metadata,
     ),
 )
 

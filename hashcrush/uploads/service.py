@@ -1,4 +1,4 @@
-"""Database-backed upload operation tracking for async UI progress."""
+"""Database-backed upload operation tracking and queued processing."""
 
 from __future__ import annotations
 
@@ -8,17 +8,22 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Callable
+from typing import Any
 
 from flask import Flask
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from hashcrush.models import UploadOperations, db, utc_now_naive
+
+_STALE_UPLOAD_FAILURE_TITLE = "Processing interrupted."
+_STALE_UPLOAD_FAILURE_DETAIL = (
+    "Upload processing stopped before completion. Please retry the upload."
+)
 
 
 @dataclass
 class UploadOperationRecord:
-    """Mutable state for a single tracked upload operation."""
+    """Mutable state snapshot for a single tracked upload operation."""
 
     id: str
     owner_user_id: int | None
@@ -51,7 +56,7 @@ class UploadOperationRecord:
 
 
 class UploadOperationReporter:
-    """Worker-side helper for updating a tracked operation."""
+    """Worker-side helper for updating a tracked upload operation."""
 
     def __init__(self, service: "UploadOperationService", operation_id: str):
         self._service = service
@@ -92,25 +97,33 @@ class UploadOperationReporter:
 
 
 class UploadOperationService:
-    """Track upload/import work for browser polling in persistent storage."""
+    """Track upload/import work and hand it to an upload worker process."""
 
-    def __init__(
-        self,
-        app: Flask,
-        *,
-        retention_seconds: int = 3600,
-        max_workers: int = 2,
-    ):
+    def __init__(self, app: Flask):
         self.app = app
-        self.retention_seconds = max(60, int(retention_seconds))
+        self.retention_seconds = max(
+            60, int(app.config.get("UPLOAD_OPERATION_RETENTION_SECONDS", 3600))
+        )
+        self.lease_seconds = max(
+            30, int(app.config.get("UPLOAD_OPERATION_LEASE_SECONDS", 300))
+        )
+        self.inline_enabled = bool(app.config.get("ENABLE_INLINE_UPLOAD_WORKER", False))
         self._cleanup_interval_seconds = max(
             30.0, min(300.0, float(self.retention_seconds) / 6.0)
         )
         self._last_cleanup_monotonic = 0.0
-        self._executor = ThreadPoolExecutor(
-            max_workers=max(1, int(max_workers)),
-            thread_name_prefix="hashcrush-upload",
-        )
+        self._executor: ThreadPoolExecutor | None = None
+        if self.inline_enabled:
+            self._executor = ThreadPoolExecutor(
+                max_workers=max(
+                    1, int(app.config.get("UPLOAD_INLINE_MAX_WORKERS", 2))
+                ),
+                thread_name_prefix="hashcrush-upload-inline",
+            )
+
+    @staticmethod
+    def _serialize_json_payload(payload: Any) -> str:
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def _serialize_completion_flashes(
         self, flashes: list[tuple[str, str]] | None
@@ -119,15 +132,22 @@ class UploadOperationService:
             [str(category), str(message)]
             for category, message in (flashes or [])
         ]
-        return json.dumps(normalized, separators=(",", ":"))
+        return self._serialize_json_payload(normalized)
 
-    def _deserialize_completion_flashes(self, raw_value: str | None) -> list[tuple[str, str]]:
+    @staticmethod
+    def _deserialize_payload_json(raw_value: str | None, fallback):
         if not raw_value:
-            return []
+            return fallback
         try:
             payload = json.loads(raw_value)
         except (TypeError, ValueError):
-            return []
+            return fallback
+        return payload
+
+    def _deserialize_completion_flashes(
+        self, raw_value: str | None
+    ) -> list[tuple[str, str]]:
+        payload = self._deserialize_payload_json(raw_value, [])
         flashes: list[tuple[str, str]] = []
         if not isinstance(payload, list):
             return flashes
@@ -174,34 +194,110 @@ class UploadOperationService:
         )
         db.session.commit()
 
+    def _mark_stale_running_operations(self) -> int:
+        now = utc_now_naive()
+        stale_records = (
+            db.session.execute(
+                select(UploadOperations)
+                .where(UploadOperations.state == "running")
+                .where(UploadOperations.lease_expires_at.is_not(None))
+                .where(UploadOperations.lease_expires_at < now)
+            )
+            .scalars()
+            .all()
+        )
+        if not stale_records:
+            return 0
+
+        for record in stale_records:
+            record.state = "failed"
+            record.percent = 100.0
+            record.title = _STALE_UPLOAD_FAILURE_TITLE
+            record.detail = _STALE_UPLOAD_FAILURE_DETAIL
+            record.error_message = _STALE_UPLOAD_FAILURE_DETAIL
+            record.lease_expires_at = None
+            record.updated_at = now
+        db.session.commit()
+        return len(stale_records)
+
+    def _claim_stmt(self, stmt):
+        if db.engine.dialect.name == "postgresql":
+            return stmt.with_for_update(skip_locked=True)
+        return stmt.with_for_update()
+
+    def _mark_claimed(self, record: UploadOperations) -> None:
+        now = utc_now_naive()
+        record.state = "running"
+        record.percent = max(float(record.percent or 0.0), 1.0)
+        record.attempt_count = int(record.attempt_count or 0) + 1
+        record.lease_expires_at = now + timedelta(seconds=self.lease_seconds)
+        record.updated_at = now
+
+    def _claim_next_operation(self) -> UploadOperations | None:
+        stmt = (
+            select(UploadOperations)
+            .where(UploadOperations.state == "queued")
+            .order_by(UploadOperations.created_at.asc())
+            .limit(1)
+        )
+        record = db.session.execute(self._claim_stmt(stmt)).scalars().first()
+        if record is None:
+            return None
+        self._mark_claimed(record)
+        db.session.commit()
+        return record
+
+    def _claim_specific_operation(self, operation_id: str) -> UploadOperations | None:
+        stmt = (
+            select(UploadOperations)
+            .where(UploadOperations.id == operation_id)
+            .where(UploadOperations.state == "queued")
+            .limit(1)
+        )
+        record = db.session.execute(self._claim_stmt(stmt)).scalars().first()
+        if record is None:
+            return None
+        self._mark_claimed(record)
+        db.session.commit()
+        return record
+
     def start_operation(
         self,
         *,
         owner_user_id: int | None,
-        worker: Callable[[UploadOperationReporter], None],
+        operation_type: str,
+        payload: dict[str, object],
         redirect_url: str | None = None,
     ) -> UploadOperationRecord:
-        """Create a tracked operation and begin background processing."""
+        """Create a tracked operation and enqueue it for processing."""
 
         self._cleanup_expired()
         operation_id = uuid.uuid4().hex
+        now = utc_now_naive()
         record = UploadOperations(
             id=operation_id,
             owner_user_id=owner_user_id,
             state="queued",
+            operation_type=str(operation_type),
             title="Queued for processing...",
             detail="The server is preparing the uploaded file.",
             percent=0.0,
             redirect_url=redirect_url,
+            error_message=None,
+            payload_json=self._serialize_json_payload(payload),
+            lease_expires_at=None,
+            attempt_count=0,
             completion_flashes_json="[]",
             completion_flashes_consumed=False,
-            created_at=utc_now_naive(),
-            updated_at=utc_now_naive(),
+            created_at=now,
+            updated_at=now,
         )
         db.session.add(record)
         db.session.commit()
 
-        self._executor.submit(self._run_operation, operation_id, worker)
+        if self._executor is not None:
+            self._executor.submit(self._process_operation_in_background, operation_id)
+
         return self.get_operation(operation_id) or UploadOperationRecord(
             id=record.id,
             owner_user_id=record.owner_user_id,
@@ -215,29 +311,39 @@ class UploadOperationService:
             updated_at=record.updated_at,
         )
 
-    def _run_operation(
-        self,
-        operation_id: str,
-        worker: Callable[[UploadOperationReporter], None],
-    ) -> None:
+    def _process_operation_in_background(self, operation_id: str) -> None:
         try:
             with self.app.app_context():
-                reporter = UploadOperationReporter(self, operation_id)
-                try:
-                    reporter.update(
-                        percent=1,
-                        title="Processing file...",
-                        detail="The server is preparing the upload for validation.",
-                    )
-                    worker(reporter)
-                    snapshot = self.get_operation(operation_id)
-                    if snapshot and snapshot.state not in {"succeeded", "failed"}:
-                        reporter.complete(
-                            title="Upload complete.",
-                            detail="The uploaded file finished processing.",
-                        )
-                finally:
-                    db.session.remove()
+                self.process_operation_by_id(operation_id)
+        finally:
+            with self.app.app_context():
+                db.session.remove()
+
+    def _process_claimed_operation(self, operation_id: str) -> bool:
+        record = db.session.get(
+            UploadOperations, operation_id, populate_existing=True
+        )
+        if record is None:
+            return False
+
+        reporter = UploadOperationReporter(self, operation_id)
+        try:
+            reporter.update(
+                percent=1.0,
+                title="Processing file...",
+                detail="The server is preparing the upload for validation.",
+            )
+            payload = self._deserialize_payload_json(record.payload_json, {})
+            from hashcrush.uploads.tasks import process_upload_operation
+
+            process_upload_operation(record.operation_type, payload, reporter)
+            snapshot = self.get_operation(operation_id)
+            if snapshot and snapshot.state not in {"succeeded", "failed"}:
+                reporter.complete(
+                    title="Upload complete.",
+                    detail="The uploaded file finished processing.",
+                )
+            return True
         except Exception:
             self.app.logger.exception(
                 "Upload operation %s failed unexpectedly.", operation_id
@@ -245,8 +351,32 @@ class UploadOperationService:
             self.fail_operation(
                 operation_id,
                 title="Processing failed.",
-                detail="The server hit an unexpected error while processing the uploaded file.",
+                detail=(
+                    "The server hit an unexpected error while processing the "
+                    "uploaded file."
+                ),
             )
+            return True
+
+    def process_operation_by_id(self, operation_id: str) -> bool:
+        """Claim and process a specific queued upload operation."""
+
+        self._cleanup_expired()
+        self._mark_stale_running_operations()
+        record = self._claim_specific_operation(operation_id)
+        if record is None:
+            return False
+        return self._process_claimed_operation(record.id)
+
+    def process_next_operation(self) -> bool:
+        """Claim and process the next queued upload operation, if any."""
+
+        self._cleanup_expired()
+        self._mark_stale_running_operations()
+        record = self._claim_next_operation()
+        if record is None:
+            return False
+        return self._process_claimed_operation(record.id)
 
     def get_operation(self, operation_id: str) -> UploadOperationRecord | None:
         """Return a detached snapshot of an operation."""
@@ -264,11 +394,12 @@ class UploadOperationService:
         title: str | None = None,
         detail: str | None = None,
     ) -> None:
-        """Update a running operation."""
+        """Update a running operation and refresh its lease."""
 
         record = db.session.get(UploadOperations, operation_id)
         if record is None or record.state in {"succeeded", "failed"}:
             return
+        now = utc_now_naive()
         record.state = "running"
         if percent is not None:
             record.percent = max(float(record.percent or 0.0), min(99.0, float(percent)))
@@ -276,7 +407,8 @@ class UploadOperationService:
             record.title = title
         if detail is not None:
             record.detail = detail
-        record.updated_at = utc_now_naive()
+        record.lease_expires_at = now + timedelta(seconds=self.lease_seconds)
+        record.updated_at = now
         db.session.commit()
 
     def complete_operation(
@@ -305,6 +437,7 @@ class UploadOperationService:
             )
             record.completion_flashes_consumed = False
         record.error_message = None
+        record.lease_expires_at = None
         record.updated_at = utc_now_naive()
         db.session.commit()
 
@@ -319,6 +452,7 @@ class UploadOperationService:
         record.title = title
         record.detail = detail
         record.error_message = detail
+        record.lease_expires_at = None
         record.updated_at = utc_now_naive()
         db.session.commit()
 

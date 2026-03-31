@@ -55,7 +55,7 @@ docker compose up -d --build
 Watch startup:
 
 ```bash
-docker compose logs -f bootstrap web worker nginx
+docker compose logs -f bootstrap web upload-worker worker nginx
 ```
 
 #### 4) Verify the GPU worker
@@ -92,10 +92,11 @@ show a certificate warning unless you replace it with your own certificate.
 
 The Compose stack starts:
 - PostgreSQL
-- a one-shot bootstrap container that applies schema/data upgrades and seeds the initial admin/settings/default tasks
+- a one-shot bootstrap container that applies schema/data upgrades and seeds the initial admin account plus default tasks
 - a Gunicorn web UI container that is internal-only
 - an `nginx` reverse proxy that is the only public entrypoint
-- a worker container
+- a dedicated `upload-worker` container for long-running imports
+- a GPU cracking worker container
 
 Important notes:
 - `docker compose down` stops the stack and keeps the data volumes
@@ -126,7 +127,7 @@ docker compose run --rm bootstrap
 
 Do not use `python3 ./hashcrush.py setup` on an existing deployment. It is destructive and rebuilds the database from scratch.
 
-Current releases expect schema version `6`.
+Current releases expect schema version `8`.
 
 ## Manual Host Installation
 
@@ -165,18 +166,20 @@ Then run the web app and worker separately:
 
 ```bash
 python3 ./hashcrush.py serve
+python3 ./hashcrush.py upload-worker
 python3 ./hashcrush.py worker
 ```
 
 Manual production topology:
 - reverse proxy such as `nginx` or `caddy`
 - WSGI server serving `wsgi:app`
+- one `python3 ./hashcrush.py upload-worker` process
 - one `python3 ./hashcrush.py worker` process
 
 Example manual web entrypoint:
 
 ```bash
-gunicorn --bind 127.0.0.1:8000 wsgi:app
+gunicorn --config ./docker/gunicorn.conf.py wsgi:app
 ```
 
 CLI commands:
@@ -186,6 +189,7 @@ CLI commands:
 - `serve --reset-admin-password`
 - `serve --reset-admin-password --admin-username <admin_username>`
 - `worker`
+- `upload-worker`
 - `upgrade`
 - `upgrade --dry-run`
 - `setup`
@@ -271,7 +275,7 @@ docker compose --profile test up --build --abort-on-container-exit --exit-code-f
 These commands keep the test runner and the app-under-test in Docker. The
 `test` service runs the non-E2E suite plus local browser tests, while
 `test-external` runs the non-E2E suite and then an HTTPS smoke test through
-`nginx-test`, `web-test`, and the real worker container.
+`nginx-test`, `web-test`, `upload-worker`, and the real cracking worker container.
 
 If you intentionally reuse a fixed project name, clean it first:
 

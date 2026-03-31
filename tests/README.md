@@ -143,7 +143,7 @@ In external mode:
   flow creates a shared wordlist, a shared task, and a new domain/job
 
 In the Docker-native full-stack flow, Compose starts the full app stack (`db`,
-`bootstrap`, `web-test`, `nginx-test`, and `worker`) and then executes the
+`bootstrap`, `web-test`, `nginx-test`, `upload-worker`, and `worker`) and then executes the
 smoke suite from the dedicated `test-external` container.
 
 External mode validates:

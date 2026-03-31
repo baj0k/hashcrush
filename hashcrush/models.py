@@ -56,6 +56,12 @@ class UploadOperations(db.Model):
             "updated_at",
         ),
         db.Index("ix_upload_operations_state_updated_at", "state", "updated_at"),
+        db.Index(
+            "ix_upload_operations_state_lease_created_at",
+            "state",
+            "lease_expires_at",
+            "created_at",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
@@ -65,11 +71,19 @@ class UploadOperations(db.Model):
         nullable=True,
     )
     state: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    operation_type: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default="legacy_inline",
+    )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     detail: Mapped[str] = mapped_column(Text, nullable=False)
     percent: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     redirect_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     completion_flashes_json: Mapped[str] = mapped_column(
         Text, nullable=False, default="[]"
     )

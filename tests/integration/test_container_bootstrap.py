@@ -4,7 +4,7 @@ from pathlib import Path
 
 from cryptography.fernet import InvalidToken
 
-from hashcrush.db_upgrade import UpgradeResult
+from hashcrush.db_upgrade import CURRENT_SCHEMA_VERSION, UpgradeResult
 
 from tests.integration.support import *
 
@@ -61,7 +61,7 @@ def test_container_bootstrap_seeds_schema_admin_and_default_tasks(tmp_path, monk
         "hashcrush.container_bootstrap.upgrade_database",
         lambda dry_run=False: UpgradeResult(
             starting_version=0,
-            target_version=7,
+            target_version=CURRENT_SCHEMA_VERSION,
             applied_steps=(),
             initialized_empty_schema=True,
             dry_run=dry_run,
@@ -104,7 +104,7 @@ def test_container_bootstrap_is_idempotent_for_existing_admin_and_tasks(
         "hashcrush.container_bootstrap.upgrade_database",
         lambda dry_run=False: UpgradeResult(
             starting_version=0,
-            target_version=7,
+            target_version=CURRENT_SCHEMA_VERSION,
             applied_steps=(),
             initialized_empty_schema=True,
             dry_run=dry_run,
@@ -140,7 +140,7 @@ def test_container_bootstrap_reports_data_encryption_key_mismatch(tmp_path, monk
         "hashcrush.container_bootstrap.upgrade_database",
         lambda dry_run=False: UpgradeResult(
             starting_version=0,
-            target_version=7,
+            target_version=CURRENT_SCHEMA_VERSION,
             applied_steps=(),
             initialized_empty_schema=True,
             dry_run=dry_run,

@@ -262,7 +262,7 @@ def _build_root_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=("serve", "worker", "setup", "upgrade"),
+        choices=("serve", "worker", "upload-worker", "setup", "upgrade"),
         help="command to run (default: serve)",
     )
     parser.add_argument(
@@ -309,6 +309,17 @@ def _build_worker_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_upload_worker_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(allow_abbrev=False)
+    parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=2.0,
+        help="seconds between queued upload polls (default: 2.0)",
+    )
+    return parser
+
+
 def _normalize_cli_args(args: list[str]) -> list[str]:
     if not args:
         return []
@@ -334,6 +345,10 @@ def _parse_upgrade_args(args: list[str]) -> argparse.Namespace:
 
 def _parse_worker_args(args: list[str]) -> argparse.Namespace:
     return _build_worker_parser().parse_args(args)
+
+
+def _parse_upload_worker_args(args: list[str]) -> argparse.Namespace:
+    return _build_upload_worker_parser().parse_args(args)
 
 
 def _run_serve(parsed_args: argparse.Namespace) -> int:
@@ -364,7 +379,9 @@ def _run_serve(parsed_args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         print(
-            "Production topology: run the web app behind a reverse proxy and WSGI server, and run `python3 ./hashcrush.py worker` separately.",
+            "Production topology: run the web app behind a reverse proxy and WSGI server, "
+            "and run `python3 ./hashcrush.py worker` plus "
+            "`python3 ./hashcrush.py upload-worker` separately.",
             file=sys.stderr,
         )
 
@@ -431,6 +448,50 @@ def _run_worker(parsed_args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_upload_worker(parsed_args: argparse.Namespace) -> int:
+    ensure_flask_bcrypt()
+
+    create_app = _load_create_app()
+    app = create_app(
+        config_overrides={
+            "ENABLE_LOCAL_EXECUTOR": False,
+            "ENABLE_INLINE_UPLOAD_WORKER": False,
+        }
+    )
+
+    with app.app_context():
+        from hashcrush.models import db
+        from hashcrush.uploads import UploadWorkerService
+
+        bootstrap_errors = _runtime_bootstrap_errors(db)
+        if bootstrap_errors:
+            for error in bootstrap_errors:
+                print(f"Error: {error}", file=sys.stderr)
+            return 1
+
+        service = UploadWorkerService(app, poll_interval=parsed_args.poll_interval)
+
+    previous_handlers: list[tuple[int, object]] = []
+
+    def _handle_signal(signum, _frame):
+        app.logger.info("Upload worker received signal=%s; stopping.", signum)
+        service.stop()
+
+    for signal_name in ("SIGINT", "SIGTERM"):
+        if hasattr(signal, signal_name):
+            signum = getattr(signal, signal_name)
+            previous_handlers.append((signum, signal.getsignal(signum)))
+            signal.signal(signum, _handle_signal)
+
+    print("Starting HashCrush upload worker.")
+    try:
+        service.run_forever()
+    finally:
+        for signum, previous_handler in previous_handlers:
+            signal.signal(signum, previous_handler)
+    return 0
+
+
 def _run_setup(args: list[str]) -> int:
     bootstrap_cli = _load_bootstrap_cli()
     return bootstrap_cli.main(args)
@@ -491,6 +552,8 @@ def cli(args) -> int:
             return _run_upgrade(_parse_upgrade_args(argv[1:]))
         if first == "worker":
             return _run_worker(_parse_worker_args(argv[1:]))
+        if first == "upload-worker":
+            return _run_upload_worker(_parse_upload_worker_args(argv[1:]))
         if first == "serve":
             return _run_serve(_parse_serve_args(argv[1:]))
         if first.startswith("-"):
