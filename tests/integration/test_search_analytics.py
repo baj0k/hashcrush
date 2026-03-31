@@ -1,5 +1,7 @@
 """Integration tests for search and analytics flows."""
 # ruff: noqa: F403,F405
+from datetime import UTC, datetime
+
 from tests.integration.support import *
 
 
@@ -31,7 +33,11 @@ def test_analytics_download_rejects_invalid_domain_id_and_uses_hashfile_id_in_fi
         )
         assert valid.status_code == 200
         content_disposition = valid.headers.get("Content-Disposition", "")
-        assert f"found_{domain.id}_{hashfile.id}.txt" in content_disposition
+        expected_date = datetime.now(UTC).date().isoformat()
+        assert (
+            f"recovered_accounts_domain_{domain.id}_hashfile_{hashfile.id}_{expected_date}.txt"
+            in content_disposition
+        )
 
 @pytest.mark.security
 def test_analytics_download_normalizes_export_type_query_param():
@@ -53,7 +59,125 @@ def test_analytics_download_normalizes_export_type_query_param():
         response = client.get(f"/analytics/download?type= Found &domain_id={domain.id}")
         assert response.status_code == 200
         content_disposition = response.headers.get("Content-Disposition", "")
-        assert f"found_{domain.id}_all.txt" in content_disposition
+        expected_date = datetime.now(UTC).date().isoformat()
+        assert (
+            f"recovered_accounts_domain_{domain.id}_{expected_date}.txt"
+            in content_disposition
+        )
+
+@pytest.mark.security
+def test_analytics_download_found_includes_decoded_plaintext_and_username():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+        domain = Domains(name="AnalyticsExportDomain")
+        db.session.add(domain)
+        db.session.commit()
+        hashfile = Hashfiles(name="export.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = _seed_hash(
+            "analytics-export-ciphertext",
+            cracked=True,
+            plaintext="$HEX[506173733a313233]",
+        )
+        _seed_hashfile_hash(
+            hash_id=hash_row.id,
+            hashfile_id=hashfile.id,
+            username="ACME\\Administrator",
+        )
+
+        client = app.test_client()
+        _login_client_as_user(client, user)
+
+        response = client.get(
+            f"/analytics/download?type=found&domain_id={domain.id}&hashfile_id={hashfile.id}"
+        )
+        assert response.status_code == 200
+        assert response.get_data(as_text=True) == (
+            "ACME\\Administrator:analytics-export-ciphertext:Pass:123\n"
+        )
+
+
+@pytest.mark.security
+def test_analytics_download_reused_hash_accounts_includes_all_matching_rows():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+        domain = Domains(name="AnalyticsReusedHashesDomain")
+        db.session.add(domain)
+        db.session.commit()
+        hashfile = Hashfiles(name="reused-hashes.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        reused_hash = _seed_hash("shared-ciphertext", cracked=False)
+        unique_hash = _seed_hash("unique-ciphertext", cracked=False)
+        _seed_hashfile_hash(hash_id=reused_hash.id, hashfile_id=hashfile.id, username="alice")
+        _seed_hashfile_hash(hash_id=reused_hash.id, hashfile_id=hashfile.id, username="bob")
+        _seed_hashfile_hash(hash_id=unique_hash.id, hashfile_id=hashfile.id, username="charlie")
+
+        client = app.test_client()
+        _login_client_as_user(client, user)
+
+        response = client.get(
+            f"/analytics/download?type=reused_hashes&domain_id={domain.id}&hashfile_id={hashfile.id}"
+        )
+        assert response.status_code == 200
+        assert response.get_data(as_text=True) == (
+            "alice:shared-ciphertext\n"
+            "bob:shared-ciphertext\n"
+        )
+        expected_date = datetime.now(UTC).date().isoformat()
+        assert (
+            f"reused_hash_accounts_domain_{domain.id}_hashfile_{hashfile.id}_{expected_date}.txt"
+            in response.headers.get("Content-Disposition", "")
+        )
+
+
+@pytest.mark.security
+def test_analytics_download_reused_password_accounts_includes_decoded_plaintext():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+        domain = Domains(name="AnalyticsReusedPasswordsDomain")
+        db.session.add(domain)
+        db.session.commit()
+        hashfile = Hashfiles(name="reused-passwords.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        first_hash = _seed_hash("shared-password-one", cracked=True, plaintext="SharedPass123!")
+        second_hash = _seed_hash("shared-password-two", cracked=True, plaintext="SharedPass123!")
+        unique_hash = _seed_hash("unique-password", cracked=True, plaintext="UniquePass123!")
+        _seed_hashfile_hash(hash_id=first_hash.id, hashfile_id=hashfile.id, username="alice")
+        _seed_hashfile_hash(hash_id=second_hash.id, hashfile_id=hashfile.id, username="bob")
+        _seed_hashfile_hash(hash_id=unique_hash.id, hashfile_id=hashfile.id, username="charlie")
+
+        client = app.test_client()
+        _login_client_as_user(client, user)
+
+        response = client.get(
+            f"/analytics/download?type=reused_passwords&domain_id={domain.id}&hashfile_id={hashfile.id}"
+        )
+        assert response.status_code == 200
+        assert response.get_data(as_text=True) == (
+            "alice:shared-password-one:SharedPass123!\n"
+            "bob:shared-password-two:SharedPass123!\n"
+        )
+        expected_date = datetime.now(UTC).date().isoformat()
+        assert (
+            f"reused_password_accounts_domain_{domain.id}_hashfile_{hashfile.id}_{expected_date}.txt"
+            in response.headers.get("Content-Disposition", "")
+        )
+
 
 @pytest.mark.security
 def test_analytics_page_is_global_but_downloads_require_admin():
@@ -95,6 +219,8 @@ def test_analytics_page_is_global_but_downloads_require_admin():
         assert "Download Charts" not in analytics_html
         assert "/analytics/download?type=found" not in analytics_html
         assert "/analytics/download?type=left" not in analytics_html
+        assert "/analytics/download?type=reused_hashes" not in analytics_html
+        assert "/analytics/download?type=reused_passwords" not in analytics_html
 
         download_response = client.get("/analytics/download?type=found")
         assert download_response.status_code == 302
@@ -131,10 +257,45 @@ def test_analytics_admin_view_shows_reuse_table_and_password_quality_chart():
         assert response.status_code == 200
         html = response.get_data(as_text=True)
         assert "Recovered Password Quality" in html
+        assert "Hash Reuse" in html
         assert "Password Reuse" in html
         assert "Most Reused Recovered Passwords" in html
         assert "SharedPass123!" in html
         assert "Accounts Where Password Matches Username" in html
+
+
+@pytest.mark.security
+def test_analytics_scope_stats_show_non_unique_hash_metrics():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="AnalyticsHashReuseDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="analytics-hash-reuse.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        reused_hash = _seed_hash("shared-hash-value", cracked=False)
+        unique_hash = _seed_hash("unique-hash-value", cracked=False)
+        _seed_hashfile_hash(hash_id=reused_hash.id, hashfile_id=hashfile.id, username="alice")
+        _seed_hashfile_hash(hash_id=reused_hash.id, hashfile_id=hashfile.id, username="bob")
+        _seed_hashfile_hash(hash_id=unique_hash.id, hashfile_id=hashfile.id, username="charlie")
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get(f"/analytics?domain_id={domain.id}&hashfile_id={hashfile.id}")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Non-Unique Hash Values" in html
+        assert "1 (50%)" in html
+        assert "Account Rows Sharing a Hash" in html
+        assert "2 (66.7%)" in html
 
 @pytest.mark.security
 def test_analytics_page_renders_upperalphanumeric_and_mixed_categories():

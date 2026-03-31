@@ -15,6 +15,7 @@ from hashcrush.crypto_utils import (
 from hashcrush.models import Hashes, HashfileHashes, db
 
 _PLAINTEXT_HEX_PATTERN = re.compile(r"^[0-9a-f]+$")
+_HASHCAT_AUTOHEX_PATTERN = re.compile(r"^\$HEX\[([0-9A-Fa-f]*)\]$")
 
 
 def is_plaintext_hex_encoded(value: str | None) -> bool:
@@ -26,6 +27,19 @@ def is_plaintext_hex_encoded(value: str | None) -> bool:
     if len(value) % 2 != 0:
         return False
     return bool(_PLAINTEXT_HEX_PATTERN.fullmatch(value))
+
+
+def normalize_recovered_plaintext(value: str | None) -> str | None:
+    """Decode hashcat $HEX[...] wrappers back to plaintext when present."""
+    if value is None:
+        return None
+    match = _HASHCAT_AUTOHEX_PATTERN.fullmatch(value)
+    if not match:
+        return value
+    try:
+        return bytes.fromhex(match.group(1)).decode("latin-1")
+    except (TypeError, ValueError):
+        return value
 
 
 def get_ciphertext_search_digest(value: str | None) -> str | None:
@@ -58,15 +72,15 @@ def decode_plaintext_from_storage(value: str | None) -> str | None:
     if value is None:
         return None
     if is_encrypted_storage_value(value):
-        return decrypt_secret_value(value)
+        return normalize_recovered_plaintext(decrypt_secret_value(value))
     if value == "":
         return ""
     if is_plaintext_hex_encoded(value):
         try:
-            return bytes.fromhex(value).decode("latin-1")
+            return normalize_recovered_plaintext(bytes.fromhex(value).decode("latin-1"))
         except (TypeError, ValueError):
-            return value
-    return value
+            return normalize_recovered_plaintext(value)
+    return normalize_recovered_plaintext(value)
 
 
 def encode_username_for_storage(value: str | None) -> str:

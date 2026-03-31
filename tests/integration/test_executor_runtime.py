@@ -116,6 +116,77 @@ def test_executor_import_stores_plaintext_encrypted_at_rest(tmp_path):
 
 
 @pytest.mark.security
+def test_executor_import_decodes_hashcat_autohex_plaintext(tmp_path):
+    from hashcrush.executor.service import LocalExecutorService
+    from hashcrush.utils.utils import decode_plaintext_from_storage, get_md5_hash
+
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="AutoHexDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="autohex.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = Hashes(
+            sub_ciphertext=get_md5_hash("hash-with-autohex"),
+            ciphertext="hash-with-autohex",
+            hash_type=1000,
+            cracked=False,
+            plaintext=None,
+        )
+        db.session.add(hash_row)
+        db.session.commit()
+
+        db.session.add(HashfileHashes(hash_id=hash_row.id, hashfile_id=hashfile.id))
+        db.session.commit()
+
+        task = Tasks(
+            name="mask",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a",
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        job = Jobs(
+            name="autohex-job",
+            status="Running",
+            domain_id=domain.id,
+            owner_id=user.id,
+            hashfile_id=hashfile.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        job_task = JobTasks(job_id=job.id, task_id=task.id, status="Running")
+        db.session.add(job_task)
+        db.session.commit()
+
+        crack_path = tmp_path / "cracked.txt"
+        crack_path.write_text(
+            "hash-with-autohex:$HEX[506173733a313233]\n",
+            encoding="latin-1",
+        )
+
+        service = LocalExecutorService(app)
+        imported_count = service._import_crack_file_for_task(job_task, str(crack_path))
+        assert imported_count == 1
+
+        imported_hash = db.session.get(Hashes, hash_row.id)
+        assert imported_hash.cracked is True
+        assert decode_plaintext_from_storage(imported_hash.plaintext) == "Pass:123"
+
+
+@pytest.mark.security
 def test_executor_ownership_lock_allows_only_one_active_owner(monkeypatch):
     from hashcrush.executor import service as executor_service
 

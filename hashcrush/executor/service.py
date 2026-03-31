@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import signal
 import subprocess
 import threading
@@ -35,6 +34,7 @@ from hashcrush.utils.secret_storage import (
     encode_plaintext_for_storage,
     get_ciphertext_search_digest,
     get_plaintext_search_digest,
+    normalize_recovered_plaintext,
 )
 from hashcrush.utils.storage_paths import get_runtime_subdir
 from hashcrush.wordlists.dynamic import update_all_dynamic_wordlists, update_dynamic_wordlist
@@ -761,11 +761,10 @@ class LocalExecutorService:
             for entry in file_contents.read().split("\n"):
                 if ":" not in entry:
                     continue
-                encoded_plaintext = entry.split(":")[-1]
-                plaintext = encode_plaintext_for_storage(encoded_plaintext.rstrip())
-                elements = entry.split(":")
-                elements.pop()
-                ciphertext = ":".join(elements)
+                ciphertext, encoded_plaintext = entry.rsplit(":", 1)
+                plaintext = encode_plaintext_for_storage(
+                    normalize_recovered_plaintext(encoded_plaintext.rstrip("\r"))
+                )
                 parsed_entries.append(
                     (
                         tuple(

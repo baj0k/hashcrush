@@ -63,8 +63,7 @@
                     <div class="dropdown-divider"></div>
                     <button class="dropdown-item" type="button" data-chart-download="recovered_accounts">Recovered Accounts</button>
                     <button class="dropdown-item" type="button" data-chart-download="password_quality">Recovered Password Quality</button>
-                    <button class="dropdown-item" type="button" data-chart-download="recovered_hashes">Recovered Hashes</button>
-                    <button class="dropdown-item" type="button" data-chart-download="password_reuse">Password Reuse</button>
+                    <button class="dropdown-item" type="button" data-chart-download="hash_reuse">Hash Reuse</button>
                     <button class="dropdown-item" type="button" data-chart-download="composition_makeup">Composition Makeup</button>
                     <button class="dropdown-item" type="button" data-chart-download="passwords_count_len">Passwords Count by Length</button>
                 </div>
@@ -79,6 +78,7 @@
     <ul class="mb-0">
         <li><strong>Recovered Accounts</strong> counts scoped account rows linked through <code>hashfile_hashes</code>.</li>
         <li><strong>Recovered Password Quality</strong> is calculated from recovered passwords only. A password meets the current baseline when length is at least 8 and at least 3 of 4 character classes are present: lower, upper, digit, symbol.</li>
+        <li><strong>Hash Reuse</strong> measures account rows that share the same stored hash value with at least one other row in the selected scope, regardless of whether the password is recovered.</li>
         <li><strong>Password Reuse</strong> measures recovered account rows that share the same recovered password within the selected scope.</li>
         <li><strong>Domain Posture Comparison</strong> ranks shared domains using observed weak-password rate, reuse rate, and password-equals-username findings from recovered accounts only.</li>
     </ul>
@@ -183,35 +183,20 @@
 
     <div class="card hc-chart-card">
         <div class="card-header hc-card-header-actions">
-            <span>Recovered Hashes</span>
+            <span>Hash Reuse</span>
             {% if current_user.admin %}
-            <button type="button" class="btn btn-link hc-chart-download" data-chart-download="recovered_hashes" aria-label="Download Recovered Hashes chart" title="Download Chart">
+            <button type="button" class="btn btn-link hc-chart-download" data-chart-download="hash_reuse" aria-label="Download Hash Reuse chart" title="Download Chart">
                 <i class="fa fa-download" aria-hidden="true"></i>
             </button>
             {% endif %}
         </div>
         <div class="card-body">
-            <div class="hc-chart-slot" data-chart-slot="recovered_hashes">
+            <div class="hc-chart-slot" data-chart-slot="hash_reuse">
                 <p class="text-muted mb-0">Preparing chart...</p>
             </div>
         </div>
     </div>
 
-    <div class="card hc-chart-card">
-        <div class="card-header hc-card-header-actions">
-            <span>Password Reuse</span>
-            {% if current_user.admin %}
-            <button type="button" class="btn btn-link hc-chart-download" data-chart-download="password_reuse" aria-label="Download Password Reuse chart" title="Download Chart">
-                <i class="fa fa-download" aria-hidden="true"></i>
-            </button>
-            {% endif %}
-        </div>
-        <div class="card-body">
-            <div class="hc-chart-slot" data-chart-slot="password_reuse">
-                <p class="text-muted mb-0">Preparing chart...</p>
-            </div>
-        </div>
-    </div>
 </div>
 
 <div class="hc-chart-grid hc-chart-grid--two">
@@ -235,6 +220,14 @@
                     <tr>
                         <td>Recovered Accounts</td>
                         <td>{{ scope_posture.recovered_accounts }} ({{ scope_posture.recovered_percent }})</td>
+                    </tr>
+                    <tr>
+                        <td>Non-Unique Hash Values</td>
+                        <td>{{ scope_posture.reused_hash_value_count }} ({{ scope_posture.reused_hash_value_percent }})</td>
+                    </tr>
+                    <tr>
+                        <td>Account Rows Sharing a Hash</td>
+                        <td>{{ scope_posture.reused_hash_account_count }} ({{ scope_posture.reused_hash_account_percent }})</td>
                     </tr>
                     <tr>
                         <td>Weak Recovered Passwords</td>
@@ -263,12 +256,12 @@
                             <div class="hc-inline-actions">
                                 {% if domain_id %}
                                     {% if hashfile_id %}
-                                    <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='found', domain_id=domain_id, hashfile_id=hashfile_id) }}" role="button">Cracked</a>
+                                    <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='found', domain_id=domain_id, hashfile_id=hashfile_id) }}" role="button">Recovered Accounts</a>
                                     {% else %}
-                                    <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='found', domain_id=domain_id) }}" role="button">Cracked</a>
+                                    <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='found', domain_id=domain_id) }}" role="button">Recovered Accounts</a>
                                     {% endif %}
                                 {% else %}
-                                <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='found') }}" role="button">Cracked</a>
+                                <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='found') }}" role="button">Recovered Accounts</a>
                                 {% endif %}
                             </div>
                         </td>
@@ -279,12 +272,31 @@
                             <div class="hc-inline-actions">
                                 {% if domain_id %}
                                     {% if hashfile_id %}
-                                    <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='left', domain_id=domain_id, hashfile_id=hashfile_id) }}" role="button">Uncracked</a>
+                                    <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='left', domain_id=domain_id, hashfile_id=hashfile_id) }}" role="button">Unrecovered Accounts</a>
                                     {% else %}
-                                    <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='left', domain_id=domain_id) }}" role="button">Uncracked</a>
+                                    <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='left', domain_id=domain_id) }}" role="button">Unrecovered Accounts</a>
                                     {% endif %}
                                 {% else %}
-                                <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='left') }}" role="button">Uncracked</a>
+                                <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='left') }}" role="button">Unrecovered Accounts</a>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>Reuse Exports</td>
+                        <td>
+                            <div class="hc-inline-actions">
+                                {% if domain_id %}
+                                    {% if hashfile_id %}
+                                    <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='reused_hashes', domain_id=domain_id, hashfile_id=hashfile_id) }}" role="button">Reused Hash Accounts</a>
+                                    <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='reused_passwords', domain_id=domain_id, hashfile_id=hashfile_id) }}" role="button">Reused Password Accounts</a>
+                                    {% else %}
+                                    <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='reused_hashes', domain_id=domain_id) }}" role="button">Reused Hash Accounts</a>
+                                    <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='reused_passwords', domain_id=domain_id) }}" role="button">Reused Password Accounts</a>
+                                    {% endif %}
+                                {% else %}
+                                <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='reused_hashes') }}" role="button">Reused Hash Accounts</a>
+                                <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='reused_passwords') }}" role="button">Reused Password Accounts</a>
                                 {% endif %}
                             </div>
                         </td>

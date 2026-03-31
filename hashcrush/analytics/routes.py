@@ -1,6 +1,7 @@
 """Flask routes to handle Analytics."""
 import io
 from collections import Counter, defaultdict
+from datetime import UTC, datetime
 
 from flask import (
     Blueprint,
@@ -128,6 +129,43 @@ def _build_cracked_password_metrics(cracked_rows: list[tuple[str | None, str | N
     }
 
 
+def _build_hash_reuse_summary(scoped_hashfile_ids: list[int]) -> dict[str, int | float]:
+    if not scoped_hashfile_ids:
+        return {
+            'total_unique_hashes': 0,
+            'reused_hash_value_count': 0,
+            'reused_hash_account_count': 0,
+            'unique_hash_account_count': 0,
+            'reused_hash_value_percent': 0.0,
+            'reused_hash_account_percent': 0.0,
+        }
+
+    grouped_rows = db.session.execute(
+        select(Hashes.sub_ciphertext, func.count(HashfileHashes.id))
+        .select_from(Hashes)
+        .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+        .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
+        .group_by(Hashes.sub_ciphertext)
+    ).all()
+
+    total_unique_hashes = len(grouped_rows)
+    reused_hash_value_count = int(sum(1 for _, count in grouped_rows if int(count) > 1))
+    reused_hash_account_count = int(
+        sum(int(count) for _, count in grouped_rows if int(count) > 1)
+    )
+    total_accounts = int(sum(int(count) for _, count in grouped_rows))
+    unique_hash_account_count = max(total_accounts - reused_hash_account_count, 0)
+
+    return {
+        'total_unique_hashes': total_unique_hashes,
+        'reused_hash_value_count': reused_hash_value_count,
+        'reused_hash_account_count': reused_hash_account_count,
+        'unique_hash_account_count': unique_hash_account_count,
+        'reused_hash_value_percent': _ratio(reused_hash_value_count, total_unique_hashes),
+        'reused_hash_account_percent': _ratio(reused_hash_account_count, total_accounts),
+    }
+
+
 def _parse_positive_int(value):
     if value in (None, ''):
         return None
@@ -194,6 +232,40 @@ def _scoped_hash_rows_stmt(scoped_hashfile_ids: list[int]):
         .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
         .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
     )
+
+
+def _download_date_label() -> str:
+    return datetime.now(UTC).date().isoformat()
+
+
+def _export_scope_suffix(domain_id: int | None, hashfile_id: int | None) -> str:
+    if hashfile_id is not None and domain_id is not None:
+        return f"domain_{domain_id}_hashfile_{hashfile_id}"
+    if domain_id is not None:
+        return f"domain_{domain_id}"
+    return "all_domains"
+
+
+def _export_filename(base_name: str, domain_id: int | None, hashfile_id: int | None) -> str:
+    return f"{base_name}_{_export_scope_suffix(domain_id, hashfile_id)}_{_download_date_label()}.txt"
+
+
+def _write_account_export_line(
+    output: io.StringIO,
+    hash_row: Hashes,
+    account_row: HashfileHashes,
+    *,
+    include_plaintext: bool,
+) -> None:
+    parts: list[str] = []
+    if account_row.username:
+        username = decode_username_from_storage(account_row.username)
+        if username:
+            parts.append(str(username))
+    parts.append(str(decode_ciphertext_from_storage(hash_row.ciphertext)))
+    if include_plaintext:
+        parts.append(str(_decoded_plaintext(hash_row.plaintext)))
+    output.write(":".join(parts) + "\n")
 
 
 def _ratio(numerator: int, denominator: int) -> float:
@@ -335,7 +407,9 @@ def _format_length_value(value: float | None) -> str:
     return str(value)
 
 
-def _build_scope_findings(posture_summary: dict[str, object]) -> list[str]:
+def _build_scope_findings(
+    posture_summary: dict[str, object], hash_reuse_summary: dict[str, int | float]
+) -> list[str]:
     total_accounts = int(posture_summary['total_accounts'])
     recovered_accounts = int(posture_summary['recovered_accounts'])
     weak_recovered_count = int(posture_summary['weak_recovered_count'])
@@ -369,6 +443,14 @@ def _build_scope_findings(posture_summary: dict[str, object]) -> list[str]:
     else:
         findings.append("No recovered passwords are currently reused in this scope.")
 
+    reused_hash_account_count = int(hash_reuse_summary['reused_hash_account_count'])
+    if reused_hash_account_count > 0:
+        findings.append(
+            f"{_format_percent(float(hash_reuse_summary['reused_hash_account_percent']))} of account rows share a non-unique hash value in this scope."
+        )
+    else:
+        findings.append("No account rows currently share a non-unique hash value in this scope.")
+
     if username_match_count > 0:
         findings.append(
             f"{format_display(username_match_count)} recovered account(s) use a password that matches the username."
@@ -376,7 +458,7 @@ def _build_scope_findings(posture_summary: dict[str, object]) -> list[str]:
     else:
         findings.append("No recovered accounts in this scope currently have password equal to username.")
 
-    return findings[:4]
+    return findings[:5]
 
 
 def _build_domain_posture_rows(domain_rows: list[Domains], selected_domain_id: int | None) -> list[dict[str, object]]:
@@ -494,19 +576,23 @@ def get_analytics():
             analytics_chart_data={
                 'recovered_accounts': {'labels': [], 'values': [], 'center_text': ''},
                 'password_quality': {'labels': [], 'values': []},
-                'recovered_hashes': {'labels': [], 'values': [], 'center_text': ''},
-                'password_reuse': {'labels': [], 'values': []},
+                'hash_reuse': {'labels': [], 'values': []},
                 'composition_makeup': {'labels': [], 'values': []},
                 'passwords_count_len': {'labels': [], 'values': []},
             },
             fig7_values={},
             fig7_total=0,
             findings=_build_scope_findings(
-                _build_posture_summary(0, _build_cracked_password_metrics([]))
+                _build_posture_summary(0, _build_cracked_password_metrics([])),
+                _build_hash_reuse_summary([]),
             ),
             scope_posture={
                 'recovered_accounts': format_display(0),
                 'recovered_percent': _format_percent(0.0),
+                'reused_hash_value_count': format_display(0),
+                'reused_hash_value_percent': _format_percent(0.0),
+                'reused_hash_account_count': format_display(0),
+                'reused_hash_account_percent': _format_percent(0.0),
                 'weak_recovered_count': format_display(0),
                 'weak_recovered_percent': _format_percent(0.0),
                 'reused_recovered_count': format_display(0),
@@ -571,59 +657,27 @@ def get_analytics():
     fig2_labels = [row[0] for row in fig2_data]
     fig2_values = [row[1] for row in fig2_data]
 
-    fig4_reused_cnt = int(
-        sum(count for count in cracked_metrics['password_counts'].values() if count > 1)
-    )
-    fig4_unique_cnt = max(fig1_cracked_cnt - fig4_reused_cnt, 0)
-    fig4_data = [
-        ("Reused: " + str(format_display(fig4_reused_cnt)), fig4_reused_cnt),
-        ("Unique: " + str(format_display(fig4_unique_cnt)), fig4_unique_cnt),
-    ]
-    fig4_labels = [row[0] for row in fig4_data]
-    fig4_values = [row[1] for row in fig4_data]
-
-    # Figure 3 (Recovered Hashes)
-    fig3_cracked_cnt = int(
-        db.session.scalar(
-            select(func.count(func.distinct(func.coalesce(Hashes.plaintext_digest, Hashes.plaintext))))
-            .select_from(Hashes)
-            .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
-            .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
-            .where(Hashes.cracked.is_(True))
-        )
-        or 0
-    )
-    fig3_uncracked_cnt = int(
-        db.session.scalar(
-            select(func.count(func.distinct(Hashes.sub_ciphertext)))
-            .select_from(Hashes)
-            .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
-            .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
-            .where(Hashes.cracked.is_(False))
-        )
-        or 0
-    )
+    # Figure 3 (Hash Reuse)
+    hash_reuse_summary = _build_hash_reuse_summary(scoped_hashfile_ids)
+    fig3_reused_hash_accounts = int(hash_reuse_summary['reused_hash_account_count'])
+    fig3_unique_hash_accounts = int(hash_reuse_summary['unique_hash_account_count'])
     fig3_data = [
-        ("Recovered: " + str(format_display(fig3_cracked_cnt)), fig3_cracked_cnt),
-        ("Unrecovered: " + str(format_display(fig3_uncracked_cnt)), fig3_uncracked_cnt),
+        (
+            "Shared Hash Rows: " + str(format_display(fig3_reused_hash_accounts)),
+            fig3_reused_hash_accounts,
+        ),
+        (
+            "Unique Hash Rows: " + str(format_display(fig3_unique_hash_accounts)),
+            fig3_unique_hash_accounts,
+        ),
     ]
     fig3_labels = [row[0] for row in fig3_data]
     fig3_values = [row[1] for row in fig3_data]
-    fig3_total = fig3_cracked_cnt + fig3_uncracked_cnt
-    fig3_percent = _format_percent(_ratio(fig3_cracked_cnt, fig3_total))
 
     # General Stats Table
     total_runtime = sum(hashfile.runtime or 0 for hashfile in scope['scoped_hashfiles'])
     total_accounts = fig1_total
-    total_unique_hashes = int(
-        db.session.scalar(
-            select(func.count(func.distinct(Hashes.sub_ciphertext)))
-            .select_from(Hashes)
-            .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
-            .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
-        )
-        or 0
-    )
+    total_unique_hashes = int(hash_reuse_summary['total_unique_hashes'])
     posture_summary = _build_posture_summary(fig1_total, cracked_metrics)
     total_accounts_display = format_display(total_accounts)
     total_unique_hashes_display = format_display(total_unique_hashes)
@@ -683,6 +737,10 @@ def get_analytics():
     scope_posture = {
         'recovered_accounts': format_display(posture_summary['recovered_accounts']),
         'recovered_percent': _format_percent(posture_summary['recovered_percent']),
+        'reused_hash_value_count': format_display(hash_reuse_summary['reused_hash_value_count']),
+        'reused_hash_value_percent': _format_percent(float(hash_reuse_summary['reused_hash_value_percent'])),
+        'reused_hash_account_count': format_display(hash_reuse_summary['reused_hash_account_count']),
+        'reused_hash_account_percent': _format_percent(float(hash_reuse_summary['reused_hash_account_percent'])),
         'weak_recovered_count': format_display(posture_summary['weak_recovered_count']),
         'weak_recovered_percent': _format_percent(posture_summary['weak_recovered_percent']),
         'reused_recovered_count': format_display(posture_summary['reused_recovered_count']),
@@ -705,14 +763,9 @@ def get_analytics():
                 'labels': fig2_labels,
                 'values': fig2_values,
             },
-            'recovered_hashes': {
+            'hash_reuse': {
                 'labels': fig3_labels,
                 'values': fig3_values,
-                'center_text': fig3_percent,
-            },
-            'password_reuse': {
-                'labels': fig4_labels,
-                'values': fig4_values,
             },
             'composition_makeup': {
                 'labels': fig5_labels,
@@ -725,7 +778,7 @@ def get_analytics():
         },
         fig7_values=fig7_values,
         fig7_total=fig7_total,
-        findings=_build_scope_findings(posture_summary),
+        findings=_build_scope_findings(posture_summary, hash_reuse_summary),
         scope_posture=scope_posture,
         domain_posture_rows=domain_posture_rows,
         show_domain_comparison=hashfile_id is None and bool(domain_posture_rows),
@@ -754,11 +807,14 @@ def analytics_download_hashes():
         return redirect(url_for('analytics.get_analytics'))
 
     export_type = (request.args.get('type') or '').strip().lower()
-    if export_type == 'found':
-        filename = 'found'
-    elif export_type == 'left':
-        filename = 'left'
-    else:
+    export_names = {
+        'found': 'recovered_accounts',
+        'left': 'unrecovered_accounts',
+        'reused_hashes': 'reused_hash_accounts',
+        'reused_passwords': 'reused_password_accounts',
+    }
+    base_filename = export_names.get(export_type)
+    if base_filename is None:
         return redirect('/analytics')
 
     domain_id_arg = request.args.get('domain_id')
@@ -775,17 +831,13 @@ def analytics_download_hashes():
         return redirect('/analytics')
     scoped_hashfile_ids = scope['scoped_hashfile_ids']
 
-    if domain_id is not None:
-        filename += '_' + str(domain_id)
-    if hashfile_id is not None:
-        filename += '_' + str(hashfile_id)
-    else:
-        filename += '_all'
-    filename += '.txt'
+    filename = _export_filename(base_filename, domain_id, hashfile_id)
 
     if not scoped_hashfile_ids:
         cracked_hashes = []
         uncracked_hashes = []
+        reused_hash_accounts = []
+        reused_password_accounts = []
     else:
         cracked_hashes = db.session.execute(
             _scoped_hash_rows_stmt(scoped_hashfile_ids).where(Hashes.cracked.is_(True))
@@ -793,42 +845,54 @@ def analytics_download_hashes():
         uncracked_hashes = db.session.execute(
             _scoped_hash_rows_stmt(scoped_hashfile_ids).where(Hashes.cracked.is_(False))
         ).tuples().all()
+        reused_hash_subquery = (
+            select(Hashes.sub_ciphertext)
+            .select_from(Hashes)
+            .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+            .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
+            .group_by(Hashes.sub_ciphertext)
+            .having(func.count(HashfileHashes.id) > 1)
+        )
+        plaintext_key = func.coalesce(Hashes.plaintext_digest, Hashes.plaintext)
+        reused_password_subquery = (
+            select(plaintext_key)
+            .select_from(Hashes)
+            .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+            .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
+            .where(Hashes.cracked.is_(True))
+            .group_by(plaintext_key)
+            .having(func.count(HashfileHashes.id) > 1)
+        )
+        reused_hash_accounts = db.session.execute(
+            _scoped_hash_rows_stmt(scoped_hashfile_ids)
+            .where(Hashes.sub_ciphertext.in_(reused_hash_subquery))
+            .order_by(Hashes.sub_ciphertext.asc(), HashfileHashes.id.asc())
+        ).tuples().all()
+        reused_password_accounts = db.session.execute(
+            _scoped_hash_rows_stmt(scoped_hashfile_ids)
+            .where(Hashes.cracked.is_(True))
+            .where(plaintext_key.in_(reused_password_subquery))
+            .order_by(plaintext_key.asc(), HashfileHashes.id.asc())
+        ).tuples().all()
 
     output = io.StringIO()
     if export_type == 'found':
         for entry in cracked_hashes:
-            if entry[1].username:
-                username = decode_username_from_storage(entry[1].username)
-                if username:
-                    output.write(
-                        str(username)
-                        + ":"
-                        + str(decode_ciphertext_from_storage(entry[0].ciphertext))
-                        + ':'
-                        + str(_decoded_plaintext(entry[0].plaintext))
-                        + "\n"
-                    )
-                    continue
-            output.write(
-                str(decode_ciphertext_from_storage(entry[0].ciphertext))
-                + ':'
-                + str(_decoded_plaintext(entry[0].plaintext))
-                + "\n"
-            )
-
-    if export_type == 'left':
+            _write_account_export_line(output, entry[0], entry[1], include_plaintext=True)
+    elif export_type == 'left':
         for entry in uncracked_hashes:
-            if entry[1].username:
-                username = decode_username_from_storage(entry[1].username)
-                if username:
-                    output.write(
-                        str(username)
-                        + ":"
-                        + str(decode_ciphertext_from_storage(entry[0].ciphertext))
-                        + "\n"
-                    )
-                    continue
-            output.write(str(decode_ciphertext_from_storage(entry[0].ciphertext)) + "\n")
+            _write_account_export_line(output, entry[0], entry[1], include_plaintext=False)
+    elif export_type == 'reused_hashes':
+        for entry in reused_hash_accounts:
+            _write_account_export_line(
+                output,
+                entry[0],
+                entry[1],
+                include_plaintext=bool(entry[0].cracked),
+            )
+    elif export_type == 'reused_passwords':
+        for entry in reused_password_accounts:
+            _write_account_export_line(output, entry[0], entry[1], include_plaintext=True)
 
     record_audit_event(
         'analytics.download',
@@ -839,7 +903,15 @@ def analytics_download_hashes():
             'export_type': export_type,
             'domain_id': domain_id,
             'hashfile_id': hashfile_id,
-            'row_count': len(cracked_hashes) if export_type == 'found' else len(uncracked_hashes),
+            'row_count': (
+                len(cracked_hashes)
+                if export_type == 'found'
+                else len(uncracked_hashes)
+                if export_type == 'left'
+                else len(reused_hash_accounts)
+                if export_type == 'reused_hashes'
+                else len(reused_password_accounts)
+            ),
         },
     )
     buffer = io.BytesIO(output.getvalue().encode('utf-8'))

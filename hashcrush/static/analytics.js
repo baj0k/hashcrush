@@ -327,8 +327,7 @@
         return {
             recovered_accounts: donutPlaceholder('Recovered Accounts', 'recovered_accounts', message, compact),
             password_quality: donutPlaceholder('Recovered Password Quality', 'password_quality', message, compact),
-            recovered_hashes: donutPlaceholder('Recovered Hashes', 'recovered_hashes', message, compact),
-            password_reuse: donutPlaceholder('Password Reuse', 'password_reuse', message, compact),
+            hash_reuse: donutPlaceholder('Hash Reuse', 'hash_reuse', message, compact),
             composition_makeup: donutPlaceholder('Composition Makeup', 'composition_makeup', message, compact),
             passwords_count_len: barPlaceholder('Passwords Count by Length', 'passwords_count_len', message, compact)
         };
@@ -368,28 +367,17 @@
                     compact: compact
                 });
             }, donutPlaceholder('Recovered Password Quality', 'password_quality', 'Unable to render chart.', compact)),
-            recovered_hashes: safeChart(function () {
+            hash_reuse: safeChart(function () {
                 return createDonutChart({
-                    key: 'recovered_hashes',
-                    title: 'Recovered Hashes',
-                    labels: payload.recovered_hashes.labels,
-                    values: payload.recovered_hashes.values,
-                    centerText: payload.recovered_hashes.center_text,
-                    colors: [palette.danger, palette.success],
-                    compact: compact
-                });
-            }, donutPlaceholder('Recovered Hashes', 'recovered_hashes', 'Unable to render chart.', compact)),
-            password_reuse: safeChart(function () {
-                return createDonutChart({
-                    key: 'password_reuse',
-                    title: 'Password Reuse',
-                    labels: payload.password_reuse.labels,
-                    values: payload.password_reuse.values,
+                    key: 'hash_reuse',
+                    title: 'Hash Reuse',
+                    labels: payload.hash_reuse.labels,
+                    values: payload.hash_reuse.values,
                     centerText: '',
                     colors: [palette.warning, palette.success],
                     compact: compact
                 });
-            }, donutPlaceholder('Password Reuse', 'password_reuse', 'Unable to render chart.', compact)),
+            }, donutPlaceholder('Hash Reuse', 'hash_reuse', 'Unable to render chart.', compact)),
             composition_makeup: safeChart(function () {
                 return createDonutChart({
                     key: 'composition_makeup',
