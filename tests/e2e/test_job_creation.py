@@ -20,34 +20,32 @@ def test_job_creation_flow(page, live_server, login, e2e_fixture_data):
     if page.locator("#priority").count() > 0:
         page.locator("#priority").select_option("3")
     page.locator("#domain_id").select_option(str(domain_id))
-    page.get_by_role("button", name="Create Draft").click()
+    page.get_by_role("button", name="Continue to Hashes").click()
 
     expect(page).to_have_url(re.compile(r".*/jobs/\d+/builder.*"))
     expect(page.get_by_role("heading", name="Hashes")).to_be_visible()
     option = page.locator(
-        f"#nav-existing-hashfile #hashfile_id option[value='{hashfile_id}']"
+        f"#existing-hashfile-panel #hashfile_id option[value='{hashfile_id}']"
     )
     assert option.count() > 0, "Seeded hashfile is missing from the existing hashfiles list."
-    page.locator("#nav-existing-hashfile-tab").click()
-    page.locator("#nav-existing-hashfile #hashfile_id").select_option(
+    page.locator("#existing-hashfile-panel #hashfile_id").select_option(
         str(hashfile_id),
         force=True,
     )
-    page.get_by_role("button", name="Use Selected Hashfile").click()
+    page.get_by_role("button", name="Use Existing Hashfile and Continue").click()
     expect(page.get_by_role("heading", name="Tasks")).to_be_visible()
     match = re.search(r"/jobs/(\d+)/builder", page.url)
     assert match, f"Unexpected builder URL: {page.url}"
     expect(page.get_by_text("Add New Task", exact=True)).to_be_visible()
-    page.get_by_role("button", name="Add Task", exact=True).click()
-    task_entry = page.locator(".dropdown-menu .dropdown-item", has_text=task_name).first
-    assert task_entry.count() > 0, "Seeded task is missing from the add-task dropdown."
-    task_entry.click()
+    task_entry = page.locator("#builder-available-tasks [data-filter-item]", has_text=task_name).first
+    assert task_entry.count() > 0, "Seeded task is missing from the task picker."
+    task_entry.get_by_role("button", name="Add", exact=True).click()
     expect(
         page.locator("#tasks").get_by_role("cell", name=task_name, exact=True)
     ).to_be_visible()
     page.get_by_role("button", name="Review Job", exact=True).click()
     expect(page).to_have_url(re.compile(r".*/jobs/\d+/summary.*"))
-    expect(page.get_by_role("heading", name="Review Job")).to_be_visible()
+    expect(page.get_by_role("heading", name=re.compile(r"Job: "))).to_be_visible()
     page.get_by_role("button", name="Accept Job", exact=True).click()
     expect(page).to_have_url(re.compile(r".*/jobs(?:\?.*)?$"))
 

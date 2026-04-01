@@ -67,6 +67,39 @@ def _owned_asset_counts(user_id: int) -> dict[str, int]:
     }
 
 
+def _user_detail_context(user: Users) -> dict[str, object]:
+    associated_jobs = db.session.execute(
+        select(Jobs)
+        .where(Jobs.owner_id == user.id)
+        .order_by(Jobs.created_at.desc())
+    ).scalars().all()
+    owned_counts = _owned_asset_counts(user.id)
+    non_zero_owned_counts = {
+        name: count for name, count in owned_counts.items() if count > 0
+    }
+    delete_blockers: list[str] = []
+    if user.id == current_user.id:
+        delete_blockers.append(
+            'You cannot delete your own account while logged in.'
+        )
+    if user.admin and _admin_count() <= 1:
+        delete_blockers.append('Cannot delete the last admin account.')
+    if non_zero_owned_counts:
+        details = ', '.join(
+            f'{name}={count}' for name, count in non_zero_owned_counts.items()
+        )
+        delete_blockers.append(
+            f'Transfer or delete owned records first ({details}).'
+        )
+    return {
+        'associated_jobs': associated_jobs,
+        'owned_counts': owned_counts,
+        'delete_blockers': delete_blockers,
+        'can_reset_password': user.id != current_user.id,
+        'can_delete_user': len(delete_blockers) == 0,
+    }
+
+
 def _utc_now_naive() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
@@ -251,9 +284,25 @@ def users_list():
     if not current_user.admin:
         abort(403)
 
-    users = db.session.execute(select(Users)).scalars().all()
-    jobs = db.session.execute(select(Jobs)).scalars().all()
-    return render_template('users.html', title='Users', users=users, jobs=jobs)
+    users = db.session.execute(select(Users).order_by(Users.username.asc())).scalars().all()
+    return render_template('users.html', title='Users', users=users)
+
+
+@users.route("/users/<int:user_id>", methods=['GET'])
+@login_required
+def user_detail(user_id):
+    """Show admin management details for a user account."""
+
+    if not current_user.admin:
+        abort(403)
+
+    user = db.get_or_404(Users, user_id)
+    return render_template(
+        'users_detail.html',
+        title=f'User: {user.username}',
+        user=user,
+        **_user_detail_context(user),
+    )
 
 @users.route("/users/add", methods=['GET', 'POST'])
 @login_required
@@ -293,6 +342,8 @@ def users_add():
 def users_delete(user_id):
     """Function to delete user"""
 
+    next_url = safe_relative_url(request.form.get('next'))
+
     if not current_user.admin:
         abort(403)
 
@@ -300,11 +351,11 @@ def users_delete(user_id):
 
     if user.id == current_user.id:
         flash('You cannot delete your own account while logged in. Use another admin account.', 'warning')
-        return redirect(url_for('users.users_list'))
+        return redirect(next_url or url_for('users.users_list'))
 
     if user.admin and _admin_count() <= 1:
         flash('Cannot delete the last admin account.', 'danger')
-        return redirect(url_for('users.users_list'))
+        return redirect(next_url or url_for('users.users_list'))
 
     owned_counts = _owned_asset_counts(user.id)
     non_zero_owned_counts = {name: count for name, count in owned_counts.items() if count > 0}
@@ -315,7 +366,12 @@ def users_delete(user_id):
             'Transfer or delete owned records first.',
             'danger',
         )
-        return redirect(url_for('users.users_list'))
+        return redirect(next_url or url_for('users.users_list'))
+
+    confirm_name = request.form.get('confirm_name')
+    if confirm_name is not None and confirm_name.strip() != user.username:
+        flash('Type the username exactly to confirm deletion.', 'danger')
+        return redirect(next_url or url_for('users.users_list'))
 
     deleted_user_id = user.id
     deleted_username = user.username
@@ -329,7 +385,7 @@ def users_delete(user_id):
             'Cannot delete user while they own records or while related jobs are being created. Refresh and retry.',
             'danger',
         )
-        return redirect(url_for('users.users_list'))
+        return redirect(next_url or url_for('users.users_list'))
     record_audit_event(
         'user.delete',
         'user',
@@ -338,7 +394,7 @@ def users_delete(user_id):
         details={'username': deleted_username, 'admin': deleted_was_admin},
     )
     flash('User has been deleted!', 'success')
-    return redirect(url_for('users.users_list'))
+    return redirect(next_url or url_for('users.users_list'))
 
 @users.route("/profile", methods=['GET', 'POST'])
 @login_required
@@ -381,29 +437,31 @@ def profile():
 def admin_reset(user_id):
     """Set a new password for a target user."""
 
+    next_url = safe_relative_url(request.form.get('next'))
+
     if not current_user.admin:
         flash('Unauthorized to reset users account.', 'danger')
-        return redirect(url_for('users.users_list'))
+        return redirect(next_url or url_for('users.users_list'))
 
     user = db.session.get(Users, user_id)
     if not user:
         flash('User not found.', 'warning')
-        return redirect(url_for('users.users_list'))
+        return redirect(next_url or url_for('users.users_list'))
 
     if user.id == current_user.id:
         flash('Use Profile to change your own password.', 'warning')
-        return redirect(url_for('users.users_list'))
+        return redirect(next_url or url_for('users.users_list'))
 
     new_password = request.form.get('new_password', '')
     confirm_password = request.form.get('confirm_password', '')
 
     if len(new_password) < 14:
         flash('Password must be at least 14 characters.', 'danger')
-        return redirect(url_for('users.users_list'))
+        return redirect(next_url or url_for('users.users_list'))
 
     if new_password != confirm_password:
         flash('Passwords do not match.', 'danger')
-        return redirect(url_for('users.users_list'))
+        return redirect(next_url or url_for('users.users_list'))
 
     user.password = bcrypt.generate_password_hash(new_password).decode('utf-8')
     user.last_login_utc = _utc_now_naive()
@@ -416,4 +474,4 @@ def admin_reset(user_id):
         details={'username': user.username, 'admin': bool(user.admin)},
     )
     flash(f'Password updated for user {user.username}. Share it securely and ask the user to change it in Profile.', 'success')
-    return redirect(url_for('users.users_list'))
+    return redirect(next_url or url_for('users.users_list'))

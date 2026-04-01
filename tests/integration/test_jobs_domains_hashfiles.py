@@ -81,6 +81,131 @@ def test_hashfiles_delete_requires_exact_name_confirmation():
 
 
 @pytest.mark.security
+def test_hashfile_detail_page_shows_visible_jobs_and_delete_state():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="Hashfile Detail Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="detail-hashfile.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        job = Jobs(
+            name="detail-job",
+            status="Ready",
+            domain_id=domain.id,
+            hashfile_id=hashfile.id,
+            owner_id=admin.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get(f"/hashfiles/{hashfile.id}")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Hashfile: detail-hashfile.txt" in html
+        assert "detail-job" in html
+        assert "Associated Jobs Blocking Deletion" in html
+        assert "cannot be deleted until the jobs listed above are detached or removed" in html
+
+@pytest.mark.security
+def test_job_summary_page_shows_metadata_and_delete_controls():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="Job Detail Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="job-detail.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        task = Tasks(
+            name="job-detail-task",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a?a",
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        job = Jobs(
+            name="job-detail",
+            status="Ready",
+            domain_id=domain.id,
+            hashfile_id=hashfile.id,
+            owner_id=admin.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        db.session.add(
+            JobTasks(job_id=job.id, task_id=task.id, status="Not Started", position=0)
+        )
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get(f"/jobs/{job.id}/summary")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Job: job-detail" in html
+        assert "Owner" in html
+        assert "Created At" in html
+        assert "job-detail-task" in html
+        assert "Delete Job" in html
+
+
+@pytest.mark.security
+def test_jobs_delete_requires_exact_name_when_confirmation_supplied():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="Job Confirm Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        job = Jobs(
+            name="confirm-job",
+            status="Ready",
+            domain_id=domain.id,
+            owner_id=admin.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            f"/jobs/delete/{job.id}",
+            data={"confirm_name": "wrong-name"},
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert b"Type the job name exactly to confirm deletion." in response.data
+        assert db.session.get(Jobs, job.id) is not None
+
+
+@pytest.mark.security
 def test_domains_list_paginates_results():
     app = _build_app()
     with app.app_context():
@@ -493,7 +618,7 @@ def test_jobs_assigned_hashfile_existing_hashfile_form_includes_csrf_token():
         response = client.get(f"/jobs/{job.id}/builder")
         assert response.status_code == 200
         html = response.data.decode("utf-8")
-        existing_form_html = html.split('id="nav-existing-hashfile"', 1)[1]
+        existing_form_html = html.split('id="existing-hashfile-panel"', 1)[1]
         assert 'name="csrf_token"' in existing_form_html
 
 @pytest.mark.security
@@ -629,6 +754,44 @@ def test_domains_delete_requires_exact_name_confirmation():
         assert response.status_code == 200
         assert b"Type the domain name exactly to confirm deletion." in response.data
         assert db.session.get(Domains, domain.id) is not None
+
+
+@pytest.mark.security
+def test_domain_detail_page_shows_associated_hashfiles_and_jobs():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="Domain Detail")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="domain-detail.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        job = Jobs(
+            name="domain-detail-job",
+            status="Ready",
+            domain_id=domain.id,
+            hashfile_id=hashfile.id,
+            owner_id=admin.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get(f"/domains/{domain.id}")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Domain: Domain Detail" in html
+        assert "domain-detail-job" in html
+        assert f"/hashfiles/{hashfile.id}" in html
+        assert "domain-detail.txt" in html
 
 @pytest.mark.security
 def test_domains_page_is_shared_read_and_admin_can_add_domains():
@@ -846,6 +1009,62 @@ def test_hashfiles_add_allows_admin_to_create_new_domain_inline():
         assert domain is not None
         hashfile = _first_row(Hashfiles, name="inline-hashes.txt")
         assert hashfile is not None
+        assert hashfile.domain_id == domain.id
+
+
+@pytest.mark.security
+def test_jobs_builder_hashfile_upload_can_run_async_and_redirect_to_tasks():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="Builder Async Domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        job = Jobs(
+            name="builder-async-job",
+            status="Incomplete",
+            domain_id=domain.id,
+            owner_id=admin.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            f"/jobs/{job.id}/assigned_hashfile/",
+            data={
+                "file_type": "hash_only",
+                "hash_type": "0",
+                "hashfile": (
+                    io.BytesIO(b"5f4dcc3b5aa765d61d8327deb882cf99\n"),
+                    "builder-async.txt",
+                ),
+            },
+            content_type="multipart/form-data",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+
+        assert response.status_code == 202
+        start_payload = response.get_json()
+        assert isinstance(start_payload, dict)
+        assert start_payload["status_url"].startswith("/uploads/operations/")
+
+        final_payload = _wait_for_upload_operation(client, start_payload["status_url"])
+        assert final_payload["success"] is True
+        assert final_payload["redirect_url"] == f"/jobs/{job.id}/builder?tab=tasks"
+
+        db.session.refresh(job)
+        assert job.hashfile_id is not None
+
+        hashfile = db.session.get(Hashfiles, job.hashfile_id)
+        assert hashfile is not None
+        assert hashfile.name == "builder-async.txt"
         assert hashfile.domain_id == domain.id
 
 
@@ -1515,7 +1734,7 @@ def test_non_owner_can_view_scheduled_jobs_but_cannot_stop_them():
 
         summary_response = client.get(f"/jobs/{job.id}/summary")
         assert summary_response.status_code == 200
-        assert b"Review Job" in summary_response.data
+        assert b"Job:" in summary_response.data
         assert b"Only the job owner or an admin can accept this job." in summary_response.data
 
         draft_tasks_response = client.get(f"/jobs/{draft_job.id}/tasks")

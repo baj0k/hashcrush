@@ -1,0 +1,56 @@
+{% extends "layout.html" %}
+{% block header %}
+<div class="hc-page-header">
+    <h1>Rule: {{ rule.name }}</h1>
+    <p class="hc-page-intro">Review where this shared rule file is used and whether it can be safely removed.</p>
+    <div class="hc-page-actions">
+        <a class="btn btn-secondary btn-sm" href="{{ url_for('rules.rules_list') }}">Back to Rules</a>
+    </div>
+</div>
+{% endblock header %}
+{% block content %}
+<div class="content-section">
+    <table class="table">
+        <tbody>
+            <tr>
+                <th scope="row">Size</th>
+                <td>{{ rule.size }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Last Updated</th>
+                <td>{{ rule.last_updated }}</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="content-section">
+    <h2 class="h4">Associated Tasks</h2>
+    <div class="hc-line-list">
+        {% for task in associated_tasks %}
+        <a href="{{ url_for('tasks.task_detail', task_id=task.id) }}">{{ task.name }}</a>
+        {% else %}
+        <i>none</i>
+        {% endfor %}
+    </div>
+</div>
+
+{% if current_user.admin %}
+<div class="content-section">
+    <h2 class="h4">Admin Actions</h2>
+    {% if delete_blockers.tasks %}
+    <p class="text-muted mb-0">This rule cannot be deleted until it is removed from the tasks listed above.</p>
+    {% else %}
+    <form
+        action="{{ url_for('rules.rules_delete', rule_id=rule.id) }}"
+        method="POST"
+        data-confirm="Delete shared rule {{ rule.name }}?"
+    >
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ url_for('rules.rules_list') }}">
+        <button type="submit" class="btn btn-danger">Delete Rule</button>
+    </form>
+    {% endif %}
+</div>
+{% endif %}
+{% endblock content %}

@@ -1,5 +1,4 @@
 """Flask routes to handle Domains"""
-from collections import defaultdict
 
 from flask import (
     Blueprint,
@@ -11,7 +10,7 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required
-from sqlalchemy import case, delete, exists, func, select
+from sqlalchemy import delete, exists, func, select
 from sqlalchemy.exc import IntegrityError
 
 from hashcrush.audit import record_audit_event
@@ -26,7 +25,12 @@ from hashcrush.models import (
     JobTasks,
     db,
 )
-from hashcrush.view_utils import LIST_PAGE_SIZE, paginate_scalars, parse_page_arg
+from hashcrush.view_utils import (
+    LIST_PAGE_SIZE,
+    paginate_scalars,
+    parse_page_arg,
+    safe_relative_url,
+)
 
 domains = Blueprint('domains', __name__)
 ACTIVE_JOB_STATUSES = {'Running', 'Queued', 'Paused', 'Ready', 'Incomplete'}
@@ -100,91 +104,21 @@ def _domain_delete_impact(domain_id: int) -> dict:
     }
 
 
-def _domain_delete_impact_previews(domain_ids: list[int]) -> dict[int, dict[str, int]]:
-    if not domain_ids:
-        return {}
-
-    job_counts = {
-        row.domain_id: {
-            'total_jobs': int(row.total_jobs or 0),
-            'active_jobs': int(row.active_jobs or 0),
-        }
-        for row in db.session.execute(
-            select(
-                Jobs.domain_id,
-                func.count(Jobs.id).label('total_jobs'),
-                func.sum(
-                    case((Jobs.status.in_(ACTIVE_JOB_STATUSES), 1), else_=0)
-                ).label('active_jobs'),
-            )
-            .where(Jobs.domain_id.in_(domain_ids))
-            .group_by(Jobs.domain_id)
-        ).all()
-    }
-
-    hashfile_counts = {
-        row.domain_id: int(row.hashfile_count or 0)
-        for row in db.session.execute(
-            select(
-                Hashfiles.domain_id,
-                func.count(Hashfiles.id).label('hashfile_count'),
-            )
-            .where(Hashfiles.domain_id.in_(domain_ids))
-            .group_by(Hashfiles.domain_id)
-        ).all()
-    }
-
-    hash_link_counts = {
-        row.domain_id: int(row.hash_links or 0)
-        for row in db.session.execute(
-            select(
-                Hashfiles.domain_id,
-                func.count(HashfileHashes.id).label('hash_links'),
-            )
-            .select_from(HashfileHashes)
-            .join(Hashfiles, Hashfiles.id == HashfileHashes.hashfile_id)
-            .where(Hashfiles.domain_id.in_(domain_ids))
-            .group_by(Hashfiles.domain_id)
-        ).all()
-    }
-
-    orphan_hashes_subquery = (
-        select(
-            func.min(Hashfiles.domain_id).label('domain_id'),
-            Hashes.id.label('hash_id'),
-        )
-        .select_from(Hashes)
-        .join(HashfileHashes, HashfileHashes.hash_id == Hashes.id)
-        .join(Hashfiles, Hashfiles.id == HashfileHashes.hashfile_id)
-        .where(Hashes.cracked.is_(False))
-        .where(Hashfiles.domain_id.in_(domain_ids))
-        .group_by(Hashes.id)
-        .having(func.count(func.distinct(Hashfiles.domain_id)) == 1)
-        .subquery()
-    )
-    orphan_hash_counts = {
-        row.domain_id: int(row.orphan_hashes or 0)
-        for row in db.session.execute(
-            select(
-                orphan_hashes_subquery.c.domain_id,
-                func.count(orphan_hashes_subquery.c.hash_id).label('orphan_hashes'),
-            )
-            .group_by(orphan_hashes_subquery.c.domain_id)
-        ).all()
-    }
-
+def _domain_detail_context(domain: Domains) -> dict[str, object]:
+    associated_jobs = db.session.execute(
+        visible_jobs_query()
+        .where(Jobs.domain_id == domain.id)
+        .order_by(Jobs.created_at.desc())
+    ).scalars().all()
+    associated_hashfiles = db.session.execute(
+        select(Hashfiles)
+        .where(Hashfiles.domain_id == domain.id)
+        .order_by(Hashfiles.name.asc())
+    ).scalars().all()
     return {
-        domain_id: {
-            'active_jobs': job_counts.get(domain_id, {}).get('active_jobs', 0),
-            'inactive_jobs': (
-                job_counts.get(domain_id, {}).get('total_jobs', 0)
-                - job_counts.get(domain_id, {}).get('active_jobs', 0)
-            ),
-            'hashfiles': hashfile_counts.get(domain_id, 0),
-            'hash_links': hash_link_counts.get(domain_id, 0),
-            'orphan_uncracked_hashes': orphan_hash_counts.get(domain_id, 0),
-        }
-        for domain_id in domain_ids
+        'associated_jobs': associated_jobs,
+        'associated_hashfiles': associated_hashfiles,
+        'delete_impact': _domain_delete_impact(domain.id),
     }
 
 @domains.route("/domains", methods=['GET'])
@@ -198,46 +132,27 @@ def domains_list():
         page=page,
         per_page=LIST_PAGE_SIZE,
     )
-    domain_ids = [domain.id for domain in domains]
-    jobs = (
-        db.session.execute(
-            visible_jobs_query()
-            .where(Jobs.domain_id.in_(domain_ids))
-            .order_by(Jobs.created_at.desc())
-        ).scalars().all()
-        if domain_ids
-        else []
-    )
-    hashfiles = (
-        db.session.execute(
-            select(Hashfiles)
-            .where(Hashfiles.domain_id.in_(domain_ids))
-            .order_by(Hashfiles.name.asc())
-        ).scalars().all()
-        if domain_ids
-        else []
-    )
-    jobs_by_domain: dict[int, list[Jobs]] = defaultdict(list)
-    for job in jobs:
-        jobs_by_domain[job.domain_id].append(job)
-    hashfiles_by_domain: dict[int, list[Hashfiles]] = defaultdict(list)
-    for hashfile in hashfiles:
-        hashfiles_by_domain[hashfile.domain_id].append(hashfile)
     domains_form = DomainsForm() if current_user.admin else None
-    domain_delete_impacts = (
-        _domain_delete_impact_previews(domain_ids)
-        if current_user.admin
-        else {}
-    )
     return render_template(
         'domains.html',
         title='Domains',
         domains=domains,
-        jobs_by_domain=jobs_by_domain,
-        hashfiles_by_domain=hashfiles_by_domain,
         domainsForm=domains_form,
-        domain_delete_impacts=domain_delete_impacts,
         pagination=pagination,
+    )
+
+
+@domains.route("/domains/<int:domain_id>", methods=['GET'])
+@login_required
+def domains_detail(domain_id):
+    """Show usage and deletion details for a shared domain."""
+
+    domain = db.get_or_404(Domains, domain_id)
+    return render_template(
+        'domains_detail.html',
+        title=f'Domain: {domain.name}',
+        domain=domain,
+        **_domain_detail_context(domain),
     )
 
 
@@ -285,10 +200,11 @@ def domains_delete(domain_id):
     """Function to delete a domain."""
     domain = db.get_or_404(Domains, domain_id)
     domain_name = domain.name
+    next_url = safe_relative_url(request.form.get('next'))
 
     if not current_user.admin:
         flash('Permission Denied', 'danger')
-        return redirect(url_for('domains.domains_list'))
+        return redirect(next_url or url_for('domains.domains_list'))
 
     impact = _domain_delete_impact(domain_id)
     if impact['active_jobs'] > 0:
@@ -296,11 +212,11 @@ def domains_delete(domain_id):
             f"Unable to delete. Domain has {impact['active_jobs']} active job(s).",
             'danger',
         )
-        return redirect(url_for('domains.domains_list'))
+        return redirect(next_url or url_for('domains.domains_list'))
 
     if (request.form.get('confirm_name') or '').strip() != domain.name:
         flash('Type the domain name exactly to confirm deletion.', 'danger')
-        return redirect(url_for('domains.domains_list'))
+        return redirect(next_url or url_for('domains.domains_list'))
 
     try:
         inactive_job_ids = impact['inactive_job_ids']
@@ -357,4 +273,4 @@ def domains_delete(domain_id):
         current_app.logger.exception('Failed deleting domain id=%s', domain_id)
         flash('Unable to delete domain due to an internal error.', 'danger')
 
-    return redirect(url_for('domains.domains_list'))
+    return redirect(next_url or url_for('domains.domains_list'))

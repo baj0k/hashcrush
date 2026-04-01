@@ -12,9 +12,9 @@
     </h1>
     <p class="hc-page-intro">
         {% if not job %}
-            Build the job in three steps: set the basics, attach hashes, and choose tasks before the final review.
+            Start with the basics, attach a hashfile, and choose tasks before the final review.
         {% elif can_edit_job %}
-            Update the basics, attached hashes, and assigned tasks before the final review.
+            Keep the job basics, hashfile, and task sequence aligned before the final review.
         {% else %}
             Review the job basics, attached hashes, and assigned tasks.
         {% endif %}
@@ -35,6 +35,55 @@
         {% endif %}
     </div>
 </nav>
+
+{% if job %}
+<section class="hc-builder-summary">
+    <div class="hc-builder-summary-grid">
+        <div class="hc-builder-summary-item">
+            <div class="hc-builder-summary-label">Job</div>
+            <div class="hc-builder-summary-value">{{ job.name }}</div>
+        </div>
+        <div class="hc-builder-summary-item">
+            <div class="hc-builder-summary-label">Domain</div>
+            <div class="hc-builder-summary-value">{{ domain.name if domain else 'Not selected' }}</div>
+        </div>
+        <div class="hc-builder-summary-item">
+            <div class="hc-builder-summary-label">Hashfile</div>
+            <div class="hc-builder-summary-value">{{ selected_hashfile.name if selected_hashfile else 'Not attached yet' }}</div>
+        </div>
+        <div class="hc-builder-summary-item">
+            <div class="hc-builder-summary-label">Tasks</div>
+            <div class="hc-builder-summary-value">{{ job_tasks|length }} assigned</div>
+        </div>
+        <div class="hc-builder-summary-item">
+            <div class="hc-builder-summary-label">Next Step</div>
+            <div class="hc-builder-summary-value">
+                {% if not selected_hashfile %}
+                    Attach a hashfile
+                {% elif not job_tasks %}
+                    Assign at least one task
+                {% elif job.status == 'Incomplete' %}
+                    Review and accept the job
+                {% else %}
+                    Ready to run
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="hc-builder-ready-indicators">
+        <span class="badge badge-success">Basics saved</span>
+        <span class="badge {{ 'badge-success' if selected_hashfile else 'badge-secondary' }}">
+            {{ 'Hashfile attached' if selected_hashfile else 'Hashfile missing' }}
+        </span>
+        <span class="badge {{ 'badge-success' if job_tasks else 'badge-secondary' }}">
+            {{ 'Tasks assigned' if job_tasks else 'Tasks missing' }}
+        </span>
+        <span class="badge {{ 'badge-success' if selected_hashfile and job_tasks else 'badge-warning' }}">
+            {{ 'Ready for review' if selected_hashfile and job_tasks else 'Needs more setup' }}
+        </span>
+    </div>
+</section>
+{% endif %}
 
 <div class="tab-content">
     <section class="tab-pane fade{% if active_tab == 'basics' %} show active{% endif %}" id="basics" role="tabpanel">
@@ -143,7 +192,7 @@
                         <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_list') }}" role="button" title="Cancel">Cancel</a>
                         <div class="hc-form-actions-right">
                             <button class="btn btn-primary" type="submit">
-                                {% if job %}Save Basics{% else %}Create Draft{% endif %}
+                                {% if job %}Save Basics{% else %}Continue to Hashes{% endif %}
                             </button>
                         </div>
                     </div>
@@ -180,24 +229,13 @@
                 {% endif %}
 
                 {% if can_edit_job %}
-                <nav>
-                    <div class="nav nav-tabs" id="builder-hash-nav" role="tablist">
-                        {% if active_hashes_tab == 'new' %}
-                            <a class="nav-link active" id="nav-new-hashfile-tab" data-toggle="tab" href="#nav-new-hashfile" role="tab" aria-controls="nav-new-hashfile" aria-selected="true">New Hashfile</a>
-                            <a class="nav-link" id="nav-existing-hashfile-tab" data-toggle="tab" href="#nav-existing-hashfile" role="tab" aria-controls="nav-existing-hashfile" aria-selected="false">Existing Hashfile</a>
-                        {% else %}
-                            <a class="nav-link" id="nav-new-hashfile-tab" data-toggle="tab" href="#nav-new-hashfile" role="tab" aria-controls="nav-new-hashfile" aria-selected="false">New Hashfile</a>
-                            <a class="nav-link active" id="nav-existing-hashfile-tab" data-toggle="tab" href="#nav-existing-hashfile" role="tab" aria-controls="nav-existing-hashfile" aria-selected="true">Existing Hashfile</a>
-                        {% endif %}
-                    </div>
-                </nav>
-                <div class="tab-content" id="builder-hash-tab-content">
-                    {% if active_hashes_tab == 'new' %}
-                        <div class="tab-pane fade show active" id="nav-new-hashfile" role="tabpanel" aria-labelledby="nav-new-hashfile-tab">
-                    {% else %}
-                        <div class="tab-pane fade" id="nav-new-hashfile" role="tabpanel" aria-labelledby="nav-new-hashfile-tab">
-                    {% endif %}
-                        <div class="hc-tab-panel">
+                <div class="hc-hash-section-grid">
+                    <div class="card hc-option-card" id="new-hashfile-panel">
+                        <div class="card-body">
+                            <h3 class="h5">Upload New Hashfile</h3>
+                            <p class="text-muted">
+                                Upload a new shared hashfile for this domain. Large files keep processing in the background, and progress stays visible at the top of the app while you keep browsing.
+                            </p>
                             <form action="{{ url_for('jobs.jobs_assigned_hashfile', job_id=job.id) }}" method="post" enctype="multipart/form-data" data-upload-progress-form="true">
                                 {{ jobs_new_hashfile_form.hidden_tag() }}
                                 <fieldset class="form-group">
@@ -284,31 +322,35 @@
                                         {% endif %}
                                     </div>
                                     <div class="form-group hc-hidden hc-section-gap" id="hashfile_div">
-                                        <label class="form-control-label" for="hashfilehashes">Hash File Content</label>
-                                        <ul class="nav nav-pills mb-3" id="pills-tab" role="tablist">
-                                            <li class="nav-item" role="presentation">
-                                                <a class="nav-link active" id="pills-home-tab" data-toggle="pill" href="#pills-home" role="tab" aria-controls="pills-home" aria-selected="true">Individual Hashes</a>
-                                            </li>
-                                            <li class="nav-item" role="presentation">
-                                                <a class="nav-link" id="pills-profile-tab" data-toggle="pill" href="#pills-profile" role="tab" aria-controls="pills-profile" aria-selected="false">File Upload</a>
-                                            </li>
-                                        </ul>
-                                        <div class="tab-content" id="pills-tabContent">
-                                            <div class="tab-pane fade show active" id="pills-home" role="tabpanel" aria-labelledby="pills-home-tab">
-                                                <div class="form-group">
-                                                    {{ jobs_new_hashfile_form.name.label(class="form-control-label", for="hashfile_name") }}
-                                                    {% if jobs_new_hashfile_form.name.errors %}
-                                                        {{ jobs_new_hashfile_form.name(class="form-control form-control-lg is-invalid", id="hashfile_name") }}
-                                                        <div class="invalid-feedback">
-                                                            {% for error in jobs_new_hashfile_form.name.errors %}
-                                                                <span>{{ error }}</span>
-                                                            {% endfor %}
-                                                        </div>
-                                                    {% else %}
-                                                        {{ jobs_new_hashfile_form.name(class="form-control form-control-lg", id="hashfile_name") }}
-                                                    {% endif %}
+                                        <div class="form-group">
+                                            {{ jobs_new_hashfile_form.name.label(class="form-control-label", for="hashfile_name") }}
+                                            {% if jobs_new_hashfile_form.name.errors %}
+                                                {{ jobs_new_hashfile_form.name(class="form-control form-control-lg is-invalid", id="hashfile_name") }}
+                                                <div class="invalid-feedback">
+                                                    {% for error in jobs_new_hashfile_form.name.errors %}
+                                                        <span>{{ error }}</span>
+                                                    {% endfor %}
                                                 </div>
-                                                <div class="form-group">
+                                            {% else %}
+                                                {{ jobs_new_hashfile_form.name(class="form-control form-control-lg", id="hashfile_name") }}
+                                            {% endif %}
+                                            <small class="form-text text-muted">
+                                                Leave this blank to reuse the uploaded filename automatically.
+                                            </small>
+                                        </div>
+                                        <div class="form-group">
+                                            {{ jobs_new_hashfile_form.hashfile.label(class="form-control-label") }}
+                                            {{ jobs_new_hashfile_form.hashfile(class="hc-file-input hc-file-input--wide") }}
+                                            {% if jobs_new_hashfile_form.hashfile.errors %}
+                                                {% for error in jobs_new_hashfile_form.hashfile.errors %}
+                                                    <span class="text-danger d-block">{{ error }}</span>
+                                                {% endfor %}
+                                            {% endif %}
+                                        </div>
+                                        <details class="hc-inline-details"{% if jobs_new_hashfile_form.hashfilehashes.data or jobs_new_hashfile_form.hashfilehashes.errors %} open{% endif %}>
+                                            <summary>Paste hashes manually instead</summary>
+                                            <div class="mt-3">
+                                                <div class="form-group mb-0">
                                                     {{ jobs_new_hashfile_form.hashfilehashes.label(class="form-control-label") }}
                                                     {% if jobs_new_hashfile_form.hashfilehashes.errors %}
                                                         {{ jobs_new_hashfile_form.hashfilehashes(class="form-control form-control-lg is-invalid") }}
@@ -322,18 +364,7 @@
                                                     {% endif %}
                                                 </div>
                                             </div>
-                                            <div class="tab-pane fade" id="pills-profile" role="tabpanel" aria-labelledby="pills-profile-tab">
-                                                <div class="form-group">
-                                                    {{ jobs_new_hashfile_form.hashfile.label() }}
-                                                    {{ jobs_new_hashfile_form.hashfile(class="hc-file-input hc-file-input--wide") }}
-                                                    {% if jobs_new_hashfile_form.hashfile.errors %}
-                                                        {% for error in jobs_new_hashfile_form.hashfile.errors %}
-                                                            <span class="text-danger d-block">{{ error }}</span>
-                                                        {% endfor %}
-                                                    {% endif %}
-                                                </div>
-                                            </div>
-                                        </div>
+                                        </details>
                                     </div>
                                 </fieldset>
                                 <div class="hc-upload-status hc-hidden" data-upload-status aria-live="polite">
@@ -344,26 +375,28 @@
                                     <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
                                         <div class="progress-bar" data-upload-progress-bar style="width: 0%" aria-valuenow="0">0%</div>
                                     </div>
-                                    <small class="text-muted d-block mt-2">Large file uploads continue processing after the browser finishes sending the file.</small>
+                                    <small class="text-muted d-block mt-2">Large file uploads continue processing after the browser finishes sending the file and remain visible in the global background-processing banner.</small>
                                 </div>
                                 <div class="hc-form-actions">
                                     <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_builder', job_id=job.id, tab='basics') }}" role="button">Back to Basics</a>
                                     <div class="hc-form-actions-right">
-                                        <button class="btn btn-primary" type="submit">Save New Hashfile</button>
+                                        <button class="btn btn-primary" type="submit">Save Hashfile and Continue</button>
                                     </div>
                                 </div>
                             </form>
                         </div>
                     </div>
-                    {% if active_hashes_tab == 'new' %}
-                        <div class="tab-pane fade" id="nav-existing-hashfile" role="tabpanel" aria-labelledby="nav-existing-hashfile-tab">
-                    {% else %}
-                        <div class="tab-pane fade show active" id="nav-existing-hashfile" role="tabpanel" aria-labelledby="nav-existing-hashfile-tab">
-                    {% endif %}
-                        <div class="hc-tab-panel">
+
+                    <div class="card hc-option-card" id="existing-hashfile-panel">
+                        <div class="card-body">
+                            <h3 class="h5">Use Existing Hashfile</h3>
+                            <p class="text-muted">
+                                Reuse a shared hashfile that is already registered for this domain.
+                            </p>
+                            {% if hashfiles %}
                             <form action="{{ url_for('jobs.jobs_assigned_hashfile', job_id=job.id) }}" method="post">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                <fieldset class="form-group">
+                                <fieldset class="form-group mb-0">
                                     <div class="form-group">
                                         <label class="form-control-label" for="hashfile_id">Hashfile</label>
                                         <select class="form-control form-control-lg" id="hashfile_id" name="hashfile_id">
@@ -376,12 +409,17 @@
                                     </div>
                                 </fieldset>
                                 <div class="hc-form-actions">
-                                    <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_builder', job_id=job.id, tab='basics') }}" role="button">Back to Basics</a>
+                                    <span></span>
                                     <div class="hc-form-actions-right">
-                                        <button class="btn btn-primary" type="submit">Use Selected Hashfile</button>
+                                        <button class="btn btn-outline-primary" type="submit">Use Existing Hashfile and Continue</button>
                                     </div>
                                 </div>
                             </form>
+                            {% else %}
+                            <p class="text-muted mb-0">
+                                No shared hashfiles are available for this domain yet. Upload a new one on the left to continue.
+                            </p>
+                            {% endif %}
                         </div>
                     </div>
                 </div>
@@ -438,98 +476,144 @@
                 {% if not can_manage_job %}
                 <p class="text-muted mb-3">Read-only view. Only the job owner or an admin can edit assigned tasks.</p>
                 {% endif %}
-                <table class="table">
-                    <thead>
-                        <tr>
-                            <th scope="col">Task Name</th>
-                            <th scope="col">Type</th>
-                            <th scope="col">Control</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for job_task in job_tasks %}
-                            {% set task = task_by_id.get(job_task.task_id) %}
-                            <tr>
-                                <td>{{ task.name if task else '' }}</td>
-                                <td>{{ task.hc_attackmode if task else '' }}</td>
-                                <td>
-                                    {% if can_edit_job %}
-                                        <form action="{{ url_for('jobs.jobs_move_task_up', job_id=job.id, task_id=job_task.task_id) }}" method="POST" class="d-inline">
-                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                            <button type="submit" class="fa fa-arrow-up btn btn-success btn-sm" title="Move Up" aria-label="Move task {{ task.name if task else '' }} up"></button>
-                                        </form>
-                                        <form action="{{ url_for('jobs.jobs_move_task_down', job_id=job.id, task_id=job_task.task_id) }}" method="POST" class="d-inline">
-                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                            <button type="submit" class="fa fa-arrow-down btn btn-success btn-sm" title="Move Down" aria-label="Move task {{ task.name if task else '' }} down"></button>
-                                        </form>
-                                        <form action="{{ url_for('jobs.jobs_remove_task', job_id=job.id, task_id=job_task.task_id) }}" method="POST" class="d-inline">
-                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                            <button type="submit" class="fa fa-trash btn btn-danger btn-sm" title="Delete" aria-label="Remove task {{ task.name if task else '' }} from job {{ job.name }}"></button>
-                                        </form>
-                                    {% else %}
-                                        <span class="text-muted">Read-only</span>
-                                    {% endif %}
-                                </td>
-                            </tr>
-                        {% endfor %}
-                        {% if not job_tasks %}
-                        <tr>
-                            <td colspan="3" class="text-muted">No tasks assigned yet.</td>
-                        </tr>
-                        {% endif %}
-                        {% if can_edit_job %}
-                        <tr>
-                            <td></td>
-                            <td></td>
-                            <td>
-                                <div class="btn-group flex-wrap">
-                                    <div class="dropdown show">
-                                        <a class="btn btn-primary dropdown-toggle" href="#" role="button" id="builderTaskDropdown" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                                            Add Task
-                                        </a>
-                                        <div class="dropdown-menu hc-scroll-dropdown" aria-labelledby="builderTaskDropdown">
-                                            {% for task in available_tasks %}
-                                                <form action="{{ url_for('jobs.jobs_assigned_task', job_id=job.id, task_id=task.id) }}" method="POST" class="m-0">
-                                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                                    <button type="submit" class="dropdown-item btn btn-link text-left">{{ task.name }}</button>
-                                                </form>
-                                            {% endfor %}
-                                            {% if not available_tasks %}
-                                                <span class="dropdown-item text-muted">No unassigned tasks available</span>
-                                            {% endif %}
-                                        </div>
+                <div class="hc-task-assignment-grid">
+                    <div class="card hc-builder-panel">
+                        <div class="card-body">
+                            <div class="hc-builder-panel-header">
+                                <div>
+                                    <h3 class="h5 mb-1">Assigned Task Order</h3>
+                                    <p class="text-muted mb-0">Tasks run from top to bottom in the order shown here.</p>
+                                </div>
+                                {% if can_edit_job and job_tasks %}
+                                <form action="{{ url_for('jobs.jobs_remove_all_tasks', job_id=job.id) }}" method="POST" class="m-0" data-confirm="Delete all assigned tasks for {{ job.name }}?">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn btn-outline-danger btn-sm">Remove All</button>
+                                </form>
+                                {% endif %}
+                            </div>
+                            <div class="table-responsive">
+                                <table class="table mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">#</th>
+                                            <th scope="col">Task Name</th>
+                                            <th scope="col">Type</th>
+                                            <th scope="col">Control</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for job_task in job_tasks %}
+                                            {% set task = task_by_id.get(job_task.task_id) %}
+                                            <tr>
+                                                <td>{{ loop.index }}</td>
+                                                <td>{{ task.name if task else '' }}</td>
+                                                <td>{{ 'Dictionary' if task and task.hc_attackmode == 'dictionary' else 'Maskmode' if task else '' }}</td>
+                                                <td>
+                                                    {% if can_edit_job %}
+                                                        <form action="{{ url_for('jobs.jobs_move_task_up', job_id=job.id, task_id=job_task.task_id) }}" method="POST" class="d-inline">
+                                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                            <button type="submit" class="fa fa-arrow-up btn btn-success btn-sm" title="Move Up" aria-label="Move task {{ task.name if task else '' }} up"></button>
+                                                        </form>
+                                                        <form action="{{ url_for('jobs.jobs_move_task_down', job_id=job.id, task_id=job_task.task_id) }}" method="POST" class="d-inline">
+                                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                            <button type="submit" class="fa fa-arrow-down btn btn-success btn-sm" title="Move Down" aria-label="Move task {{ task.name if task else '' }} down"></button>
+                                                        </form>
+                                                        <form action="{{ url_for('jobs.jobs_remove_task', job_id=job.id, task_id=job_task.task_id) }}" method="POST" class="d-inline">
+                                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                            <button type="submit" class="fa fa-trash btn btn-danger btn-sm" title="Delete" aria-label="Remove task {{ task.name if task else '' }} from job {{ job.name }}"></button>
+                                                        </form>
+                                                    {% else %}
+                                                        <span class="text-muted">Read-only</span>
+                                                    {% endif %}
+                                                </td>
+                                            </tr>
+                                        {% endfor %}
+                                        {% if not job_tasks %}
+                                        <tr>
+                                            <td colspan="4" class="text-muted">No tasks assigned yet.</td>
+                                        </tr>
+                                        {% endif %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    {% if can_edit_job %}
+                    <div class="card hc-builder-panel">
+                        <div class="card-body">
+                            <section class="hc-builder-section">
+                                <div class="hc-builder-panel-header">
+                                    <div>
+                                        <h3 class="h5 mb-1">Add Existing Task</h3>
+                                        <p class="text-muted mb-0">Filter the shared task library and add what you need.</p>
                                     </div>
                                     {% if current_user.admin %}
-                                    <a class="btn btn-outline-primary ml-2" href="{{ url_for('tasks.tasks_add', next=url_for('jobs.jobs_builder', job_id=job.id, tab='tasks')) }}" role="button">Add New Task</a>
-                                    {% endif %}
-                                    <div class="dropdown show pl-2">
-                                        <a class="btn btn-primary dropdown-toggle" href="#" role="button" id="builderTaskGroupDropdown" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                                            Add Task Group
-                                        </a>
-                                        <div class="dropdown-menu hc-scroll-dropdown" aria-labelledby="builderTaskGroupDropdown">
-                                            {% for task_group in task_groups %}
-                                                <form action="{{ url_for('jobs.jobs_assign_task_group', job_id=job.id, task_group_id=task_group.id) }}" method="POST" class="m-0">
-                                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                                    <button type="submit" class="dropdown-item btn btn-link text-left">{{ task_group.name }}</button>
-                                                </form>
-                                            {% endfor %}
-                                            {% if not task_groups %}
-                                                <span class="dropdown-item text-muted">No task groups available</span>
-                                            {% endif %}
-                                        </div>
-                                    </div>
-                                    {% if job_tasks %}
-                                    <form action="{{ url_for('jobs.jobs_remove_all_tasks', job_id=job.id) }}" method="POST" class="d-inline pl-2" data-confirm="Delete all assigned tasks for {{ job.name }}?">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                        <button type="submit" class="btn btn-danger">Remove All</button>
-                                    </form>
+                                    <a class="btn btn-outline-primary btn-sm" href="{{ url_for('tasks.tasks_add', next=url_for('jobs.jobs_builder', job_id=job.id, tab='tasks')) }}" role="button">Add New Task</a>
                                     {% endif %}
                                 </div>
-                            </td>
-                        </tr>
-                        {% endif %}
-                    </tbody>
-                </table>
+                                {% if available_tasks %}
+                                <div class="form-group mt-3 mb-2">
+                                    <label class="form-control-label" for="builder-task-filter">Filter Shared Tasks</label>
+                                    <input
+                                        type="search"
+                                        class="form-control"
+                                        id="builder-task-filter"
+                                        placeholder="Search by task name or type"
+                                        data-filter-input="#builder-available-tasks [data-filter-item]"
+                                        data-filter-empty-target="builder-task-filter-empty"
+                                    >
+                                </div>
+                                <div class="list-group hc-picker-list" id="builder-available-tasks">
+                                    {% for task in available_tasks %}
+                                    <div class="list-group-item d-flex align-items-center justify-content-between flex-wrap" data-filter-item data-filter-text="{{ (task.name ~ ' ' ~ task.hc_attackmode)|lower }}">
+                                        <div class="mr-3">
+                                            <div class="font-weight-bold">{{ task.name }}</div>
+                                            <small class="text-muted">{{ 'Dictionary' if task.hc_attackmode == 'dictionary' else 'Maskmode' }}</small>
+                                        </div>
+                                        <form action="{{ url_for('jobs.jobs_assigned_task', job_id=job.id, task_id=task.id) }}" method="POST" class="m-0">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" class="btn btn-sm btn-primary">Add</button>
+                                        </form>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                                <p class="text-muted mt-2 mb-0 hc-hidden" id="builder-task-filter-empty">No shared tasks match this filter.</p>
+                                {% else %}
+                                <p class="text-muted mt-3 mb-0">No unassigned shared tasks are available right now.</p>
+                                {% endif %}
+                            </section>
+
+                            <section class="hc-builder-section">
+                                <div class="hc-builder-panel-header">
+                                    <div>
+                                        <h3 class="h5 mb-1">Add Task Group</h3>
+                                        <p class="text-muted mb-0">Add all tasks from a shared group in one step.</p>
+                                    </div>
+                                </div>
+                                {% if task_groups %}
+                                <div class="list-group hc-picker-list">
+                                    {% for task_group in task_groups %}
+                                    <div class="list-group-item d-flex align-items-center justify-content-between flex-wrap">
+                                        <div class="mr-3">
+                                            <div class="font-weight-bold">{{ task_group.name }}</div>
+                                            <small class="text-muted">Assign every task defined in this group.</small>
+                                        </div>
+                                        <form action="{{ url_for('jobs.jobs_assign_task_group', job_id=job.id, task_group_id=task_group.id) }}" method="POST" class="m-0">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" class="btn btn-sm btn-outline-primary">Add Group</button>
+                                        </form>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                                {% else %}
+                                <p class="text-muted mt-3 mb-0">No task groups are available.</p>
+                                {% endif %}
+                            </section>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
 
                 {% if can_edit_job %}
                 <div class="hc-form-actions">

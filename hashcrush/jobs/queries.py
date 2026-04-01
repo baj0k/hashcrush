@@ -289,21 +289,6 @@ def _build_jobs_list_context(*, page: int, per_page: int):
         if visible_job_ids
         else []
     )
-    visible_task_ids = sorted({job_task.task_id for job_task in job_tasks})
-    task_rows = (
-        db.session.execute(
-            select(Tasks.id, Tasks.name).where(Tasks.id.in_(visible_task_ids))
-        ).all()
-        if visible_task_ids
-        else []
-    )
-    task_names = {row.id: row.name for row in task_rows}
-    task_names_by_job_id: dict[int, list[str]] = defaultdict(list)
-    for job_task in job_tasks:
-        task_name = task_names.get(job_task.task_id)
-        if task_name:
-            task_names_by_job_id[job_task.job_id].append(task_name)
-
     hashfile_stats = {}
     if hashfile_ids:
         stats_rows = db.session.execute(
@@ -350,7 +335,6 @@ def _build_jobs_list_context(*, page: int, per_page: int):
         "domain_names": domain_names,
         "owner_names": owner_names,
         "hashfile_names": hashfile_names,
-        "task_names_by_job_id": task_names_by_job_id,
         "job_runtime_progress": job_runtime_progress,
         "job_recovered": job_recovered,
         "pagination": pagination,

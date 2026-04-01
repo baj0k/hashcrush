@@ -84,6 +84,17 @@
                         {% endfor %}
                         {% endif %}
                     {% endwith %}
+                    <section class="hc-global-upload-monitor hc-hidden" data-global-upload-monitor aria-live="polite" aria-atomic="true">
+                        <div class="hc-global-upload-monitor__intro">
+                            <div>
+                                <h2 class="h5 mb-1">Background File Processing</h2>
+                                <p class="mb-0 text-muted">
+                                    Large uploads keep processing even if you move to another page.
+                                </p>
+                            </div>
+                        </div>
+                        <div class="hc-global-upload-list" data-global-upload-list></div>
+                    </section>
                     {% block header %}{% endblock %}
                     {% block content %}{% endblock %}
                 </div>

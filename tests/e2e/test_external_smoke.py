@@ -133,28 +133,26 @@ def test_external_worker_cracks_dictionary_job_end_to_end(
         )
     page.locator("#domain_id").select_option("add_new")
     page.get_by_label("New Domain").fill(domain_name)
-    page.get_by_role("button", name="Create Draft", exact=True).click()
+    page.get_by_role("button", name="Continue to Hashes", exact=True).click()
 
     expect(page).to_have_url(re.compile(r".*/jobs/\d+/builder.*"))
     expect(page.get_by_role("heading", name="Hashes")).to_be_visible()
     page.locator("select[name='file_type']").select_option("hash_only")
     page.locator("select[name='hash_type']").select_option("0")
-    page.locator("#pills-profile-tab").click()
     page.set_input_files("input[name='hashfile']", str(hashfile_path))
-    page.get_by_role("button", name="Save New Hashfile", exact=True).click()
+    page.get_by_role("button", name="Save Hashfile and Continue", exact=True).click()
 
     expect(page.get_by_role("heading", name="Tasks")).to_be_visible()
-    page.get_by_role("button", name="Add Task", exact=True).click()
-    task_entry = page.locator(".dropdown-menu .dropdown-item", has_text=task_name).first
+    task_entry = page.locator("#builder-available-tasks [data-filter-item]", has_text=task_name).first
     expect(task_entry).to_be_visible()
-    task_entry.click()
+    task_entry.get_by_role("button", name="Add", exact=True).click()
     expect(
         page.locator("#tasks").get_by_role("cell", name=task_name, exact=True)
     ).to_be_visible()
 
     page.get_by_role("button", name="Review Job", exact=True).click()
     expect(page).to_have_url(re.compile(r".*/jobs/\d+/summary.*"))
-    expect(page.get_by_role("heading", name="Review Job")).to_be_visible()
+    expect(page.get_by_role("heading", name=re.compile(r"Job: "))).to_be_visible()
     page.get_by_role("button", name="Accept Job", exact=True).click()
     expect(page).to_have_url(re.compile(r".*/jobs(?:\?.*)?$"))
 

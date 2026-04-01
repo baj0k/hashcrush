@@ -21,6 +21,7 @@ from hashcrush.audit import record_audit_event
 from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Rules, TaskGroups, Tasks, Wordlists, db
 from hashcrush.task_groups.forms import TaskGroupsForm
+from hashcrush.view_utils import safe_relative_url
 
 task_groups = Blueprint("task_groups", __name__)
 
@@ -48,28 +49,55 @@ def _task_name(task_id: int) -> str | None:
     return task.name if task else None
 
 
+def _task_group_assignment_rows(
+    task_group: TaskGroups, task_rows: list[Tasks]
+) -> tuple[list[Tasks], list[Tasks]]:
+    task_group_task_ids = _parse_task_group_tasks(task_group.tasks)
+    task_by_id = {task.id: task for task in task_rows}
+    assigned_tasks = [
+        task_by_id[task_id]
+        for task_id in task_group_task_ids
+        if task_id in task_by_id
+    ]
+    available_tasks = [
+        task for task in task_rows if task.id not in task_group_task_ids
+    ]
+    return assigned_tasks, available_tasks
+
+
+def _ordered_task_group_tasks(task_group: TaskGroups) -> list[Tasks]:
+    task_rows = db.session.execute(select(Tasks).order_by(Tasks.name.asc())).scalars().all()
+    assigned_tasks, _ = _task_group_assignment_rows(task_group, task_rows)
+    return assigned_tasks
+
+
 @task_groups.route("/task_groups", methods=["GET", "POST"])
 @login_required
 def task_groups_list():
     """Function to list task groups."""
-    task_group_rows = db.session.execute(select(TaskGroups)).scalars().all()
-    task_rows = db.session.execute(select(Tasks)).scalars().all()
-    task_name_by_id = {task.id: task.name for task in task_rows}
-    task_group_task_names = {
-        task_group.id: [
-            task_name_by_id[task_id]
-            for task_id in _parse_task_group_tasks(task_group.tasks)
-            if task_id in task_name_by_id
-        ]
-        for task_group in task_group_rows
-    }
+    task_group_rows = db.session.execute(
+        select(TaskGroups).order_by(TaskGroups.name.asc())
+    ).scalars().all()
 
     return render_template(
         "task_groups.html",
         title="Task Groups",
         task_groups=task_group_rows,
-        tasks=task_rows,
-        task_group_task_names=task_group_task_names,
+    )
+
+
+@task_groups.route("/task_groups/<int:task_group_id>", methods=["GET"])
+@login_required
+def task_groups_detail(task_group_id):
+    """Show ordered shared-task details for a task group."""
+
+    task_group = db.get_or_404(TaskGroups, task_group_id)
+    ordered_tasks = _ordered_task_group_tasks(task_group)
+    return render_template(
+        "task_groups_detail.html",
+        title=f"Task Group: {task_group.name}",
+        task_group=task_group,
+        ordered_tasks=ordered_tasks,
     )
 
 
@@ -392,13 +420,16 @@ def task_groups_assigned_tasks(task_group_id):
     """Function to list assigned tasks for task group."""
     task_group = db.get_or_404(TaskGroups, task_group_id)
     task_rows = db.session.execute(select(Tasks)).scalars().all()
-    task_group_tasks = _parse_task_group_tasks(task_group.tasks)
+    assigned_tasks, available_tasks = _task_group_assignment_rows(
+        task_group,
+        task_rows,
+    )
     return render_template(
         "task_groups_assigntask.html",
         title="Task Group: Assign Tasks",
         task_group=task_group,
-        tasks=task_rows,
-        task_group_tasks=task_group_tasks,
+        assigned_tasks=assigned_tasks,
+        available_tasks=available_tasks,
     )
 
 
@@ -571,6 +602,7 @@ def task_groups_assigned_tasks_demote_task(task_group_id, task_id):
 def task_groups_delete(task_group_id):
     """Function to delete task group."""
     task_group = db.get_or_404(TaskGroups, task_group_id)
+    next_url = safe_relative_url(request.form.get("next"))
     deleted_group_name = task_group.name
     deleted_task_ids = _parse_task_group_tasks(task_group.tasks)
     db.session.delete(task_group)
@@ -586,4 +618,4 @@ def task_groups_delete(task_group_id):
         },
     )
     flash("Task Group has been deleted!", "success")
-    return redirect(url_for("task_groups.task_groups_list"))
+    return redirect(next_url or url_for("task_groups.task_groups_list"))

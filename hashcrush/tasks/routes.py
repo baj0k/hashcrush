@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 
 from hashcrush.audit import record_audit_event
 from hashcrush.authz import admin_required_redirect, visible_jobs_query
-from hashcrush.models import JobTasks, Rules, TaskGroups, Tasks, Wordlists, db
+from hashcrush.models import JobTasks, Jobs, Rules, TaskGroups, Tasks, Wordlists, db
 from hashcrush.tasks.forms import TasksForm
 from hashcrush.view_utils import append_query_params, safe_relative_url
 
@@ -79,36 +79,56 @@ def _task_save_conflict_response(template_name, title, tasks_form, task=None, wo
     )
     return _render_task_form(template_name, title, tasks_form, task=task, wordlists=wordlists, rules=rules)
 
+
+def _task_detail_context(task: Tasks) -> dict[str, object]:
+    associated_jobs = db.session.execute(
+        visible_jobs_query()
+        .join(JobTasks, JobTasks.job_id == Jobs.id)
+        .where(JobTasks.task_id == task.id)
+        .order_by(Jobs.name.asc())
+    ).scalars().all()
+    associated_task_groups = [
+        task_group
+        for task_group in db.session.execute(
+            select(TaskGroups).order_by(TaskGroups.name.asc())
+        ).scalars().all()
+        if task.id in _parse_task_group_task_ids(task_group.tasks)
+    ]
+    return {
+        'associated_jobs': associated_jobs,
+        'associated_task_groups': associated_task_groups,
+        'associated_wordlist': task.wordlist,
+        'associated_rule': task.rule,
+        'delete_blockers': {
+            'jobs': len(associated_jobs),
+            'task_groups': len(associated_task_groups),
+        },
+    }
+
 @tasks.route("/tasks", methods=['GET', 'POST'])
 @login_required
 def tasks_list():
     """Function to list tasks"""
 
-    tasks = db.session.execute(select(Tasks)).scalars().all()
-    jobs = db.session.execute(visible_jobs_query()).scalars().all()
-    visible_job_ids = [job.id for job in jobs]
-    job_tasks = (
-        db.session.execute(
-            select(JobTasks).where(JobTasks.job_id.in_(visible_job_ids))
-        ).scalars().all()
-        if visible_job_ids
-        else []
-    )
-    wordlists = db.session.execute(select(Wordlists)).scalars().all()
-    task_groups = db.session.execute(select(TaskGroups)).scalars().all()
-    task_group_task_ids = {
-        task_group.id: _parse_task_group_task_ids(task_group.tasks)
-        for task_group in task_groups
-    }
+    tasks = db.session.execute(select(Tasks).order_by(Tasks.name.asc())).scalars().all()
     return render_template(
         'tasks.html',
         title='tasks',
         tasks=tasks,
-        jobs=jobs,
-        job_tasks=job_tasks,
-        wordlists=wordlists,
-        task_groups=task_groups,
-        task_group_task_ids=task_group_task_ids,
+    )
+
+
+@tasks.route("/tasks/<int:task_id>", methods=['GET'])
+@login_required
+def task_detail(task_id):
+    """Show usage and configuration details for a shared task."""
+
+    task = db.get_or_404(Tasks, task_id)
+    return render_template(
+        'tasks_detail.html',
+        title=f'Task: {task.name}',
+        task=task,
+        **_task_detail_context(task),
     )
 
 @tasks.route("/tasks/add", methods=['GET', 'POST'])
@@ -424,18 +444,19 @@ def tasks_delete(task_id):
     """Function to delete task"""
 
     task = db.get_or_404(Tasks, task_id)
+    next_url = safe_relative_url(request.form.get('next'))
     task_groups = db.session.execute(select(TaskGroups)).scalars().all()
 
     # Check if associated with JobTask (which implies its associated with a job)
     jobtask = db.session.scalar(select(JobTasks).filter_by(task_id=task_id))
     if jobtask:
         flash('Cannot delete. Task is associated with one or more jobs.', 'danger')
-        return redirect(url_for('tasks.tasks_list'))
+        return redirect(next_url or url_for('tasks.tasks_list'))
 
     for task_group in task_groups:
         if task_id in _parse_task_group_task_ids(task_group.tasks):
             flash('Cannot delete. Task is associated with one or more task groups.', 'danger')
-            return redirect(url_for('tasks.tasks_list'))
+            return redirect(next_url or url_for('tasks.tasks_list'))
 
     deleted_task_name = task.name
     deleted_attack_mode = task.hc_attackmode
@@ -445,7 +466,7 @@ def tasks_delete(task_id):
     except IntegrityError:
         db.session.rollback()
         flash('Cannot delete. Task is associated with one or more jobs or task groups.', 'danger')
-        return redirect(url_for('tasks.tasks_list'))
+        return redirect(next_url or url_for('tasks.tasks_list'))
     record_audit_event(
         'task.delete',
         'task',
@@ -457,4 +478,4 @@ def tasks_delete(task_id):
         },
     )
     flash('Task has been deleted!', 'success')
-    return redirect(url_for('tasks.tasks_list'))
+    return redirect(next_url or url_for('tasks.tasks_list'))

@@ -1,0 +1,92 @@
+{% extends "layout.html" %}
+{% block header %}
+<div class="hc-page-header">
+    <h1>Hashfile: {{ hashfile.name }}</h1>
+    <p class="hc-page-intro">Review the domain, crack progress, and job dependencies for this shared hashfile before making changes.</p>
+    <div class="hc-page-actions">
+        <a class="btn btn-secondary btn-sm" href="{{ url_for('hashfiles.hashfiles_list') }}">Back to Hashfiles</a>
+        <a class="btn btn-warning btn-sm" href="{{ url_for('analytics.get_analytics') }}?domain_id={{ hashfile.domain_id }}&hashfile_id={{ hashfile.id }}">Analytics</a>
+        {% if current_user.admin %}
+        <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes') }}?type=found&domain_id={{ hashfile.domain_id }}&hashfile_id={{ hashfile.id }}">Download Found</a>
+        {% endif %}
+    </div>
+</div>
+{% endblock header %}
+{% block content %}
+<div class="content-section">
+    <table class="table">
+        <tbody>
+            <tr>
+                <th scope="row">Domain</th>
+                <td><a href="{{ url_for('domains.domains_detail', domain_id=hashfile.domain_id) }}">{{ hashfile.domain.name }}</a></td>
+            </tr>
+            <tr>
+                <th scope="row">Hash Type</th>
+                <td>{{ hashfile_stats.hash_type }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Crack Rate</th>
+                <td>{{ hashfile_stats.cracked_count }}/{{ hashfile_stats.total_count }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Uploaded At</th>
+                <td>{{ hashfile.uploaded_at }}</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="content-section">
+    <h2 class="h4">Associated Jobs</h2>
+    <div class="hc-line-list">
+        {% for job in associated_jobs %}
+        <span>{{ job.name }}</span>
+        {% else %}
+        <i>none</i>
+        {% endfor %}
+    </div>
+</div>
+
+{% if current_user.admin %}
+<div class="content-section" id="admin-actions">
+    <h2 class="h4">Admin Actions</h2>
+    <table class="table table-sm">
+        <tbody>
+            <tr>
+                <th scope="row">Associated Jobs Blocking Deletion</th>
+                <td>{{ delete_impact.associated_jobs }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Hash Associations to Remove</th>
+                <td>{{ delete_impact.hash_links }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Orphaned Uncracked Hashes to Remove</th>
+                <td>{{ delete_impact.orphan_uncracked_hashes }}</td>
+            </tr>
+        </tbody>
+    </table>
+    {% if delete_impact.associated_jobs %}
+    <p class="text-muted mb-0">This hashfile cannot be deleted until the jobs listed above are detached or removed.</p>
+    {% else %}
+    <form action="{{ url_for('hashfiles.hashfiles_delete', hashfile_id=hashfile.id) }}" method="POST">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ url_for('hashfiles.hashfiles_list') }}">
+        <div class="form-group">
+            <label class="form-control-label" for="confirm_name">Type <strong>{{ hashfile.name }}</strong> to confirm deletion.</label>
+            <input
+                id="confirm_name"
+                class="form-control"
+                type="text"
+                name="confirm_name"
+                placeholder="{{ hashfile.name }}"
+                autocomplete="off"
+                required
+            >
+        </div>
+        <button class="btn btn-danger" type="submit">Delete Hashfile</button>
+    </form>
+    {% endif %}
+</div>
+{% endif %}
+{% endblock content %}

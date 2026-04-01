@@ -1,75 +1,101 @@
 {% extends "layout.html" %}
 {% block header %}
 <div class="hc-page-header">
-    <h1>Review Job</h1>
+    <h1>Job: {{ job.name }}</h1>
     <p class="hc-page-intro">
-        Review the job details and accept the final configuration before the draft is marked ready.
+        Review the job configuration, runtime state, and assigned tasks from one place.
     </p>
+    <div class="hc-page-actions">
+        <a class="btn btn-secondary btn-sm" href="{{ url_for('jobs.jobs_list') }}">Back to Jobs</a>
+        {% if selected_hashfile %}
+        <a class="btn btn-warning btn-sm" href="{{ url_for('analytics.get_analytics') }}?domain_id={{ job.domain_id }}&hashfile_id={{ job.hashfile_id }}">Analytics</a>
+        {% endif %}
+        {% if can_edit_job %}
+        <a class="btn btn-primary btn-sm" href="{{ url_for('jobs.jobs_builder', job_id=job.id, tab='basics') }}">Edit Builder</a>
+        {% endif %}
+    </div>
 </div>
 {% endblock header %}
 {% block content %}
 <div class="content-section">
-    <table class="table table-sm">
+    <table class="table">
         <tbody>
             <tr>
-                <td>Job Name</td>
-                <td>{{ job.name }}</td>
+                <th scope="row">Status</th>
+                <td>{{ job.status }}</td>
             </tr>
             <tr>
-                <td>Domain</td>
-                <td>{{ domain.name if domain else 'N/A' }}</td>
+                <th scope="row">Owner</th>
+                <td>{{ job.owner.username }}</td>
             </tr>
             <tr>
-                <td>Priority</td>
-                <td>{{ priority_display }}</td>
+                <th scope="row">Created At</th>
+                <td>{{ job.created_at }}</td>
             </tr>
             <tr>
-                <td>Hashfile</td>
+                <th scope="row">Started At</th>
+                <td>{{ job.started_at or 'Not started' }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Ended At</th>
+                <td>{{ job.ended_at or 'N/A' }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Domain</th>
                 <td>
-                    {% if selected_hashfile %}
-                        {{ selected_hashfile.name }} ({{ cracked_rate }})
+                    {% if domain %}
+                    <a href="{{ url_for('domains.domains_detail', domain_id=domain.id) }}">{{ domain.name }}</a>
                     {% else %}
-                        <span class="text-muted">Not assigned yet</span>
+                    N/A
                     {% endif %}
                 </td>
             </tr>
             <tr>
-                <td>Tasks</td>
+                <th scope="row">Priority</th>
+                <td>{{ priority_display }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Hashfile</th>
                 <td>
-                    {% if ordered_task_names %}
-                    <div class="hc-line-list">
-                        {% for task_name in ordered_task_names %}
-                        <span>{{ task_name }}</span>
-                        {% endfor %}
-                    </div>
+                    {% if selected_hashfile %}
+                    <a href="{{ url_for('hashfiles.hashfiles_detail', hashfile_id=selected_hashfile.id) }}">{{ selected_hashfile.name }}</a>
+                    ({{ cracked_rate }})
                     {% else %}
-                    <span class="text-muted">No tasks assigned yet</span>
+                    <span class="text-muted">Not assigned yet</span>
                     {% endif %}
                 </td>
             </tr>
         </tbody>
     </table>
+</div>
 
-    {% if not selected_hashfile or not job_tasks %}
-    <p class="text-muted mb-3">
-        Choose a hashfile and assign at least one task before accepting the final job.
-    </p>
-    {% elif can_edit_job and job.status == 'Incomplete' %}
-    <p class="text-muted mb-3">
-        If everything looks right, accept the job and it will move into the ready state.
-    </p>
-    {% elif can_manage_job %}
-    <p class="text-muted mb-3">
-        This job is already {{ job.status.lower() }}. Review the details here or return to the jobs list for runtime actions.
-    </p>
+<div class="content-section">
+    <h2 class="h4">Assigned Tasks</h2>
+    {% if ordered_task_names %}
+    <div class="hc-line-list">
+        {% for task_name in ordered_task_names %}
+        <span>{{ task_name }}</span>
+        {% endfor %}
+    </div>
     {% else %}
-    <p class="text-muted mb-3">
-        Read-only view. Only the job owner or an admin can accept this job.
-    </p>
+    <p class="text-muted mb-0">No tasks assigned yet.</p>
+    {% endif %}
+</div>
+
+<div class="content-section" id="admin-actions">
+    <h2 class="h4">Job Actions</h2>
+    {% if not selected_hashfile or not job_tasks %}
+    <p class="text-muted mb-3">Choose a hashfile and assign at least one task before accepting the final job.</p>
+    {% elif can_edit_job and job.status == 'Incomplete' %}
+    <p class="text-muted mb-3">If everything looks right, accept the job and it will move into the ready state.</p>
+    {% elif can_manage_job %}
+    <p class="text-muted mb-3">This job is already {{ job.status.lower() }}. Use this page for review, edits, and deletion controls.</p>
+    {% else %}
+    <p class="text-muted mb-3">Read-only view. Only the job owner or an admin can accept, edit, or delete this job.</p>
     {% endif %}
 
     {% if can_edit_job and job.status == 'Incomplete' and selected_hashfile and job_tasks %}
-    <form method="POST" action="{{ url_for('jobs.jobs_summary', job_id=job.id) }}">
+    <form method="POST" action="{{ url_for('jobs.jobs_summary', job_id=job.id) }}" class="mb-4">
         {{ summary_form.hidden_tag() }}
         <div class="hc-form-actions">
             <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_builder', job_id=job.id, tab='tasks') }}" role="button">Back to Tasks</a>
@@ -78,13 +104,28 @@
             </div>
         </div>
     </form>
-    {% else %}
-    <div class="hc-form-actions">
-        <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_builder', job_id=job.id, tab='tasks') }}" role="button">Back to Tasks</a>
-        <div class="hc-form-actions-right">
-            <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_list') }}" role="button">Back to Jobs</a>
+    {% endif %}
+
+    {% if can_manage_job and job.status not in ('Running', 'Queued', 'Paused') %}
+    <form method="POST" action="{{ url_for('jobs.jobs_delete', job_id=job.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ url_for('jobs.jobs_list') }}">
+        <div class="form-group">
+            <label class="form-control-label" for="confirm_name">Type <strong>{{ job.name }}</strong> to confirm deletion.</label>
+            <input
+                id="confirm_name"
+                class="form-control"
+                type="text"
+                name="confirm_name"
+                placeholder="{{ job.name }}"
+                autocomplete="off"
+                required
+            >
         </div>
-    </div>
+        <button class="btn btn-danger" type="submit">Delete Job</button>
+    </form>
+    {% elif can_manage_job %}
+    <p class="text-muted mb-0">This job cannot be deleted while it is running, queued, or paused.</p>
     {% endif %}
 </div>
 {% endblock content %}

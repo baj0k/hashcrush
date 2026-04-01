@@ -95,7 +95,7 @@ def test_job_idor_access_denied_for_other_user(
 
     page.get_by_label("Job Name").fill(unique_name("E2E IDOR Job"))
     select_domain(page, e2e_fixture_data["domain_id"])
-    page.get_by_role("button", name="Create Draft").click()
+    page.get_by_role("button", name="Continue to Hashes").click()
     match = re.search(r"/jobs/(\d+)/builder", page.url)
     assert match, f"Could not determine job id for IDOR test from URL: {page.url}"
     job_id = match.group(1)

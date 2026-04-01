@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from hashcrush.audit import record_audit_event
 from hashcrush.domains.service import resolve_or_create_shared_domain
 from hashcrush.hashfiles.service import create_hashfile_from_path
-from hashcrush.models import Rules, Wordlists, db
+from hashcrush.models import Jobs, Rules, Wordlists, db
 from hashcrush.utils.file_ops import get_filehash, get_linecount
 from hashcrush.utils.storage_paths import get_storage_subdir
 from hashcrush.view_utils import append_query_params
@@ -447,6 +447,116 @@ def _process_hashfile_upload(payload: dict[str, object], reporter) -> None:
     )
 
 
+def _process_job_hashfile_upload(payload: dict[str, object], reporter) -> None:
+    staged_hashfile_path = os.path.abspath(
+        str(payload.get("staged_hashfile_path") or "").strip()
+    )
+    hashfile_name = str(payload.get("hashfile_name") or "").strip()
+    file_type = str(payload.get("file_type") or "").strip()
+    hash_type = str(payload.get("hash_type") or "").strip()
+    audit_actor = payload.get("audit_actor")
+
+    try:
+        job_id = int(payload.get("job_id") or 0)
+        domain_id = int(payload.get("domain_id") or 0)
+    except (TypeError, ValueError):
+        reporter.fail(
+            title="Hashfile upload failed.",
+            detail="Draft job details are invalid or no longer available.",
+        )
+        _remove_staged_hashfile_file(staged_hashfile_path)
+        return
+
+    try:
+        reporter.update(
+            percent=4,
+            title="Preparing hashfile...",
+            detail="Checking the draft job before attaching the uploaded hashfile.",
+        )
+        job = db.session.get(Jobs, job_id)
+        if job is None or int(job.domain_id or 0) != domain_id:
+            db.session.rollback()
+            reporter.fail(
+                title="Hashfile upload failed.",
+                detail="The draft job no longer exists or changed domains.",
+            )
+            return
+        if job.status in {"Running", "Queued", "Paused"}:
+            db.session.rollback()
+            reporter.fail(
+                title="Hashfile upload failed.",
+                detail="Stop the job before changing its hashfile.",
+            )
+            return
+
+        creation_result, error_message = create_hashfile_from_path(
+            hashfile_path=staged_hashfile_path,
+            hashfile_name=hashfile_name,
+            domain_id=domain_id,
+            file_type=file_type,
+            hash_type=hash_type,
+            progress_callback=_make_hashfile_progress_callback(reporter),
+        )
+        if error_message or creation_result is None:
+            db.session.rollback()
+            reporter.fail(
+                title="Hashfile upload failed.",
+                detail=(
+                    error_message
+                    or "Failed importing hashfile. Check file format/hash type and retry."
+                ),
+            )
+            return
+
+        hashfile = creation_result.hashfile
+        job.hashfile_id = hashfile.id
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        reporter.fail(
+            title="Hashfile upload failed.",
+            detail=(
+                "Hashfile could not be saved because that name already exists or the "
+                "draft job changed while the file was processing."
+            ),
+        )
+        return
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception(
+            "Failed processing queued builder hashfile upload for %s", hashfile_name
+        )
+        reporter.fail(
+            title="Hashfile upload failed.",
+            detail=(
+                "The server hit an unexpected error while processing the hashfile."
+            ),
+        )
+        return
+    finally:
+        _remove_staged_hashfile_file(staged_hashfile_path)
+
+    record_audit_event(
+        "hashfile.create",
+        "hashfile",
+        target_id=hashfile.id,
+        summary=f'Registered shared hashfile "{hashfile.name}" via job assignment.',
+        details={
+            "hashfile_name": hashfile.name,
+            "domain_id": domain_id,
+            "job_id": job.id,
+            "hash_type": creation_result.hash_type,
+            "imported_hash_links": creation_result.imported_hash_links,
+        },
+        actor=audit_actor if isinstance(audit_actor, dict) else None,
+    )
+    reporter.complete(
+        title="Hashfile ready.",
+        detail=f'Shared hashfile "{hashfile.name}" was attached to job "{job.name}".',
+        completion_flashes=[("success", "Hashfile created and assigned to the job.")],
+    )
+
+
 def process_upload_operation(
     operation_type: str, payload: dict[str, object], reporter
 ) -> None:
@@ -464,5 +574,8 @@ def process_upload_operation(
         return
     if normalized_type == "hashfile_upload":
         _process_hashfile_upload(payload, reporter)
+        return
+    if normalized_type == "job_hashfile_upload":
+        _process_job_hashfile_upload(payload, reporter)
         return
     raise RuntimeError(f"Unsupported upload operation type: {operation_type!r}")

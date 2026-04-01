@@ -16,7 +16,7 @@ def test_job_name_required_validation(page, live_server, login, e2e_fixture_data
     expect(page.get_by_role("heading", name="Create a New Job")).to_be_visible()
 
     select_domain(page, e2e_fixture_data["domain_id"])
-    page.get_by_role("button", name="Create Draft").click()
+    page.get_by_role("button", name="Continue to Hashes").click()
     expect(page.get_by_role("heading", name="Create a New Job")).to_be_visible()
 
 
@@ -34,7 +34,7 @@ def test_job_name_xss_is_escaped(page, live_server, login, e2e_fixture_data):
     if page.locator("#priority").count() > 0:
         page.locator("#priority").select_option("3")
     select_domain(page, e2e_fixture_data["domain_id"])
-    page.get_by_role("button", name="Create Draft").click()
+    page.get_by_role("button", name="Continue to Hashes").click()
     expect(page.get_by_role("heading", name="Hashes")).to_be_visible()
 
     page.goto(f"{live_server}/jobs", wait_until="domcontentloaded")
@@ -51,13 +51,14 @@ def test_hashfile_validation_rejects_invalid_hash(page, live_server, login, e2e_
 
     page.get_by_label("Job Name").fill(unique_name("E2E Invalid Hash Test"))
     select_domain(page, e2e_fixture_data["domain_id"])
-    page.get_by_role("button", name="Create Draft").click()
+    page.get_by_role("button", name="Continue to Hashes").click()
     expect(page.get_by_role("heading", name="Hashes")).to_be_visible()
 
     page.locator("select[name='file_type']").select_option("hash_only")
     page.locator("select[name='hash_type']").select_option("0")
+    page.get_by_text("Paste hashes manually instead", exact=True).click()
     page.locator("textarea[name='hashfilehashes']").fill("short")
-    page.get_by_role("button", name="Save New Hashfile").click()
+    page.get_by_role("button", name="Save Hashfile and Continue").click()
     expect(page).to_have_url(re.compile(r".*/assigned_hashfile/.*"))
     expect(page.get_by_role("heading", name="Hashes")).to_be_visible()
     if page.locator(".alert-danger").count() > 0:
@@ -73,15 +74,14 @@ def test_hashfile_upload_example_file(page, live_server, login, e2e_fixture_data
 
     page.get_by_label("Job Name").fill(unique_name("E2E Upload Example Hashfile"))
     select_domain(page, e2e_fixture_data["domain_id"])
-    page.get_by_role("button", name="Create Draft").click()
+    page.get_by_role("button", name="Continue to Hashes").click()
     expect(page.get_by_role("heading", name="Hashes")).to_be_visible()
 
     page.locator("select[name='file_type']").select_option("hash_only")
     page.locator("select[name='hash_type']").select_option("0")
-    page.locator("#pills-profile-tab").click()
     example_path = Path(__file__).parent / "example_hashes.txt"
     page.set_input_files("input[name='hashfile']", str(example_path))
-    page.get_by_role("button", name="Save New Hashfile").click()
+    page.get_by_role("button", name="Save Hashfile and Continue").click()
     expect(page).to_have_url(re.compile(r".*/builder.*"))
 
 
@@ -94,13 +94,12 @@ def test_hashfile_upload_example_pwdump(page, live_server, login, e2e_fixture_da
 
     page.get_by_label("Job Name").fill(unique_name("E2E Upload Example Pwdump"))
     select_domain(page, e2e_fixture_data["domain_id"])
-    page.get_by_role("button", name="Create Draft").click()
+    page.get_by_role("button", name="Continue to Hashes").click()
     expect(page.get_by_role("heading", name="Hashes")).to_be_visible()
 
     page.locator("select[name='file_type']").select_option("pwdump")
     page.locator("select[name='pwdump_hash_type']").select_option("1000")
-    page.locator("#pills-profile-tab").click()
     example_path = Path(__file__).parent / "example_pwdump.txt"
     page.set_input_files("input[name='hashfile']", str(example_path))
-    page.get_by_role("button", name="Save New Hashfile").click()
+    page.get_by_role("button", name="Save Hashfile and Continue").click()
     expect(page).to_have_url(re.compile(r".*/builder.*"))

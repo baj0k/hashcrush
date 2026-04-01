@@ -14,143 +14,61 @@
 </div>
 {% endblock header %}
 {% block content %}
-    <article class="media content-section">
-        <div class="media-body">
-            <table class="table">
-                <thead>
-                  <tr>
+<article class="media content-section">
+    <div class="media-body">
+        <table class="table">
+            <thead>
+                <tr>
                     <th scope="col">Domain</th>
                     <th scope="col">Hash File</th>
                     <th scope="col">Hash Type</th>
                     <th scope="col">Crack Rate</th>
                     <th scope="col">Uploaded At</th>
                     <th scope="col">Control</th>
-                  </tr>
-                </thead>
-                <tbody>
-                    {% for domain in domains %}
-                        {% set domain_hashfiles = hashfiles_by_domain.get(domain.id, []) %}
-                        {% if domain_hashfiles %}
-                            <tr>
-                                <td>{{ domain.name }}</td>
-                                <td></td>
-                                <td></td>
-                                <td></td>
-                                <td></td>
-                            </tr>
-                            {% for hashfile in domain_hashfiles %}
-                                <tr>
-                                    <td></td>
-                                    <td>{{ hashfile.name }}</td>
-                                    <td>
-                                        {{hash_type_dict[hashfile.id]}}
-                                    </td>
-                                    <td>
-                                        {{cracked_rate[hashfile.id]}}
-                                    </td>
-                                    <td>
-                                        {{hashfile.uploaded_at}}
-                                    </td>
-                                    <td>
-                                        {% if current_user.admin %}
-                                        <a class="fa fa-download btn btn-primary" href="{{ url_for('analytics.analytics_download_hashes') }}?type=found&domain_id={{ domain.id }}&hashfile_id={{ hashfile.id }}" role="button" title="Download" aria-label="Download cracked results for hashfile {{ hashfile.name }}"></a>
-                                        {% endif %}
-                                        <a class="fa fa-pie-chart btn btn-warning" href="{{ url_for('analytics.get_analytics') }}?domain_id={{ domain.id }}&hashfile_id={{ hashfile.id }}" role="button" title="Analytics" aria-label="View analytics for hashfile {{ hashfile.name }}"></a>
-                                        <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{hashfile.id}}" title="Info" aria-label="View hashfile details for {{ hashfile.name }}"></button>
-                                        {% if current_user.admin %}
-                                            <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{hashfile.id}}" title="Delete" aria-label="Delete hashfile {{ hashfile.name }}"></button>
-                                        {% endif %}
-                                    </td>
-                                </tr>
-                            {% endfor %}
-                        {% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for domain in domains %}
+                    {% for hashfile in hashfiles_by_domain.get(domain.id, []) %}
+                    <tr>
+                        <td>{{ domain.name }}</td>
+                        <td>{{ hashfile.name }}</td>
+                        <td>{{ hash_type_dict[hashfile.id] }}</td>
+                        <td>{{ cracked_rate[hashfile.id] }}</td>
+                        <td>{{ hashfile.uploaded_at }}</td>
+                        <td>
+                            {% if current_user.admin %}
+                            <a class="fa fa-download btn btn-primary" href="{{ url_for('analytics.analytics_download_hashes') }}?type=found&domain_id={{ domain.id }}&hashfile_id={{ hashfile.id }}" role="button" title="Download" aria-label="Download cracked results for hashfile {{ hashfile.name }}"></a>
+                            {% endif %}
+                            <a class="fa fa-pie-chart btn btn-warning" href="{{ url_for('analytics.get_analytics') }}?domain_id={{ domain.id }}&hashfile_id={{ hashfile.id }}" role="button" title="Analytics" aria-label="View analytics for hashfile {{ hashfile.name }}"></a>
+                            <a
+                                class="fa fa-info btn btn-info"
+                                href="{{ url_for('hashfiles.hashfiles_detail', hashfile_id=hashfile.id) }}"
+                                role="button"
+                                title="Info"
+                                aria-label="View hashfile details for {{ hashfile.name }}"
+                            ></a>
+                            {% if current_user.admin %}
+                            <a
+                                class="fa fa-trash btn btn-danger"
+                                href="{{ url_for('hashfiles.hashfiles_detail', hashfile_id=hashfile.id) }}#admin-actions"
+                                role="button"
+                                title="Delete"
+                                aria-label="Manage deletion for hashfile {{ hashfile.name }}"
+                            ></a>
+                            {% endif %}
+                        </td>
+                    </tr>
                     {% endfor %}
-                </tbody>
-              </table>
-              {{ render_pagination('hashfiles.hashfiles_list', pagination) }}
-        </div>
-    </article>
-    {% for hashfile in hashfiles %}
-        <!-- InfoModal -->
-        <div class="modal fade" id="infoModal{{hashfile.id}}" tabindex="-1" aria-labelledby="infoModal{{hashfile.id}}Label" aria-hidden="true">
-            <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="infoModal{{hashfile.id}}Label">Details: {{hashfile.name}}</h5>
-                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                        <span aria-hidden="true">&times;</span>
-                    </button>
-                </div>
-                <div class="modal-body">
-                    <table class="table">
-                        <thead>
-                            <tbody>
-                                <tr>
-                                    <th scope="row">Associated Jobs</th>
-                                    <td>
-                                        {% set associated_jobs = jobs_by_hashfile.get(hashfile.id, []) %}
-                                        <div class="hc-line-list">
-                                            {% for job in associated_jobs %}
-                                            <span>{{ job.name }}</span>
-                                            {% else %}
-                                            <i>none</i>
-                                            {% endfor %}
-                                        </div>
-                                    </td>
-                                </tr>
-                            </tbody>
-                    </table>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
-                </div>
-            </div>
-            </div>
-        </div>
-        {% if current_user.admin %}
-            <!-- DeleteModal -->
-            {% set delete_impact = hashfile_delete_impacts.get(hashfile.id, {}) %}
-            <div class="modal fade" id="deleteModal{{hashfile.id}}" tabindex="-1" aria-labelledby="deleteModal{{hashfile.id}}Label" aria-hidden="true">
-                <div class="modal-dialog modal-dialog-centered">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title" id="deleteModal{{hashfile.id}}Label">Delete {{hashfile.name}}?</h5>
-                        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                            <span aria-hidden="true">&times;</span>
-                        </button>
-                    </div>
-                    <div class="modal-body">
-                        <p>This will permanently delete the hashfile. Cracked hashes disassociated with any domain or username will be retained.</p>
-                        <ul class="mb-3">
-                            <li>Associated jobs blocking deletion: {{ delete_impact.get('associated_jobs', 0) }}</li>
-                            <li>Hash associations to remove: {{ delete_impact.get('hash_links', 0) }}</li>
-                            <li>Orphaned uncracked hashes to remove: {{ delete_impact.get('orphan_uncracked_hashes', 0) }}</li>
-                        </ul>
-                        <p class="mb-2">Type <strong>{{ hashfile.name }}</strong> to confirm deletion.</p>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
-                        <form action="{{ url_for('hashfiles.hashfiles_delete', hashfile_id=hashfile.id) }}" method="POST">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input
-                                class="form-control form-control-sm mb-2"
-                                type="text"
-                                name="confirm_name"
-                                placeholder="{{ hashfile.name }}"
-                                autocomplete="off"
-                                required
-                            >
-                            <input
-                                class="btn btn-danger"
-                                type="submit"
-                                value="Delete"
-                                {% if delete_impact.get('associated_jobs', 0) > 0 %}disabled{% endif %}
-                            >
-                        </form>
-                    </div>
-                </div>
-                </div>
-            </div>
-        {% endif %}
-    {% endfor %}
+                {% endfor %}
+                {% if not hashfiles %}
+                <tr>
+                    <td colspan="6" class="text-muted">No shared hashfiles are available yet.</td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
+        {{ render_pagination('hashfiles.hashfiles_list', pagination) }}
+    </div>
+</article>
 {% endblock content %}

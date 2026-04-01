@@ -1,66 +1,110 @@
 {% extends "layout.html"%}
 {% block header %}
 <div class="hc-page-header">
-    <h1>Assign Task to Group: {{task_group.name}}</h1>
-    <p class="hc-page-intro">Each task will be run once in the selected order. You can create new tasks from the Tasks page.</p>
+    <h1>Task Group: {{ task_group.name }}</h1>
+    <p class="hc-page-intro">Build the ordered task sequence this group will assign to jobs in one step.</p>
 </div>
 {% endblock header %}
 {% block content %}
-    <article class="media content-section">
-        <div class="media-body">
+<div class="content-section">
+    <div class="hc-task-assignment-grid">
+        <div>
+            <h2 class="h4">Assigned Task Order</h2>
+            <p class="text-muted">Tasks run from top to bottom in the order shown here.</p>
             <table class="table">
                 <thead>
-                  <tr>
-                    <th scope="col">Task Name</th>
-                    <th scope="col">Type</th>
-                    <th scope="col">Control</th>
-                  </tr>
+                    <tr>
+                        <th scope="col">#</th>
+                        <th scope="col">Task Name</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Control</th>
+                    </tr>
                 </thead>
                 <tbody>
-                    {% for task_group_task in task_group_tasks %}
-                        {% for task in tasks %}
-                            {% if task_group_task == task.id %}
-                                <tr>
-                                    <td>{{ task.name }}</td>
-                                    <td>{{ task.hc_attackmode}}</td>
-                                    <td>
-                                        <form action="{{ url_for('task_groups.task_groups_assigned_tasks_promote_task', task_group_id=task_group.id, task_id=task.id) }}" method="POST" class="d-inline">
-                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                            <button type="submit" class="fa fa-arrow-up btn btn-success btn-sm" title="Move Up" aria-label="Move task {{ task.name }} up in task group {{ task_group.name }}"></button>
-                                        </form>
-                                        <form action="{{ url_for('task_groups.task_groups_assigned_tasks_demote_task', task_group_id=task_group.id, task_id=task.id) }}" method="POST" class="d-inline">
-                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                            <button type="submit" class="fa fa-arrow-down btn btn-success btn-sm" title="Move Down" aria-label="Move task {{ task.name }} down in task group {{ task_group.name }}"></button>
-                                        </form>
-                                        <form action="{{ url_for('task_groups.task_groups_assigned_tasks_remove_task', task_group_id=task_group.id, task_id=task.id) }}" method="POST" class="d-inline">
-                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                            <button type="submit" class="fa fa-trash btn btn-danger btn-sm" title="Delete" aria-label="Remove task {{ task.name }} from task group {{ task_group.name }}"></button>
-                                        </form>
-                                    </td>
-                                </tr>
-                            {% endif %}
-                        {% endfor %}
+                    {% for task in assigned_tasks %}
+                    <tr>
+                        <td>{{ loop.index }}</td>
+                        <td>{{ task.name }}</td>
+                        <td>{{ 'Dictionary' if task.hc_attackmode == 'dictionary' else 'Maskmode' }}</td>
+                        <td>
+                            <form action="{{ url_for('task_groups.task_groups_assigned_tasks_promote_task', task_group_id=task_group.id, task_id=task.id) }}" method="POST" class="d-inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="fa fa-arrow-up btn btn-success btn-sm" title="Move Up" aria-label="Move task {{ task.name }} up in task group {{ task_group.name }}"></button>
+                            </form>
+                            <form action="{{ url_for('task_groups.task_groups_assigned_tasks_demote_task', task_group_id=task_group.id, task_id=task.id) }}" method="POST" class="d-inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="fa fa-arrow-down btn btn-success btn-sm" title="Move Down" aria-label="Move task {{ task.name }} down in task group {{ task_group.name }}"></button>
+                            </form>
+                            <form action="{{ url_for('task_groups.task_groups_assigned_tasks_remove_task', task_group_id=task_group.id, task_id=task.id) }}" method="POST" class="d-inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="fa fa-trash btn btn-danger btn-sm" title="Delete" aria-label="Remove task {{ task.name }} from task group {{ task_group.name }}"></button>
+                            </form>
+                        </td>
+                    </tr>
                     {% endfor %}
+                    {% if not assigned_tasks %}
+                    <tr>
+                        <td colspan="4" class="text-muted">No tasks assigned yet.</td>
+                    </tr>
+                    {% endif %}
                 </tbody>
-                </table>
-                <div class="dropdown">
-                        <button class="btn btn-primary dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                        Add Task
-                        </button>
-                        <div class="dropdown-menu hc-scroll-dropdown" aria-labelledby="dropdownMenuButton">
-                            {% for task in tasks %}
-                                <form action="{{ url_for('task_groups.task_groups_assigned_tasks_add_task', task_group_id=task_group.id, task_id=task.id) }}" method="POST" class="m-0">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                    <button type="submit" class="dropdown-item btn btn-link text-left">{{ task.name }}</button>
-                                </form>
-                            {% endfor %}
-                        </div>
-                </div>
-              <div class="hc-form-actions">
-                  <div class="hc-form-actions-right">
-                      <a class="btn btn-primary" href="{{url_for('task_groups.task_groups_list')}}" role="button">Done</a>
-                  </div>
-              </div>
+            </table>
         </div>
-    </article>
+
+        <div>
+            <div class="card hc-option-card">
+                <div class="card-body">
+                    <div class="d-flex align-items-start justify-content-between flex-wrap">
+                        <div>
+                            <h2 class="h4 mb-1">Add Existing Task</h2>
+                            <p class="text-muted mb-0">Filter the shared task library and add tasks to this group in the order you need.</p>
+                        </div>
+                        <a
+                            class="btn btn-outline-primary btn-sm"
+                            href="{{ url_for('tasks.tasks_add', next=url_for('task_groups.task_groups_assigned_tasks', task_group_id=task_group.id)) }}"
+                            role="button"
+                        >
+                            Add New Task
+                        </a>
+                    </div>
+
+                    {% if available_tasks %}
+                    <div class="form-group mt-3 mb-2">
+                        <label class="form-control-label" for="task-group-task-filter">Filter Shared Tasks</label>
+                        <input
+                            type="search"
+                            class="form-control"
+                            id="task-group-task-filter"
+                            placeholder="Search by task name or type"
+                            data-filter-input="#task-group-available-tasks [data-filter-item]"
+                            data-filter-empty-target="task-group-task-filter-empty"
+                        >
+                    </div>
+                    <div class="list-group hc-picker-list" id="task-group-available-tasks">
+                        {% for task in available_tasks %}
+                        <div class="list-group-item d-flex align-items-center justify-content-between flex-wrap" data-filter-item data-filter-text="{{ (task.name ~ ' ' ~ task.hc_attackmode)|lower }}">
+                            <div class="mr-3">
+                                <div class="font-weight-bold">{{ task.name }}</div>
+                                <small class="text-muted">{{ 'Dictionary' if task.hc_attackmode == 'dictionary' else 'Maskmode' }}</small>
+                            </div>
+                            <form action="{{ url_for('task_groups.task_groups_assigned_tasks_add_task', task_group_id=task_group.id, task_id=task.id) }}" method="POST" class="m-0">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="btn btn-sm btn-primary">Add</button>
+                            </form>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    <p class="text-muted mt-2 mb-0 hc-hidden" id="task-group-task-filter-empty">No shared tasks match this filter.</p>
+                    {% else %}
+                    <p class="text-muted mt-3 mb-0">Every shared task is already assigned to this group.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="hc-form-actions">
+        <a class="btn btn-secondary" href="{{ url_for('task_groups.task_groups_list') }}" role="button">Done</a>
+    </div>
+</div>
 {% endblock content %}

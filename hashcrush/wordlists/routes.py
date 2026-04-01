@@ -85,6 +85,21 @@ def _derive_wordlist_name(form_name: str | None, uploaded_filename: str | None) 
     return os.path.splitext(filename)[0]
 
 
+def _wordlist_detail_context(wordlist: Wordlists) -> dict[str, object]:
+    associated_tasks = db.session.execute(
+        select(Tasks)
+        .where(Tasks.wl_id == wordlist.id)
+        .order_by(Tasks.name.asc())
+    ).scalars().all()
+    return {
+        'associated_tasks': associated_tasks,
+        'delete_blockers': {
+            'tasks': len(associated_tasks),
+            'is_dynamic': wordlist.type == 'dynamic',
+        },
+    }
+
+
 @wordlists.route("/wordlists", methods=['GET'])
 @login_required
 def wordlists_list():
@@ -93,17 +108,24 @@ def wordlists_list():
     wordlists = db.session.execute(
         select(Wordlists).order_by(Wordlists.type.asc(), Wordlists.name.asc())
     ).scalars().all()
-    tasks = db.session.execute(select(Tasks)).scalars().all()
-    task_names_by_wordlist_id: dict[int, list[str]] = {}
-    for task in tasks:
-        if task.wl_id is None:
-            continue
-        task_names_by_wordlist_id.setdefault(task.wl_id, []).append(task.name)
     return render_template(
         'wordlists.html',
         title='Wordlists',
         wordlists=wordlists,
-        task_names_by_wordlist_id=task_names_by_wordlist_id,
+    )
+
+
+@wordlists.route("/wordlists/<int:wordlist_id>", methods=['GET'])
+@login_required
+def wordlists_detail(wordlist_id):
+    """Show usage and management details for a shared wordlist."""
+
+    wordlist = db.get_or_404(Wordlists, wordlist_id)
+    return render_template(
+        'wordlists_detail.html',
+        title=f'Wordlist: {wordlist.name}',
+        wordlist=wordlist,
+        **_wordlist_detail_context(wordlist),
     )
 
 
@@ -223,16 +245,17 @@ def wordlists_delete(wordlist_id):
     """Function to delete wordlist record"""
 
     wordlist = db.get_or_404(Wordlists, wordlist_id)
+    next_url = safe_relative_url(request.form.get('next'))
     # prevent deletion of dynamic list
     if wordlist.type == 'dynamic':
         flash('Dynamic Wordlists can not be deleted.', 'danger')
-        return redirect(url_for('wordlists.wordlists_list'))
+        return redirect(next_url or url_for('wordlists.wordlists_list'))
 
     # Check if associated with a Task
     task = db.session.scalar(select(Tasks).filter_by(wl_id=wordlist_id))
     if task:
         flash('Failed. Wordlist is associated to one or more tasks', 'danger')
-        return redirect(url_for('wordlists.wordlists_list'))
+        return redirect(next_url or url_for('wordlists.wordlists_list'))
 
     deleted_wordlist_name = wordlist.name
     deleted_wordlist_path = wordlist.path
@@ -242,7 +265,7 @@ def wordlists_delete(wordlist_id):
     except IntegrityError:
         db.session.rollback()
         flash('Failed. Wordlist is associated to one or more tasks or changed concurrently.', 'danger')
-        return redirect(url_for('wordlists.wordlists_list'))
+        return redirect(next_url or url_for('wordlists.wordlists_list'))
     _remove_managed_wordlist_file(deleted_wordlist_path)
     record_audit_event(
         'wordlist.delete',
@@ -255,4 +278,4 @@ def wordlists_delete(wordlist_id):
         },
     )
     flash('Wordlist has been deleted!', 'success')
-    return redirect(url_for('wordlists.wordlists_list'))
+    return redirect(next_url or url_for('wordlists.wordlists_list'))

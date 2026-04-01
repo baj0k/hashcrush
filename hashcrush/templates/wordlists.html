@@ -13,10 +13,10 @@
 </div>
 {% endblock header %}
 {% block content %}
-    <article class="media content-section">
-        <div class="media-body">
-            <table class="table">
-                <thead>
+<article class="media content-section">
+    <div class="media-body">
+        <table class="table">
+            <thead>
                 <tr>
                     <th scope="col">Name</th>
                     <th scope="col">Type</th>
@@ -24,91 +24,50 @@
                     <th scope="col">Last Updated</th>
                     <th scope="col">Control</th>
                 </tr>
-                </thead>
-                <tbody>
-                    {% for wordlist in wordlists %}
-                        <tr>
-                            <td>{{ wordlist.name }}</td>
-                            <td>
-                                {% if wordlist.type == 'dynamic' %}
-                                    <span class="badge badge-info">dynamic</span>
-                                {% else %}
-                                    <span class="badge badge-secondary">static</span>
-                                {% endif %}
-                            </td>
-                            <td>{{ wordlist.size }}</td>
-                            <td>
-                                {{ wordlist.last_updated }}
-                            </td>
-                            <td>
-                                <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{wordlist.id}}" title="Info" aria-label="View wordlist details for {{ wordlist.name }}"></button>
-                                {% if current_user.admin and wordlist.type == 'static' %}
-                                <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{wordlist.id}}" title="Delete" aria-label="Delete wordlist {{ wordlist.name }}"></button>
-                                {% endif %}
-                            </td>
-                        </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </article>
-    {% for wordlist in wordlists %}
-    <!-- Info Modal -->
-    <div class="modal fade" id="infoModal{{wordlist.id}}" tabindex="-1" aria-labelledby="infoModal{{wordlist.id}}Label" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-header">
-            <h5 class="modal-title" id="infoModal{{wordlist.id}}Label">Details: {{wordlist.name}}</h5>
-            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                <span aria-hidden="true">&times;</span>
-            </button>
-            </div>
-            <div class="modal-body">
-                {% if wordlist.type == 'dynamic' %}
-                <p class="mb-3">This dynamic wordlist is rebuilt automatically from all recovered plaintexts.</p>
+            </thead>
+            <tbody>
+                {% for wordlist in wordlists %}
+                <tr>
+                    <td>{{ wordlist.name }}</td>
+                    <td>
+                        {% if wordlist.type == 'dynamic' %}
+                        <span class="badge badge-info">dynamic</span>
+                        {% else %}
+                        <span class="badge badge-secondary">static</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ wordlist.size }}</td>
+                    <td>{{ wordlist.last_updated }}</td>
+                    <td>
+                        <a
+                            class="fa fa-info btn btn-info"
+                            href="{{ url_for('wordlists.wordlists_detail', wordlist_id=wordlist.id) }}"
+                            role="button"
+                            title="Info"
+                            aria-label="View wordlist details for {{ wordlist.name }}"
+                        ></a>
+                        {% if current_user.admin and wordlist.type == 'static' %}
+                        <form
+                            action="{{ url_for('wordlists.wordlists_delete', wordlist_id=wordlist.id) }}"
+                            method="POST"
+                            class="d-inline"
+                            data-confirm="Delete shared wordlist {{ wordlist.name }}?"
+                        >
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="next" value="{{ url_for('wordlists.wordlists_list') }}">
+                            <button type="submit" class="fa fa-trash btn btn-danger" title="Delete" aria-label="Delete wordlist {{ wordlist.name }}"></button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                {% if not wordlists %}
+                <tr>
+                    <td colspan="5" class="text-muted">No shared wordlists are available yet.</td>
+                </tr>
                 {% endif %}
-                <p class="mb-2">The following tasks are using this wordlist.</p>
-                <div class="hc-line-list">
-                    {% for task_name in task_names_by_wordlist_id.get(wordlist.id, []) %}
-                    <span>{{ task_name }}</span>
-                    {% else %}
-                    <i>none</i>
-                    {% endfor %}
-                </div>
-            </div>
-            <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
-            </div>
-        </div>
-        </div>
+            </tbody>
+        </table>
     </div>
-    {% endfor %}
-    {% if current_user.admin %}
-        {% for wordlist in wordlists %}
-        <!-- DeleteModal -->
-        <div class="modal fade" id="deleteModal{{wordlist.id}}" tabindex="-1" aria-labelledby="deleteModal{{wordlist.id}}Label" aria-hidden="true">
-            <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header">
-                <h5 class="modal-title" id="deleteModal{{wordlist.id}}Label">Delete {{wordlist.name}}?</h5>
-                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                    <span aria-hidden="true">&times;</span>
-                </button>
-                </div>
-                <div class="modal-body">
-                This will permanently delete the wordlist. Are you sure you want to continue?
-                </div>
-                <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
-                <form action="{{ url_for('wordlists.wordlists_delete', wordlist_id=wordlist.id) }}" method="POST">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <input class="btn btn-danger" type="submit" value="Delete">
-                    </form>
-                </div>
-            </div>
-            </div>
-        </div>
-        {% endfor %}
-    {% endif %}
+</article>
 {% endblock content %}
-

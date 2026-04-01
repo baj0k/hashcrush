@@ -1,10 +1,13 @@
 """Flask routes to handle Jobs"""
 
 import json
+import os
 
 from flask import (
     Blueprint,
+    current_app,
     flash,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -14,9 +17,10 @@ from flask_login import current_user, login_required
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
-from hashcrush.audit import record_audit_event
+from hashcrush.audit import capture_audit_actor, record_audit_event
 from hashcrush.domains.service import resolve_or_create_shared_domain
 from hashcrush.hashfiles.service import create_hashfile_from_form
+from hashcrush.hashfiles.validation import normalize_hashfile_file_type
 from hashcrush.jobs.access import (
     _can_manage_job,
     _can_view_job,
@@ -54,9 +58,24 @@ from hashcrush.models import (
     Tasks,
     db,
 )
-from hashcrush.view_utils import LIST_PAGE_SIZE, parse_page_arg
+from hashcrush.utils.file_ops import save_file
+from hashcrush.utils.storage_paths import get_runtime_subdir
+from hashcrush.view_utils import LIST_PAGE_SIZE, parse_page_arg, safe_relative_url
 
 jobs = Blueprint('jobs', __name__)
+
+
+def _is_async_upload_request() -> bool:
+    return request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+
+
+def _async_operation_response(operation):
+    payload = operation.to_response_dict()
+    payload['status_url'] = url_for(
+        'uploads.upload_operation_status',
+        operation_id=operation.id,
+    )
+    return jsonify(payload), 202
 
 @jobs.route("/jobs", methods=['GET', 'POST'])
 @login_required
@@ -231,6 +250,47 @@ def jobs_assigned_hashfile(job_id):
         return redirect(url_for('jobs.jobs_list'))
 
     if jobs_new_hashfile_form.validate_on_submit():
+        if _is_async_upload_request() and jobs_new_hashfile_form.hashfile.data:
+            normalized_file_type = normalize_hashfile_file_type(
+                jobs_new_hashfile_form.file_type.data
+            )
+            hash_type = (
+                jobs_new_hashfile_form.pwdump_hash_type.data
+                if normalized_file_type == 'pwdump'
+                else jobs_new_hashfile_form.netntlm_hash_type.data
+                if normalized_file_type == 'NetNTLM'
+                else jobs_new_hashfile_form.kerberos_hash_type.data
+                if normalized_file_type == 'kerberos'
+                else jobs_new_hashfile_form.shadow_hash_type.data
+                if normalized_file_type == 'shadow'
+                else jobs_new_hashfile_form.hash_type.data
+            )
+            runtime_tmp_dir = get_runtime_subdir('tmp')
+            os.makedirs(runtime_tmp_dir, exist_ok=True)
+            staged_hashfile_path = save_file(
+                runtime_tmp_dir,
+                jobs_new_hashfile_form.hashfile.data,
+            )
+            operation = current_app.extensions['upload_operations'].start_operation(
+                owner_user_id=getattr(current_user, 'id', None),
+                operation_type='job_hashfile_upload',
+                redirect_url=url_for('jobs.jobs_builder', job_id=job.id, tab='tasks'),
+                payload={
+                    'staged_hashfile_path': staged_hashfile_path,
+                    'hashfile_name': (
+                        jobs_new_hashfile_form.name.data
+                        or jobs_new_hashfile_form.hashfile.data.filename
+                        or 'uploaded-hashfile.txt'
+                    ),
+                    'job_id': job.id,
+                    'domain_id': job.domain_id,
+                    'file_type': normalized_file_type or jobs_new_hashfile_form.file_type.data,
+                    'hash_type': hash_type or '',
+                    'audit_actor': capture_audit_actor(),
+                },
+            )
+            return _async_operation_response(operation)
+
         creation_result, error_message = create_hashfile_from_form(
             jobs_new_hashfile_form,
             domain_id=job.domain_id,
@@ -544,14 +604,22 @@ def jobs_delete(job_id):
     """Function to delete job"""
 
     job = db.get_or_404(Jobs, job_id)
+    next_url = safe_relative_url(request.form.get('next'))
     if _can_manage_job(job):
+        if job.status in ('Running', 'Queued', 'Paused'):
+            flash('Stop or pause active work before deleting this job.', 'danger')
+            return redirect(next_url or url_for('jobs.jobs_summary', job_id=job.id))
+        confirm_name = request.form.get('confirm_name')
+        if confirm_name is not None and confirm_name.strip() != job.name:
+            flash('Type the job name exactly to confirm deletion.', 'danger')
+            return redirect(next_url or url_for('jobs.jobs_summary', job_id=job.id))
         audit_details = delete_job_with_tasks(job)
         try:
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
             flash('Job could not be deleted because it changed concurrently. Refresh and retry.', 'danger')
-            return redirect(url_for('jobs.jobs_list'))
+            return redirect(next_url or url_for('jobs.jobs_list'))
         record_audit_event(
             'job.delete',
             'job',
@@ -564,10 +632,10 @@ def jobs_delete(job_id):
             },
         )
         flash('Job has been deleted!', 'success')
-        return redirect(url_for('jobs.jobs_list'))
+        return redirect(next_url or url_for('jobs.jobs_list'))
 
     flash('You do not have rights to delete this job!', 'danger')
-    return redirect(url_for('jobs.jobs_list'))
+    return redirect(next_url or url_for('jobs.jobs_list'))
 
 @jobs.route("/jobs/<int:job_id>/summary", methods=['GET', 'POST'])
 @login_required

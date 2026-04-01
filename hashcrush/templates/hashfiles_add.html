@@ -2,7 +2,7 @@
 {% block header %}
 <div class="hc-page-header">
     <h1>Create Shared Hashfile</h1>
-    <p class="hc-page-intro">Create a shared hashfile outside the job flow. The hashfile will be available to jobs in the selected domain.</p>
+    <p class="hc-page-intro">Register a shared hashfile outside the job flow so it can be reused by jobs in the selected domain.</p>
 </div>
 {% endblock header %}
 {% block content %}
@@ -76,56 +76,57 @@
                 {{ hashfilesForm.hash_type.label(class="form-control-label") }}
                 {{ hashfilesForm.hash_type(class="form-control form-control-lg", data_toggle_target="hashfile_div", data_toggle_nonempty="true") }}
             </div>
-            <div class="form-group hc-hidden hc-section-gap" id="hashfile_div">
-                <label class="form-control-label" for="hash_type">Hash File Content</label>
-                <ul class="nav nav-pills mb-3" id="pills-tab" role="tablist">
-                    <li class="nav-item" role="presentation">
-                        <a class="nav-link active" id="pills-home-tab" data-toggle="pill" href="#pills-home" role="tab" aria-controls="pills-home" aria-selected="true">Individual Hashes</a>
-                    </li>
-                    <li class="nav-item" role="presentation">
-                        <a class="nav-link" id="pills-profile-tab" data-toggle="pill" href="#pills-profile" role="tab" aria-controls="pills-profile" aria-selected="false">File Upload</a>
-                    </li>
-                </ul>
-                <div class="tab-content" id="pills-tabContent">
-                    <div class="tab-pane fade show active" id="pills-home" role="tabpanel" aria-labelledby="pills-home-tab">
-                        <div class="form-group">
-                            {{ hashfilesForm.name.label(class="form-control-label") }}
-                            {% if hashfilesForm.name.errors %}
-                                {{ hashfilesForm.name(class="form-control form-control-lg is-invalid") }}
-                                <div class="invalid-feedback">
-                                    {% for error in hashfilesForm.name.errors %}
+
+            <div class="card hc-option-card hc-hidden hc-section-gap" id="hashfile_div">
+                <div class="card-body">
+                    <h2 class="h4">Upload Hashfile</h2>
+                    <p class="text-muted">
+                        File upload is the fastest path for large imports. Background processing will stay visible in the banner at the top of the app while you keep browsing.
+                    </p>
+                    <div class="form-group">
+                        {{ hashfilesForm.name.label(class="form-control-label") }}
+                        {% if hashfilesForm.name.errors %}
+                            {{ hashfilesForm.name(class="form-control form-control-lg is-invalid") }}
+                            <div class="invalid-feedback">
+                                {% for error in hashfilesForm.name.errors %}
                                     <span>{{ error }}</span>
                                 {% endfor %}
-                                </div>
-                            {% else %}
-                                {{ hashfilesForm.name(class="form-control form-control-lg") }}
-                            {% endif %}
-                        </div>
-                        <div class="form-group">
-                            {{ hashfilesForm.hashfilehashes.label(class="form-control-label") }}
-                            {% if hashfilesForm.hashfilehashes.errors %}
-                                {{ hashfilesForm.hashfilehashes(class="form-control form-control-lg is-invalid") }}
-                                <div class="invalid-feedback">
-                                    {% for error in hashfilesForm.hashfilehashes.errors %}
-                                    <span>{{ error }}</span>
-                                {% endfor %}
-                                </div>
-                            {% else %}
-                                {{ hashfilesForm.hashfilehashes(class="form-control form-control-lg") }}
-                            {% endif %}
-                        </div>
+                            </div>
+                        {% else %}
+                            {{ hashfilesForm.name(class="form-control form-control-lg") }}
+                        {% endif %}
+                        <small class="form-text text-muted">
+                            Leave this blank to reuse the uploaded filename automatically.
+                        </small>
                     </div>
-                    <div class="tab-pane fade" id="pills-profile" role="tabpanel" aria-labelledby="pills-profile-tab">
-                        <div class="form-group">
-                            {{ hashfilesForm.hashfile.label() }}
-                            {{ hashfilesForm.hashfile(class="hc-file-input hc-file-input--wide") }}
-                            {% if hashfilesForm.hashfile.errors %}
-                                {% for error in hashfilesForm.hashfile.errors %}
-                                    <span class="text-danger d-block">{{ error }}</span>
-                                {% endfor %}
-                            {% endif %}
-                        </div>
+                    <div class="form-group mb-0">
+                        {{ hashfilesForm.hashfile.label(class="form-control-label") }}
+                        {{ hashfilesForm.hashfile(class="hc-file-input hc-file-input--wide") }}
+                        {% if hashfilesForm.hashfile.errors %}
+                            {% for error in hashfilesForm.hashfile.errors %}
+                                <span class="text-danger d-block">{{ error }}</span>
+                            {% endfor %}
+                        {% endif %}
                     </div>
+
+                    <details class="hc-inline-details"{% if hashfilesForm.hashfilehashes.data or hashfilesForm.hashfilehashes.errors %} open{% endif %}>
+                        <summary>Paste hashes manually instead</summary>
+                        <div class="mt-3">
+                            <div class="form-group mb-0">
+                                {{ hashfilesForm.hashfilehashes.label(class="form-control-label") }}
+                                {% if hashfilesForm.hashfilehashes.errors %}
+                                    {{ hashfilesForm.hashfilehashes(class="form-control form-control-lg is-invalid") }}
+                                    <div class="invalid-feedback">
+                                        {% for error in hashfilesForm.hashfilehashes.errors %}
+                                            <span>{{ error }}</span>
+                                        {% endfor %}
+                                    </div>
+                                {% else %}
+                                    {{ hashfilesForm.hashfilehashes(class="form-control form-control-lg") }}
+                                {% endif %}
+                            </div>
+                        </div>
+                    </details>
                 </div>
             </div>
         </fieldset>
@@ -137,7 +138,7 @@
             <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
                 <div class="progress-bar" data-upload-progress-bar style="width: 0%" aria-valuenow="0">0%</div>
             </div>
-            <small class="text-muted d-block mt-2">Large file uploads continue processing after the browser finishes sending the file.</small>
+            <small class="text-muted d-block mt-2">Large file uploads continue processing after the browser finishes sending the file and remain visible in the global background-processing banner.</small>
         </div>
         <div class="hc-form-actions">
             <a class="btn btn-secondary" href="{{ url_for('hashfiles.hashfiles_list') }}">Back</a>

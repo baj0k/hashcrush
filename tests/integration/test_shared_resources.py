@@ -205,6 +205,65 @@ def test_wordlists_add_form_includes_upload_progress_status_panel():
 
 
 @pytest.mark.security
+def test_hashfiles_add_form_uses_upload_first_flow():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get("/hashfiles/add")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Upload Hashfile" in html
+        assert "Paste hashes manually instead" in html
+        assert "Individual Hashes" not in html
+        assert "File Upload" not in html
+
+
+@pytest.mark.security
+def test_wordlist_detail_page_shows_usage_and_dynamic_delete_notice():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        wordlist = Wordlists(
+            name="dynamic-wordlist",
+            type="dynamic",
+            path="/tmp/dynamic-wordlist.txt",
+            size=12,
+            checksum="6" * 64,
+        )
+        task = Tasks(
+            name="dynamic-wordlist-task",
+            hc_attackmode="dictionary",
+            wl_id=None,
+            rule_id=None,
+            hc_mask=None,
+        )
+        db.session.add_all([wordlist, task])
+        db.session.commit()
+        task.wl_id = wordlist.id
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get(f"/wordlists/{wordlist.id}")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Wordlist: dynamic-wordlist" in html
+        assert "This dynamic wordlist is rebuilt automatically" in html
+        assert f"/tasks/{task.id}" in html
+        assert "cannot be deleted from the UI" in html
+
+
+@pytest.mark.security
 def test_rules_add_uploads_rule_to_managed_runtime(tmp_path):
     app = _build_app(
         {
@@ -277,6 +336,43 @@ def test_rules_add_supports_async_processing_progress(tmp_path):
         assert entry is not None
         assert entry.event_type == "rule.create"
         assert entry.actor_username == "admin"
+
+
+@pytest.mark.security
+def test_rule_detail_page_shows_associated_tasks():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        rule = Rules(
+            name="detail-rule",
+            path="/tmp/detail.rule",
+            size=2,
+            checksum="8" * 64,
+        )
+        task = Tasks(
+            name="detail-rule-task",
+            hc_attackmode="dictionary",
+            wl_id=None,
+            rule_id=None,
+            hc_mask=None,
+        )
+        db.session.add_all([rule, task])
+        db.session.commit()
+        task.rule_id = rule.id
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get(f"/rules/{rule.id}")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Rule: detail-rule" in html
+        assert f"/tasks/{task.id}" in html
+        assert "detail-rule-task" in html
 
 
 @pytest.mark.security
@@ -390,6 +486,100 @@ def test_task_group_export_includes_shared_items():
         assert "other-mask" in exported_task_names
         assert "owner-group" in exported_group_names
         assert "other-group" in exported_group_names
+
+
+@pytest.mark.security
+def test_task_group_assignment_page_shows_searchable_available_task_picker():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        assigned_task = Tasks(
+            name="assigned-task",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a?a",
+        )
+        available_task = Tasks(
+            name="available-task",
+            hc_attackmode="dictionary",
+            wl_id=None,
+            rule_id=None,
+            hc_mask=None,
+        )
+        db.session.add_all([assigned_task, available_task])
+        db.session.commit()
+
+        task_group = TaskGroups(
+            name="searchable-group",
+            tasks=json.dumps([assigned_task.id]),
+        )
+        db.session.add(task_group)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get(f"/task_groups/assigned_tasks/{task_group.id}")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Assigned Task Order" in html
+        assert "Filter Shared Tasks" in html
+        assert 'data-filter-input="#task-group-available-tasks [data-filter-item]"' in html
+        assert re.search(
+            rf'href="/tasks/add\?next=(?:%2F|/)task_groups(?:%2F|/)assigned_tasks(?:%2F|/){task_group.id}"',
+            html,
+        )
+        assert 'data-filter-text="available-task dictionary"' in html
+        assert 'data-filter-text="assigned-task maskmode"' not in html
+
+
+@pytest.mark.security
+def test_task_group_detail_page_preserves_assigned_task_order():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        first_task = Tasks(
+            name="first-task",
+            hc_attackmode="maskmode",
+            wl_id=None,
+            rule_id=None,
+            hc_mask="?a?a",
+        )
+        second_task = Tasks(
+            name="second-task",
+            hc_attackmode="dictionary",
+            wl_id=None,
+            rule_id=None,
+            hc_mask=None,
+        )
+        db.session.add_all([first_task, second_task])
+        db.session.commit()
+
+        task_group = TaskGroups(
+            name="ordered-group",
+            tasks=json.dumps([second_task.id, first_task.id]),
+        )
+        db.session.add(task_group)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get(f"/task_groups/{task_group.id}")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        second_position = html.index("second-task")
+        first_position = html.index("first-task")
+        assert second_position < first_position
+        assert f"/tasks/{second_task.id}" in html
+        assert f"/tasks/{first_task.id}" in html
 
 @pytest.mark.security
 def test_task_group_export_requires_admin():
@@ -1015,12 +1205,10 @@ def test_tasks_list_modal_does_not_match_task_group_membership_by_substring():
         client = app.test_client()
         _login_client_as_user(client, admin)
 
-        response = client.get("/tasks")
+        response = client.get(f"/tasks/{task_one.id}")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
-        task_one_modal_start = html.index(f'id="infoModal{task_one.id}"')
-        task_two_modal_start = html.index(f'id="infoModal{task_two.id}"')
-        task_one_modal = html[task_one_modal_start:task_two_modal_start]
-
-        assert "substring-group" not in task_one_modal
+        assert "Task: modal-task-1" in html
+        assert "substring-group" not in html
+        assert "modal-task-11" not in html

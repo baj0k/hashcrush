@@ -1,0 +1,103 @@
+{% extends "layout.html" %}
+{% block header %}
+<div class="hc-page-header">
+    <h1>Task: {{ task.name }}</h1>
+    <p class="hc-page-intro">Review the task configuration, current dependencies, and whether it can be safely changed or removed.</p>
+    <div class="hc-page-actions">
+        <a class="btn btn-secondary btn-sm" href="{{ url_for('tasks.tasks_list') }}">Back to Tasks</a>
+        {% if current_user.admin %}
+        <a class="btn btn-warning btn-sm" href="{{ url_for('tasks.task_edit', task_id=task.id, next=url_for('tasks.task_detail', task_id=task.id)) }}">Edit Task</a>
+        {% endif %}
+    </div>
+</div>
+{% endblock header %}
+{% block content %}
+<div class="content-section">
+    <table class="table">
+        <tbody>
+            <tr>
+                <th scope="row">Attack Mode</th>
+                <td>{{ 'Dictionary' if task.hc_attackmode == 'dictionary' else 'Maskmode' }}</td>
+            </tr>
+            {% if task.hc_attackmode == 'dictionary' %}
+            <tr>
+                <th scope="row">Wordlist</th>
+                <td>{{ associated_wordlist.name if associated_wordlist else 'Missing' }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Rule</th>
+                <td>{{ associated_rule.name if associated_rule else 'None' }}</td>
+            </tr>
+            {% else %}
+            <tr>
+                <th scope="row">Mask</th>
+                <td><code>{{ task.hc_mask }}</code></td>
+            </tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+
+<div class="content-section">
+    <h2 class="h4">Usage</h2>
+    <table class="table">
+        <tbody>
+            <tr>
+                <th scope="row">Associated Jobs</th>
+                <td>
+                    <div class="hc-line-list">
+                        {% for job in associated_jobs %}
+                        <span>{{ job.name }}</span>
+                        {% else %}
+                        <i>none</i>
+                        {% endfor %}
+                    </div>
+                </td>
+            </tr>
+            <tr>
+                <th scope="row">Associated Task Groups</th>
+                <td>
+                    <div class="hc-line-list">
+                        {% for task_group in associated_task_groups %}
+                        <span>{{ task_group.name }}</span>
+                        {% else %}
+                        <i>none</i>
+                        {% endfor %}
+                    </div>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+{% if current_user.admin %}
+<div class="content-section">
+    <h2 class="h4">Admin Actions</h2>
+    {% if delete_blockers.jobs or delete_blockers.task_groups %}
+    <p class="text-muted mb-3">This task cannot be deleted until its current dependencies are removed.</p>
+    <table class="table table-sm mb-0">
+        <tbody>
+            <tr>
+                <th scope="row">Blocking Jobs</th>
+                <td>{{ delete_blockers.jobs }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Blocking Task Groups</th>
+                <td>{{ delete_blockers.task_groups }}</td>
+            </tr>
+        </tbody>
+    </table>
+    {% else %}
+    <form
+        action="{{ url_for('tasks.tasks_delete', task_id=task.id) }}"
+        method="POST"
+        data-confirm="Delete shared task {{ task.name }}?"
+    >
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ url_for('tasks.tasks_list') }}">
+        <button type="submit" class="btn btn-danger">Delete Task</button>
+    </form>
+    {% endif %}
+</div>
+{% endif %}
+{% endblock content %}

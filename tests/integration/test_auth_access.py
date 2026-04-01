@@ -588,17 +588,17 @@ def test_shared_resource_pages_hide_private_incomplete_job_names_from_other_user
         client = app.test_client()
         _login_client_as_user(client, viewer)
 
-        tasks_html = client.get("/tasks").get_data(as_text=True)
-        domains_html = client.get("/domains").get_data(as_text=True)
-        hashfiles_html = client.get("/hashfiles").get_data(as_text=True)
+        task_detail_html = client.get(f"/tasks/{task.id}").get_data(as_text=True)
+        domain_detail_html = client.get(f"/domains/{domain.id}").get_data(as_text=True)
+        hashfile_detail_html = client.get(f"/hashfiles/{hashfile.id}").get_data(as_text=True)
 
-        assert "public-ready-job" in tasks_html
-        assert "public-ready-job" in domains_html
-        assert "public-ready-job" in hashfiles_html
+        assert "public-ready-job" in task_detail_html
+        assert "public-ready-job" in domain_detail_html
+        assert "public-ready-job" in hashfile_detail_html
 
-        assert "private-incomplete-job" not in tasks_html
-        assert "private-incomplete-job" not in domains_html
-        assert "private-incomplete-job" not in hashfiles_html
+        assert "private-incomplete-job" not in task_detail_html
+        assert "private-incomplete-job" not in domain_detail_html
+        assert "private-incomplete-job" not in hashfile_detail_html
 
 @pytest.mark.security
 def test_hashfiles_page_hides_download_controls_for_non_admin():
@@ -677,6 +677,65 @@ def test_users_delete_allows_deleting_other_admin_when_not_last_admin():
         assert response.status_code == 302
         assert db.session.get(Users, other_admin.id) is None
         assert _count_rows(Users, admin=True) == 1
+
+@pytest.mark.security
+def test_user_detail_page_shows_owned_jobs_and_admin_actions():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        target_user = _seed_user(
+            "detail-user", password="detail-user-password", admin=False
+        )
+        _seed_settings()
+
+        domain = Domains(name="detail-user-domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        owned_job = Jobs(
+            name="detail-user-job",
+            status="Ready",
+            domain_id=domain.id,
+            owner_id=target_user.id,
+        )
+        db.session.add(owned_job)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get(f"/users/{target_user.id}")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "User: detail-user" in html
+        assert "detail-user-job" in html
+        assert "Set Password" in html
+        assert "Deletion Status" in html
+        assert "Transfer or delete owned records first" in html
+
+@pytest.mark.security
+def test_users_delete_requires_exact_username_when_confirmation_supplied():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        target_user = _seed_user(
+            "confirm-user", password="confirm-user-password", admin=False
+        )
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            f"/users/delete/{target_user.id}",
+            data={"confirm_name": "wrong-name"},
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert b"Type the username exactly to confirm deletion." in response.data
+        assert db.session.get(Users, target_user.id) is not None
 
 @pytest.mark.security
 def test_admin_reset_blocks_self_reset_flow():

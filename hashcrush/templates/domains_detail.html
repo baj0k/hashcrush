@@ -1,0 +1,85 @@
+{% extends "layout.html" %}
+{% block header %}
+<div class="hc-page-header">
+    <h1>Domain: {{ domain.name }}</h1>
+    <p class="hc-page-intro">Review the jobs and shared hashfiles tied to this domain, then decide whether the domain can be safely removed.</p>
+    <div class="hc-page-actions">
+        <a class="btn btn-secondary btn-sm" href="{{ url_for('domains.domains_list') }}">Back to Domains</a>
+        <a class="btn btn-warning btn-sm" href="{{ url_for('analytics.get_analytics') }}?domain_id={{ domain.id }}">Analytics</a>
+    </div>
+</div>
+{% endblock header %}
+{% block content %}
+<div class="content-section">
+    <h2 class="h4">Associated Jobs</h2>
+    <div class="hc-line-list">
+        {% for job in associated_jobs %}
+        <span>{{ job.name }}</span>
+        {% else %}
+        <i>none</i>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="content-section">
+    <h2 class="h4">Associated Hashfiles</h2>
+    <div class="hc-line-list">
+        {% for hashfile in associated_hashfiles %}
+        <a href="{{ url_for('hashfiles.hashfiles_detail', hashfile_id=hashfile.id) }}">{{ hashfile.name }}</a>
+        {% else %}
+        <i>none</i>
+        {% endfor %}
+    </div>
+</div>
+
+{% if current_user.admin %}
+<div class="content-section" id="admin-actions">
+    <h2 class="h4">Admin Actions</h2>
+    <table class="table table-sm">
+        <tbody>
+            <tr>
+                <th scope="row">Active Jobs Blocking Deletion</th>
+                <td>{{ delete_impact.active_jobs }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Inactive Jobs to Delete</th>
+                <td>{{ delete_impact.inactive_jobs }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Hashfiles to Delete</th>
+                <td>{{ delete_impact.hashfiles }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Hash Associations to Remove</th>
+                <td>{{ delete_impact.hash_links }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Orphaned Uncracked Hashes to Remove</th>
+                <td>{{ delete_impact.orphan_uncracked_hashes }}</td>
+            </tr>
+        </tbody>
+    </table>
+    {% if delete_impact.active_jobs %}
+    <p class="text-muted mb-0">This domain cannot be deleted until all active jobs in the list above are finished or canceled.</p>
+    {% else %}
+    <form action="{{ url_for('domains.domains_delete', domain_id=domain.id) }}" method="POST">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ url_for('domains.domains_list') }}">
+        <div class="form-group">
+            <label class="form-control-label" for="confirm_name">Type <strong>{{ domain.name }}</strong> to confirm deletion.</label>
+            <input
+                id="confirm_name"
+                class="form-control"
+                type="text"
+                name="confirm_name"
+                placeholder="{{ domain.name }}"
+                autocomplete="off"
+                required
+            >
+        </div>
+        <button class="btn btn-danger" type="submit">Delete Domain</button>
+    </form>
+    {% endif %}
+</div>
+{% endif %}
+{% endblock content %}

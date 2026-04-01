@@ -1,0 +1,58 @@
+{% extends "layout.html" %}
+{% block header %}
+<div class="hc-page-header">
+    <h1>Task Group: {{ task_group.name }}</h1>
+    <p class="hc-page-intro">Review the ordered shared tasks in this group and manage the group without leaving the list flow.</p>
+    <div class="hc-page-actions">
+        <a class="btn btn-secondary btn-sm" href="{{ url_for('task_groups.task_groups_list') }}">Back to Task Groups</a>
+        {% if current_user.admin %}
+        <a class="btn btn-warning btn-sm" href="{{ url_for('task_groups.task_groups_assigned_tasks', task_group_id=task_group.id) }}">Edit Group</a>
+        {% endif %}
+    </div>
+</div>
+{% endblock header %}
+{% block content %}
+<div class="content-section">
+    <h2 class="h4">Ordered Tasks</h2>
+    <table class="table">
+        <thead>
+            <tr>
+                <th scope="col">#</th>
+                <th scope="col">Task Name</th>
+                <th scope="col">Type</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for task in ordered_tasks %}
+            <tr>
+                <td>{{ loop.index }}</td>
+                <td>
+                    <a href="{{ url_for('tasks.task_detail', task_id=task.id) }}">{{ task.name }}</a>
+                </td>
+                <td>{{ 'Dictionary' if task.hc_attackmode == 'dictionary' else 'Maskmode' }}</td>
+            </tr>
+            {% endfor %}
+            {% if not ordered_tasks %}
+            <tr>
+                <td colspan="3" class="text-muted">No tasks are assigned to this group yet.</td>
+            </tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+
+{% if current_user.admin %}
+<div class="content-section">
+    <h2 class="h4">Admin Actions</h2>
+    <form
+        action="{{ url_for('task_groups.task_groups_delete', task_group_id=task_group.id) }}"
+        method="POST"
+        data-confirm="Delete task group {{ task_group.name }}? Associated tasks will remain available."
+    >
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ url_for('task_groups.task_groups_list') }}">
+        <button type="submit" class="btn btn-danger">Delete Task Group</button>
+    </form>
+</div>
+{% endif %}
+{% endblock content %}

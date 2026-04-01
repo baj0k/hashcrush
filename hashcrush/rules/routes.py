@@ -85,6 +85,20 @@ def _derive_rule_name(form_name: str | None, uploaded_filename: str | None) -> s
     return os.path.splitext(filename)[0]
 
 
+def _rule_detail_context(rule: Rules) -> dict[str, object]:
+    associated_tasks = db.session.execute(
+        select(Tasks)
+        .where(Tasks.rule_id == rule.id)
+        .order_by(Tasks.name.asc())
+    ).scalars().all()
+    return {
+        'associated_tasks': associated_tasks,
+        'delete_blockers': {
+            'tasks': len(associated_tasks),
+        },
+    }
+
+
 #############################################
 # Rules
 #############################################
@@ -94,13 +108,25 @@ def _derive_rule_name(form_name: str | None, uploaded_filename: str | None) -> s
 @login_required
 def rules_list():
     """Function to return list of rules"""
-    rules = db.session.execute(select(Rules)).scalars().all()
-    tasks = db.session.execute(select(Tasks)).scalars().all()
+    rules = db.session.execute(select(Rules).order_by(Rules.name.asc())).scalars().all()
     return render_template(
         'rules.html',
         title='Rules',
         rules=rules,
-        tasks=tasks,
+    )
+
+
+@rules.route("/rules/<int:rule_id>", methods=['GET'])
+@login_required
+def rules_detail(rule_id):
+    """Show usage and management details for a shared rule file."""
+
+    rule = db.get_or_404(Rules, rule_id)
+    return render_template(
+        'rules_detail.html',
+        title=f'Rule: {rule.name}',
+        rule=rule,
+        **_rule_detail_context(rule),
     )
 
 
@@ -216,6 +242,7 @@ def rules_add():
 def rules_delete(rule_id):
     """Function to delete rule file record"""
     rule = db.get_or_404(Rules, rule_id)
+    next_url = safe_relative_url(request.form.get('next'))
     # Check if part of a task.
     task = db.session.scalar(select(Tasks).filter_by(rule_id=rule.id))
     if task:
@@ -229,7 +256,7 @@ def rules_delete(rule_id):
         except IntegrityError:
             db.session.rollback()
             flash('Rule file is currently used in a task or changed concurrently and cannot be deleted.', 'danger')
-            return redirect(url_for('rules.rules_list'))
+            return redirect(next_url or url_for('rules.rules_list'))
         _remove_managed_rule_file(deleted_rule_path)
         record_audit_event(
             'rule.delete',
@@ -242,4 +269,4 @@ def rules_delete(rule_id):
             },
         )
         flash('Rule file has been deleted!', 'success')
-    return redirect(url_for('rules.rules_list'))
+    return redirect(next_url or url_for('rules.rules_list'))

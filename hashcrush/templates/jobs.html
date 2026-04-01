@@ -192,18 +192,17 @@
                                             </form>
                                         {% endif %}
                                     {% endif %}
+                                    <a class="fa fa-eye btn btn-secondary" href="{{ url_for('jobs.jobs_summary', job_id=job.id) }}" role="button" title="View" aria-label="View job {{ job.name }}"></a>
                                     {% if job.status != 'Incomplete' %}
-                                        <a class="fa fa-eye btn btn-secondary" href="{{ url_for('jobs.jobs_summary', job_id=job.id) }}" role="button" title="View" aria-label="View job {{ job.name }}"></a>
                                         {% if can_manage_job %}
                                             <a class="fa fa-pie-chart btn btn-warning" href="{{ url_for('analytics.get_analytics') }}?domain_id={{ job.domain_id }}&hashfile_id={{ job.hashfile_id }}" role="button" title="Analytics" aria-label="View analytics for job {{ job.name }}"></a>
                                         {% endif %}
-                                        <button type="button" class="fa fa-info btn btn-info" data-toggle="modal" data-target="#infoModal{{job.id}}" title="Info" aria-label="View job details for {{ job.name }}"></button>
                                     {% endif %}
                                     {% if can_manage_job and job.status != 'Running' and job.status != 'Queued' and job.status != 'Paused' %}
                                         <a class="fa fa-edit btn btn-warning" href="{{ url_for('jobs.jobs_builder', job_id=job.id, tab='basics') }}" role="button" title="Edit" aria-label="Edit job {{ job.name }}"></a>
                                     {% endif %}
                                     {% if can_manage_job %}
-                                        <button type="button" class="fa fa-trash btn btn-danger" data-toggle="modal" data-target="#deleteModal{{job.id}}" title="Delete" aria-label="Delete job {{ job.name }}"></button>
+                                        <a class="fa fa-trash btn btn-danger" href="{{ url_for('jobs.jobs_summary', job_id=job.id) }}#admin-actions" role="button" title="Delete" aria-label="Manage deletion for job {{ job.name }}"></a>
                                     {% endif %}
                                 </td>
                             </tr>
@@ -214,93 +213,4 @@
             {{ render_pagination('jobs.jobs_list', pagination) }}
         </div>
     </article>
-    {% for job in jobs %}
-    <!-- InfoModal -->
-    <div class="modal fade" id="infoModal{{job.id}}" tabindex="-1" aria-labelledby="infoModal{{job.id}}Label" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-header">
-            <h5 class="modal-title" id="infoModal{{job.id}}Label">Details: {{job.name}}</h5>
-            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                <span aria-hidden="true">&times;</span>
-            </button>
-            </div>
-            <div class="modal-body">
-                <table class="table">
-                    <tbody>
-                        <tr>
-                            <th scope="row">Associated Tasks</th>
-                            <td>
-                                <div class="hc-line-list">
-                                    {% for task_name in task_names_by_job_id.get(job.id, []) %}
-                                    <span>{{ task_name }}</span>
-                                    {% else %}
-                                    <i>none</i>
-                                    {% endfor %}
-                                </div>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row">Creation Date</th>
-                            <td>
-                                {{job.created_at}}
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row">Started At</th>
-                            <td>
-                                {% if job.started_at %}
-                                    {{job.started_at}}
-                                {% else %}
-                                    Not started
-                                {% endif %}
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row">Ended At</th>
-                            <td>
-                                {% if job.ended_at %}
-                                    {{job.ended_at}}
-                                {% else %}
-                                    N/A
-                                {% endif %}
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-            <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
-            </div>
-        </div>
-        </div>
-    </div>
-    {% endfor %}
-    {% for job in jobs %}
-        {% if current_user.admin or job.owner_id == current_user.id %}
-        <!-- DeleteModal -->
-        <div class="modal fade" id="deleteModal{{job.id}}" tabindex="-1" aria-labelledby="deleteModal{{job.id}}Label" aria-hidden="true">
-            <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header">
-                <h5 class="modal-title" id="deleteModal{{job.id}}Label">Delete {{job.name}}?</h5>
-                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                    <span aria-hidden="true">&times;</span>
-                </button>
-                </div>
-                <div class="modal-body">
-                This will permanently delete the job. Are you sure you want to continue?
-                </div>
-                <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Back</button>
-                <form action="{{ url_for('jobs.jobs_delete', job_id=job.id) }}" method="POST">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <input class="btn btn-danger" type="submit" value="Delete">
-                </form>
-                </div>
-            </div>
-            </div>
-        </div>
-        {% endif %}
-    {% endfor %}
 {% endblock content %}
