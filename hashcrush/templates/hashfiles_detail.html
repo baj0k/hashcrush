@@ -2,12 +2,12 @@
 {% block header %}
 <div class="hc-page-header">
     <h1>Hashfile: {{ hashfile.name }}</h1>
-    <p class="hc-page-intro">Review the domain, crack progress, and job dependencies for this shared hashfile before making changes.</p>
+    <p class="hc-page-intro">Review the inferred domain scope, crack progress, and job dependencies for this shared hashfile before making changes.</p>
     <div class="hc-page-actions">
         <a class="btn btn-secondary btn-sm" href="{{ url_for('hashfiles.hashfiles_list') }}">Back to Hashfiles</a>
-        <a class="btn btn-warning btn-sm" href="{{ url_for('analytics.get_analytics') }}?domain_id={{ hashfile.domain_id }}&hashfile_id={{ hashfile.id }}">Analytics</a>
+        <a class="btn btn-warning btn-sm" href="{{ url_for('analytics.get_analytics', hashfile_id=hashfile.id, domain_id=domain_summary.domain_id) if domain_summary and domain_summary.domain_id else url_for('analytics.get_analytics', hashfile_id=hashfile.id) }}">Analytics</a>
         {% if current_user.admin %}
-        <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes') }}?type=found&domain_id={{ hashfile.domain_id }}&hashfile_id={{ hashfile.id }}">Download Found</a>
+        <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='found', hashfile_id=hashfile.id, domain_id=domain_summary.domain_id) if domain_summary and domain_summary.domain_id else url_for('analytics.analytics_download_hashes', type='found', hashfile_id=hashfile.id) }}">Download Found</a>
         {% endif %}
     </div>
 </div>
@@ -17,8 +17,14 @@
     <table class="table">
         <tbody>
             <tr>
-                <th scope="row">Domain</th>
-                <td><a href="{{ url_for('domains.domains_detail', domain_id=hashfile.domain_id) }}">{{ hashfile.domain.name }}</a></td>
+                <th scope="row">Effective Domain</th>
+                <td>
+                    {% if domain_summary and domain_summary.domain_id %}
+                    <a href="{{ url_for('domains.domains_detail', domain_id=domain_summary.domain_id) }}">{{ domain_summary.name }}</a>
+                    {% else %}
+                    {{ domain_summary.label if domain_summary else 'None' }}
+                    {% endif %}
+                </td>
             </tr>
             <tr>
                 <th scope="row">Hash Type</th>

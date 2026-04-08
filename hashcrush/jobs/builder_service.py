@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from flask import redirect, render_template, request, url_for
-from flask_login import current_user
 from sqlalchemy import func, select
 
+from hashcrush.domains.service import job_domain_summaries
 from hashcrush.jobs.access import _can_manage_job, _job_allows_task_mutation
 from hashcrush.jobs.forms import JobSummaryForm, JobsForm, JobsNewHashFileForm
 from hashcrush.jobs.queries import (
@@ -13,7 +13,6 @@ from hashcrush.jobs.queries import (
     _job_task_ordering,
     _ordered_job_task_names,
     _selected_hashfile_local_hits,
-    _visible_domains_query,
     _visible_hashfiles_for_job,
 )
 from hashcrush.models import (
@@ -69,19 +68,11 @@ def _priority_display(priority: int | None) -> str:
 
 def _build_jobs_form(*, job: Jobs | None = None, form: JobsForm | None = None) -> JobsForm:
     jobs_form = form or JobsForm()
-    domains = db.session.execute(_visible_domains_query()).scalars().all()
-    jobs_form.domain_id.choices = [("", "--SELECT--")] + [
-        (str(domain.id), domain.name) for domain in domains
-    ]
-    if current_user.admin:
-        jobs_form.domain_id.choices.append(("add_new", "Add New Domain"))
     jobs_form.current_job_id = job.id if job else None
 
     if job is not None and request.method == "GET":
         jobs_form.name.data = job.name
         jobs_form.priority.data = str(job.priority)
-        jobs_form.domain_id.data = str(job.domain_id)
-        jobs_form.domain_name.data = ""
 
     return jobs_form
 
@@ -113,8 +104,6 @@ def _job_builder_context(job: Jobs | None):
     hashfiles = _visible_hashfiles_for_job(job)
     hashfile_cracked_rate = _hashfile_rate_rows(hashfiles)
     selected_hashfile = db.session.get(Hashfiles, job.hashfile_id) if job.hashfile_id else None
-    if selected_hashfile and selected_hashfile.domain_id != job.domain_id:
-        selected_hashfile = None
     cracked_hashfiles_hashes = _selected_hashfile_local_hits(
         selected_hashfile.id if selected_hashfile else None
     )
@@ -130,7 +119,9 @@ def _job_builder_context(job: Jobs | None):
     assigned_task_ids = {job_task.task_id for job_task in job_tasks}
     available_tasks = [task for task in tasks if task.id not in assigned_task_ids]
     ordered_task_names = _ordered_job_task_names(job_tasks)
-    domain = db.session.get(Domains, job.domain_id)
+    domain_summary = job_domain_summaries([job.id]).get(job.id)
+    effective_domain_id = domain_summary.domain_id if domain_summary else None
+    domain = db.session.get(Domains, effective_domain_id) if effective_domain_id else None
 
     cracked_rate = "0/0"
     if selected_hashfile:

@@ -152,41 +152,9 @@
                                 {{ jobsForm.priority(class="form-control form-control-lg", id="priority") }}
                             {% endif %}
                         </div>
-                        <div class="form-group">
-                            {{ jobsForm.domain_id.label(class="form-control-label", for="domain_id") }}
-                            {% if jobsForm.domain_id.errors %}
-                                {{ jobsForm.domain_id(class="form-control form-control-lg is-invalid", id="domain_id", data_toggle_target="new_domain_div", data_toggle_value="add_new") }}
-                                <div class="invalid-feedback">
-                                    {% for error in jobsForm.domain_id.errors %}
-                                        <span>{{ error }}</span>
-                                    {% endfor %}
-                                </div>
-                            {% else %}
-                                {{ jobsForm.domain_id(class="form-control form-control-lg", id="domain_id", data_toggle_target="new_domain_div", data_toggle_value="add_new") }}
-                            {% endif %}
-                        </div>
-                        {% if current_user.admin %}
-                        <div class="form-group{% if jobsForm.domain_id.data != 'add_new' %} hc-hidden{% endif %}" id="new_domain_div">
-                            {{ jobsForm.domain_name.label(class="form-control-label", for="domain_name") }}
-                            {% if jobsForm.domain_name.errors %}
-                                {{ jobsForm.domain_name(class="form-control form-control-lg is-invalid", id="domain_name") }}
-                                <div class="invalid-feedback">
-                                    {% for error in jobsForm.domain_name.errors %}
-                                        <span>{{ error }}</span>
-                                    {% endfor %}
-                                </div>
-                            {% else %}
-                                {{ jobsForm.domain_name(class="form-control form-control-lg", id="domain_name") }}
-                            {% endif %}
-                            <small class="form-text text-muted">
-                                If this domain already exists, the existing shared domain will be reused.
-                            </small>
-                        </div>
-                        {% else %}
                         <small class="form-text text-muted">
-                            Need a new domain? Ask an admin to create it from the Domains page.
+                            Domains are inferred from imported usernames like <code>domain\user</code>. If a file has no domain prefix, you can provide an optional fallback domain in the Hashes tab.
                         </small>
-                        {% endif %}
                     </fieldset>
                     <div class="hc-form-actions">
                         <a class="btn btn-secondary" href="{{ url_for('jobs.jobs_list') }}" role="button" title="Cancel">Cancel</a>
@@ -217,8 +185,8 @@
                             <td>{{ selected_hashfile.name }} {{ hashfile_cracked_rate.get(selected_hashfile.id, '(0/0)') }}</td>
                         </tr>
                         <tr>
-                            <td>Domain</td>
-                            <td>{{ domain.name if domain else 'N/A' }}</td>
+                            <td>Effective Domain</td>
+                            <td>{{ domain.name if domain else 'Mixed / None' }}</td>
                         </tr>
                     </tbody>
                 </table>
@@ -234,7 +202,7 @@
                         <div class="card-body">
                             <h3 class="h5">Upload New Hashfile</h3>
                             <p class="text-muted">
-                                Upload a new shared hashfile for this domain. Large files keep processing in the background, and progress stays visible at the top of the app while you keep browsing.
+                                Upload a new shared hashfile. Domains are inferred from usernames where possible, and large files keep processing in the background while you keep browsing.
                             </p>
                             <form action="{{ url_for('jobs.jobs_assigned_hashfile', job_id=job.id) }}" method="post" enctype="multipart/form-data" data-upload-progress-form="true">
                                 {{ jobs_new_hashfile_form.hidden_tag() }}
@@ -339,6 +307,22 @@
                                             </small>
                                         </div>
                                         <div class="form-group">
+                                            {{ jobs_new_hashfile_form.domain_name.label(class="form-control-label", for="job_hashfile_domain_name") }}
+                                            {% if jobs_new_hashfile_form.domain_name.errors %}
+                                                {{ jobs_new_hashfile_form.domain_name(class="form-control form-control-lg is-invalid", id="job_hashfile_domain_name", placeholder="Optional fallback for rows without domain\\username") }}
+                                                <div class="invalid-feedback">
+                                                    {% for error in jobs_new_hashfile_form.domain_name.errors %}
+                                                        <span>{{ error }}</span>
+                                                    {% endfor %}
+                                                </div>
+                                            {% else %}
+                                                {{ jobs_new_hashfile_form.domain_name(class="form-control form-control-lg", id="job_hashfile_domain_name", placeholder="Optional fallback for rows without domain\\username") }}
+                                            {% endif %}
+                                            <small class="form-text text-muted">
+                                                Leave blank when the usernames already include a domain prefix like <code>domain\username</code>.
+                                            </small>
+                                        </div>
+                                        <div class="form-group">
                                             {{ jobs_new_hashfile_form.hashfile.label(class="form-control-label") }}
                                             {{ jobs_new_hashfile_form.hashfile(class="hc-file-input hc-file-input--wide") }}
                                             {% if jobs_new_hashfile_form.hashfile.errors %}
@@ -391,7 +375,7 @@
                         <div class="card-body">
                             <h3 class="h5">Use Existing Hashfile</h3>
                             <p class="text-muted">
-                                Reuse a shared hashfile that is already registered for this domain.
+                                Reuse any shared hashfile that is already registered.
                             </p>
                             {% if hashfiles %}
                             <form action="{{ url_for('jobs.jobs_assigned_hashfile', job_id=job.id) }}" method="post">
@@ -417,7 +401,7 @@
                             </form>
                             {% else %}
                             <p class="text-muted mb-0">
-                                No shared hashfiles are available for this domain yet. Upload a new one on the left to continue.
+                                No shared hashfiles are available yet. Upload a new one on the left to continue.
                             </p>
                             {% endif %}
                         </div>

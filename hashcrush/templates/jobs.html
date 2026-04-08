@@ -20,7 +20,7 @@
                 {% for job in running_jobs %}
                     <div class="card mb-3">
                         <div class="card-header">
-                            <strong>{{ active_domain_names.get(job.domain_id, '') }}:</strong>
+                            <strong>{{ active_job_domain_summaries.get(job.id).label if active_job_domain_summaries.get(job.id) else 'None' }}:</strong>
                             {{ job.name }}
                             <span class="text-muted">({{ active_owner_names.get(job.owner_id, '') }})</span>
                         </div>
@@ -79,7 +79,7 @@
                 {% for job in queued_jobs %}
                     <div class="card mb-3">
                         <div class="card-header">
-                            <strong>{{ active_domain_names.get(job.domain_id, '') }}:</strong>
+                            <strong>{{ active_job_domain_summaries.get(job.id).label if active_job_domain_summaries.get(job.id) else 'None' }}:</strong>
                             {{ job.name }}
                             <span class="text-muted">({{ active_owner_names.get(job.owner_id, '') }})</span>
                         </div>
@@ -136,8 +136,9 @@
                     <tbody>
                         {% for job in jobs%}
                             {% set runtime = job_runtime_progress.get(job.id) %}
+                            {% set domain_summary = job_domain_summaries.get(job.id) %}
                             <tr>
-                                <td>{{ domain_names.get(job.domain_id, '') }}</td>
+                                <td>{{ domain_summary.label if domain_summary else 'None' }}</td>
                                 <td>{{ job.name }}</td>
                                 <td>{{ hashfile_names.get(job.hashfile_id, '') }}</td>
                                 <td>{{ job.status }}</td>
@@ -195,7 +196,7 @@
                                     <a class="fa fa-eye btn btn-secondary" href="{{ url_for('jobs.jobs_summary', job_id=job.id) }}" role="button" title="View" aria-label="View job {{ job.name }}"></a>
                                     {% if job.status != 'Incomplete' %}
                                         {% if can_manage_job %}
-                                            <a class="fa fa-pie-chart btn btn-warning" href="{{ url_for('analytics.get_analytics') }}?domain_id={{ job.domain_id }}&hashfile_id={{ job.hashfile_id }}" role="button" title="Analytics" aria-label="View analytics for job {{ job.name }}"></a>
+                                            <a class="fa fa-pie-chart btn btn-warning" href="{{ url_for('analytics.get_analytics', hashfile_id=job.hashfile_id, domain_id=domain_summary.domain_id) if domain_summary and domain_summary.domain_id else url_for('analytics.get_analytics', hashfile_id=job.hashfile_id) }}" role="button" title="Analytics" aria-label="View analytics for job {{ job.name }}"></a>
                                         {% endif %}
                                     {% endif %}
                                     {% if can_manage_job and job.status != 'Running' and job.status != 'Queued' and job.status != 'Paused' %}

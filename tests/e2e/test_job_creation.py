@@ -9,7 +9,6 @@ from tests.e2e.support import unique_name
 @pytest.mark.e2e
 def test_job_creation_flow(page, live_server, login, e2e_fixture_data):
     login()
-    domain_id = e2e_fixture_data["domain_id"]
     hashfile_id = e2e_fixture_data["hashfile_id"]
     task_name = e2e_fixture_data["task_name"]
     page.get_by_role("link", name="Jobs").click()
@@ -19,7 +18,6 @@ def test_job_creation_flow(page, live_server, login, e2e_fixture_data):
     page.get_by_label("Job Name").fill(unique_name("E2E Job"))
     if page.locator("#priority").count() > 0:
         page.locator("#priority").select_option("3")
-    page.locator("#domain_id").select_option(str(domain_id))
     page.get_by_role("button", name="Continue to Hashes").click()
 
     expect(page).to_have_url(re.compile(r".*/jobs/\d+/builder.*"))
@@ -68,10 +66,10 @@ def test_tasks_add_can_create_wordlist_and_rule_inline(page, live_server, login,
     expect(page.get_by_role("link", name="Add New Wordlist")).to_be_visible()
     page.get_by_role("link", name="Add New Wordlist").click()
     expect(page).to_have_url(re.compile(r".*/wordlists/add.*"))
-    expect(page.get_by_role("heading", name="Upload Wordlist")).to_be_visible()
+    expect(page.get_by_role("heading", name="Add Wordlist")).to_be_visible()
     page.get_by_label("Name").fill(wordlist_name)
     page.set_input_files("input[name='upload']", str(wordlist_path))
-    page.get_by_role("button", name="Upload", exact=True).click()
+    page.get_by_role("button", name="Save Wordlist", exact=True).click()
 
     expect(page).to_have_url(re.compile(r".*/tasks/add.*selected_wordlist_id=.*"))
     expect(page.get_by_role("heading", name="Create Task")).to_be_visible()

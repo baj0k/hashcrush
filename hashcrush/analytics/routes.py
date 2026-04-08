@@ -16,6 +16,7 @@ from flask_login import current_user, login_required
 from sqlalchemy import func, select
 
 from hashcrush.audit import record_audit_event
+from hashcrush.domains.service import hashfile_ids_for_domain, visible_domains_with_hashes
 from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles, db
 from hashcrush.utils.secret_storage import (
     decode_ciphertext_from_storage,
@@ -193,7 +194,7 @@ def _resolve_scope(domain_id: int | None, hashfile_id: int | None):
         select(Hashfiles).order_by(Hashfiles.name.asc())
     ).scalars().all()
     visible_hashfiles_by_id = {hashfile.id: hashfile for hashfile in visible_hashfiles}
-    visible_domain_ids = sorted({hashfile.domain_id for hashfile in visible_hashfiles})
+    visible_domain_ids = [domain.id for domain in visible_domains_with_hashes()]
 
     if domain_id is not None and domain_id not in visible_domain_ids:
         return None
@@ -203,12 +204,14 @@ def _resolve_scope(domain_id: int | None, hashfile_id: int | None):
         selected_hashfile = visible_hashfiles_by_id.get(hashfile_id)
         if not selected_hashfile:
             return None
-        if domain_id is not None and selected_hashfile.domain_id != domain_id:
+        if domain_id is not None and hashfile_id not in set(hashfile_ids_for_domain(domain_id)):
             return None
-        domain_id = selected_hashfile.domain_id
 
     if domain_id is not None:
-        scoped_hashfiles = [hashfile for hashfile in visible_hashfiles if hashfile.domain_id == domain_id]
+        scoped_hashfile_ids = set(hashfile_ids_for_domain(domain_id))
+        scoped_hashfiles = [
+            hashfile for hashfile in visible_hashfiles if hashfile.id in scoped_hashfile_ids
+        ]
     else:
         scoped_hashfiles = visible_hashfiles
 
@@ -466,13 +469,14 @@ def _build_domain_posture_rows(domain_rows: list[Domains], selected_domain_id: i
     if not domain_ids:
         return []
 
+    effective_domain_id = func.coalesce(HashfileHashes.domain_id, Hashfiles.domain_id)
     status_rows = db.session.execute(
-        select(Hashfiles.domain_id, Hashes.cracked, func.count(Hashes.id))
+        select(effective_domain_id.label('domain_id'), Hashes.cracked, func.count(Hashes.id))
         .select_from(Hashes)
         .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
         .join(Hashfiles, Hashfiles.id == HashfileHashes.hashfile_id)
-        .where(Hashfiles.domain_id.in_(domain_ids))
-        .group_by(Hashfiles.domain_id, Hashes.cracked)
+        .where(effective_domain_id.in_(domain_ids))
+        .group_by(effective_domain_id, Hashes.cracked)
     ).all()
     status_counts: dict[int, dict[bool, int]] = defaultdict(lambda: {True: 0, False: 0})
     for domain_id, cracked, count in status_rows:
@@ -480,11 +484,11 @@ def _build_domain_posture_rows(domain_rows: list[Domains], selected_domain_id: i
 
     cracked_rows_by_domain: dict[int, list[tuple[str | None, str | None]]] = defaultdict(list)
     cracked_rows = db.session.execute(
-        select(Hashfiles.domain_id, Hashes.plaintext, HashfileHashes.username)
+        select(effective_domain_id.label('domain_id'), Hashes.plaintext, HashfileHashes.username)
         .select_from(Hashes)
         .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
         .join(Hashfiles, Hashfiles.id == HashfileHashes.hashfile_id)
-        .where(Hashfiles.domain_id.in_(domain_ids))
+        .where(effective_domain_id.in_(domain_ids))
         .where(Hashes.cracked.is_(True))
     ).all()
     for domain_id, plaintext, username in cracked_rows:
@@ -548,11 +552,7 @@ def get_analytics():
         return redirect('/analytics')
 
     domain_rows = (
-        db.session.execute(
-            select(Domains)
-            .where(Domains.id.in_(scope['visible_domain_ids']))
-            .order_by(Domains.name.asc())
-        ).scalars().all()
+        [domain for domain in visible_domains_with_hashes() if domain.id in scope['visible_domain_ids']]
         if scope['visible_domain_ids']
         else []
     )
@@ -562,7 +562,14 @@ def get_analytics():
     hashfile_id = scope['hashfile_id']
     selected_domain_name = next((domain.name for domain in domain_rows if domain.id == domain_id), None)
     selected_hashfile_name = next((hashfile.name for hashfile in hashfile_rows if hashfile.id == hashfile_id), None)
-    filter_hashfiles = [hashfile for hashfile in hashfile_rows if domain_id is None or hashfile.domain_id == domain_id]
+    filter_hashfile_id_set = (
+        set(hashfile_ids_for_domain(domain_id)) if domain_id is not None else None
+    )
+    filter_hashfiles = [
+        hashfile
+        for hashfile in hashfile_rows
+        if filter_hashfile_id_set is None or hashfile.id in filter_hashfile_id_set
+    ]
     domain_posture_rows = (
         _build_domain_posture_rows(domain_rows, domain_id)
         if hashfile_id is None

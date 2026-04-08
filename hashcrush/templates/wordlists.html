@@ -2,10 +2,10 @@
 {% block header %}
 <div class="hc-page-header">
     <h1>Wordlists</h1>
-    <p class="hc-page-intro">These are plaintext, newline-delimited files assigned to tasks. Admins upload shared static wordlists here. Dynamic wordlists are rebuilt automatically from recovered plaintexts.</p>
+    <p class="hc-page-intro">These are plaintext, newline-delimited files assigned to tasks. Admins can upload managed wordlists or register mounted external files here. Dynamic wordlists are rebuilt automatically from recovered plaintexts.</p>
     {% if current_user.admin %}
     <div class="hc-page-actions">
-        <a class="btn btn-success btn-sm" href="{{ url_for('wordlists.wordlists_add') }}">Upload Wordlist</a>
+        <a class="btn btn-success btn-sm" href="{{ url_for('wordlists.wordlists_add') }}">Add Wordlist</a>
     </div>
     {% else %}
     <p class="text-muted mb-0">Shared wordlists are managed by admins. All users can view and use them in tasks.</p>
@@ -20,6 +20,7 @@
                 <tr>
                     <th scope="col">Name</th>
                     <th scope="col">Type</th>
+                    <th scope="col">Source</th>
                     <th scope="col">Size</th>
                     <th scope="col">Last Updated</th>
                     <th scope="col">Control</th>
@@ -34,6 +35,18 @@
                         <span class="badge badge-info">dynamic</span>
                         {% else %}
                         <span class="badge badge-secondary">static</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% set source = wordlist_sources[wordlist.id] %}
+                        {% if source == 'managed' %}
+                        <span class="badge badge-secondary">managed</span>
+                        {% elif source == 'external' %}
+                        <span class="badge badge-primary">external</span>
+                        {% elif source == 'dynamic' %}
+                        <span class="badge badge-info">generated</span>
+                        {% else %}
+                        <span class="badge badge-secondary">{{ source }}</span>
                         {% endif %}
                     </td>
                     <td>{{ wordlist.size }}</td>
@@ -63,7 +76,7 @@
                 {% endfor %}
                 {% if not wordlists %}
                 <tr>
-                    <td colspan="5" class="text-muted">No shared wordlists are available yet.</td>
+                    <td colspan="6" class="text-muted">No shared wordlists are available yet.</td>
                 </tr>
                 {% endif %}
             </tbody>

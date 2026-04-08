@@ -201,7 +201,166 @@ def test_wordlists_add_form_includes_upload_progress_status_panel():
         response = client.get("/wordlists/add")
         assert response.status_code == 200
         assert b'data-upload-progress-form="true"' in response.data
-        assert b"Large file uploads continue processing" in response.data
+        assert b'data-upload-progress-no-file="true"' in response.data
+        assert b"Large uploads and mounted-file scans continue processing" in response.data
+        assert b"Register Mounted File" in response.data
+
+
+@pytest.mark.security
+def test_wordlists_add_registers_external_wordlist_without_copying(tmp_path):
+    external_root = tmp_path / "mounted-wordlists"
+    external_root.mkdir(parents=True, exist_ok=True)
+    external_path = external_root / "huge-list.txt"
+    external_path.write_text("password\nletmein\n", encoding="utf-8")
+
+    app = _build_app(
+        {
+            "RUNTIME_PATH": str(tmp_path / "runtime"),
+            "STORAGE_PATH": str(tmp_path / "storage"),
+            "EXTERNAL_WORDLISTS_PATH": str(external_root),
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/wordlists/add",
+            data={
+                "source_mode": "external",
+                "name": "mounted-wordlist",
+                "external_path": str(external_path),
+            },
+        )
+
+        assert response.status_code == 302
+        wordlist = _first_row(Wordlists, name="mounted-wordlist")
+        assert wordlist is not None
+        assert wordlist.type == "static"
+        assert wordlist.path == str(external_path.resolve())
+        assert external_path.exists()
+
+
+@pytest.mark.security
+def test_wordlists_add_rejects_external_path_outside_allowed_roots(tmp_path):
+    external_root = tmp_path / "mounted-wordlists"
+    external_root.mkdir(parents=True, exist_ok=True)
+    disallowed_path = tmp_path / "other" / "outside.txt"
+    disallowed_path.parent.mkdir(parents=True, exist_ok=True)
+    disallowed_path.write_text("password\n", encoding="utf-8")
+
+    app = _build_app(
+        {
+            "EXTERNAL_WORDLISTS_PATH": str(external_root),
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/wordlists/add",
+            data={
+                "source_mode": "external",
+                "name": "outside-wordlist",
+                "external_path": str(disallowed_path),
+            },
+        )
+
+        assert response.status_code == 200
+        assert b"Mounted wordlist path must live under:" in response.data
+        assert _first_row(Wordlists, name="outside-wordlist") is None
+
+
+@pytest.mark.security
+def test_wordlists_add_supports_async_external_registration(tmp_path):
+    external_root = tmp_path / "mounted-wordlists"
+    external_root.mkdir(parents=True, exist_ok=True)
+    external_path = external_root / "async-huge-list.txt"
+    external_path.write_text("password\nletmein\n", encoding="utf-8")
+
+    app = _build_app(
+        {
+            "RUNTIME_PATH": str(tmp_path / "runtime"),
+            "STORAGE_PATH": str(tmp_path / "storage"),
+            "EXTERNAL_WORDLISTS_PATH": str(external_root),
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/wordlists/add",
+            data={
+                "source_mode": "external",
+                "name": "async-mounted-wordlist",
+                "external_path": str(external_path),
+            },
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+
+        assert response.status_code == 202
+        start_payload = response.get_json()
+        assert isinstance(start_payload, dict)
+        assert start_payload["status_url"].startswith("/uploads/operations/")
+
+        final_payload = _wait_for_upload_operation(client, start_payload["status_url"])
+        assert final_payload["success"] is True
+        assert final_payload["redirect_url"].startswith("/wordlists")
+
+        wordlist = _first_row(Wordlists, name="async-mounted-wordlist")
+        assert wordlist is not None
+        assert wordlist.path == str(external_path.resolve())
+        assert external_path.exists()
+
+
+@pytest.mark.security
+def test_wordlists_delete_preserves_external_mounted_files(tmp_path):
+    external_root = tmp_path / "mounted-wordlists"
+    external_root.mkdir(parents=True, exist_ok=True)
+    external_path = external_root / "keep-me.txt"
+    external_path.write_text("password\n", encoding="utf-8")
+
+    app = _build_app(
+        {
+            "EXTERNAL_WORDLISTS_PATH": str(external_root),
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        wordlist = Wordlists(
+            name="external-wordlist",
+            type="static",
+            path=str(external_path.resolve()),
+            size=1,
+            checksum="7" * 64,
+        )
+        db.session.add(wordlist)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(f"/wordlists/delete/{wordlist.id}")
+        assert response.status_code == 302
+        assert db.session.get(Wordlists, wordlist.id) is None
+        assert external_path.exists()
 
 
 @pytest.mark.security
@@ -404,7 +563,7 @@ def test_wordlists_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
             },
         )
         assert response.status_code == 200
-        assert b"Wordlist could not be uploaded" in response.data
+        assert b"Wordlist could not be saved" in response.data
         assert _count_rows(Wordlists) == 0
 
 @pytest.mark.security

@@ -6,9 +6,9 @@ from collections import defaultdict
 
 from sqlalchemy import case, func, select
 
+from hashcrush.domains.service import job_domain_summaries
 from hashcrush.jobs.access import _parse_positive_int, _visible_jobs_query
 from hashcrush.models import (
-    Domains,
     Hashes,
     HashfileHashes,
     Hashfiles,
@@ -23,7 +23,7 @@ from hashcrush.view_utils import paginate_scalars, parse_jobtask_progress
 
 def _visible_hashfiles_for_job(job: Jobs) -> list[Hashfiles]:
     return db.session.execute(
-        select(Hashfiles).filter_by(domain_id=job.domain_id)
+        select(Hashfiles).order_by(Hashfiles.uploaded_at.desc(), Hashfiles.name.asc())
     ).scalars().all()
 
 
@@ -53,7 +53,6 @@ def _build_active_jobs_summary():
     queued_jobs = [job for job in active_jobs if job.status == "Queued"]
     active_job_ids = [job.id for job in active_jobs]
     owner_ids = sorted({job.owner_id for job in active_jobs})
-    domain_ids = sorted({job.domain_id for job in active_jobs})
 
     active_owner_names = {
         row.id: row.username
@@ -65,16 +64,7 @@ def _build_active_jobs_summary():
             else []
         )
     }
-    active_domain_names = {
-        row.id: row.name
-        for row in (
-            db.session.execute(
-                select(Domains.id, Domains.name).where(Domains.id.in_(domain_ids))
-            ).all()
-            if domain_ids
-            else []
-        )
-    }
+    active_job_domain_summaries = job_domain_summaries(active_job_ids)
 
     active_job_tasks = (
         db.session.execute(
@@ -149,17 +139,13 @@ def _build_active_jobs_summary():
     return {
         "running_jobs": running_jobs,
         "queued_jobs": queued_jobs,
-        "active_domain_names": active_domain_names,
+        "active_job_domain_summaries": active_job_domain_summaries,
         "active_owner_names": active_owner_names,
         "active_job_task_rows_by_job_id": active_job_task_rows_by_job_id,
         "active_job_progress_summary": active_job_progress_summary,
         "active_job_task_runtime_progress": active_job_task_runtime_progress,
         "active_job_recovered": active_job_recovered,
     }
-
-
-def _visible_domains_query():
-    return select(Domains).order_by(Domains.name)
 
 
 def _hashfile_rate_rows(hashfiles: list[Hashfiles]) -> dict[int, str]:
@@ -231,12 +217,7 @@ def _get_assignable_hashfile(job: Jobs, raw_hashfile_id) -> Hashfiles | None:
     if hashfile_id is None:
         return None
 
-    return db.session.scalar(
-        select(Hashfiles).where(
-            Hashfiles.id == hashfile_id,
-            Hashfiles.domain_id == job.domain_id,
-        )
-    )
+    return db.session.get(Hashfiles, hashfile_id)
 
 
 def _build_jobs_list_context(*, page: int, per_page: int):
@@ -247,19 +228,9 @@ def _build_jobs_list_context(*, page: int, per_page: int):
         per_page=per_page,
     )
     visible_job_ids = [job.id for job in jobs]
-    domain_ids = sorted({job.domain_id for job in jobs})
     owner_ids = sorted({job.owner_id for job in jobs})
     hashfile_ids = sorted({job.hashfile_id for job in jobs if job.hashfile_id})
-    domain_names = {
-        row.id: row.name
-        for row in (
-            db.session.execute(
-                select(Domains.id, Domains.name).where(Domains.id.in_(domain_ids))
-            ).all()
-            if domain_ids
-            else []
-        )
-    }
+    job_domain_summary_rows = job_domain_summaries(visible_job_ids)
     owner_names = {
         row.id: row.username
         for row in (
@@ -332,7 +303,7 @@ def _build_jobs_list_context(*, page: int, per_page: int):
 
     return {
         "jobs": jobs,
-        "domain_names": domain_names,
+        "job_domain_summaries": job_domain_summary_rows,
         "owner_names": owner_names,
         "hashfile_names": hashfile_names,
         "job_runtime_progress": job_runtime_progress,

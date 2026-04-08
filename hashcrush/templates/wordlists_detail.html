@@ -23,8 +23,26 @@
                 </td>
             </tr>
             <tr>
+                <th scope="row">Source</th>
+                <td>
+                    {% if wordlist_source == 'managed' %}
+                    <span class="badge badge-secondary">managed upload</span>
+                    {% elif wordlist_source == 'external' %}
+                    <span class="badge badge-primary">mounted external file</span>
+                    {% elif wordlist_source == 'dynamic' %}
+                    <span class="badge badge-info">generated</span>
+                    {% else %}
+                    <span class="badge badge-secondary">{{ wordlist_source }}</span>
+                    {% endif %}
+                </td>
+            </tr>
+            <tr>
                 <th scope="row">Size</th>
                 <td>{{ wordlist.size }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Path</th>
+                <td><code>{{ wordlist.path }}</code></td>
             </tr>
             <tr>
                 <th scope="row">Last Updated</th>
@@ -34,6 +52,14 @@
             <tr>
                 <th scope="row">Notes</th>
                 <td>This dynamic wordlist is rebuilt automatically from recovered plaintexts.</td>
+            </tr>
+            {% elif wordlist_source == 'external' %}
+            <tr>
+                <th scope="row">Notes</th>
+                <td>
+                    This wordlist is mounted from outside managed app storage and is read in place.
+                    Deleting it here only unregisters the record in HashCrush.
+                </td>
             </tr>
             {% endif %}
         </tbody>
@@ -59,6 +85,9 @@
     {% elif delete_blockers.tasks %}
     <p class="text-muted mb-0">This wordlist cannot be deleted until it is removed from the tasks listed above.</p>
     {% else %}
+    {% if wordlist_source == 'external' %}
+    <p class="text-muted">Deleting this record will not remove the mounted file from disk.</p>
+    {% endif %}
     <form
         action="{{ url_for('wordlists.wordlists_delete', wordlist_id=wordlist.id) }}"
         method="POST"

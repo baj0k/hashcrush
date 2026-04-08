@@ -1146,6 +1146,32 @@ def test_config_builds_postgresql_uri_from_discrete_fields(tmp_path, monkeypatch
 
 
 @pytest.mark.security
+def test_create_app_uses_fixed_external_wordlists_path(tmp_path):
+    runtime_path = tmp_path / "runtime"
+    storage_path = tmp_path / "storage"
+    for subdir in ("tmp", "hashes", "outfiles"):
+        (runtime_path / subdir).mkdir(parents=True, exist_ok=True)
+    for subdir in ("wordlists", "rules"):
+        (storage_path / subdir).mkdir(parents=True, exist_ok=True)
+
+    app = create_app(
+        testing=True,
+        config_overrides={
+            "SECRET_KEY": "test-secret-key",
+            "DATA_ENCRYPTION_KEY": TEST_DATA_ENCRYPTION_KEY,
+            "SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path / 'wordlists.sqlite'}",
+            "SQLALCHEMY_TRACK_MODIFICATIONS": False,
+            "WTF_CSRF_ENABLED": False,
+            "ENABLE_LOCAL_EXECUTOR": False,
+            "RUNTIME_PATH": str(runtime_path),
+            "STORAGE_PATH": str(storage_path),
+        },
+    )
+
+    assert app.config["EXTERNAL_WORDLISTS_PATH"] == "/mnt/hashcrush-wordlists"
+
+
+@pytest.mark.security
 def test_postgres_test_backend_prefers_configured_app_database_uri(tmp_path, monkeypatch):
     import tests.db_runtime as db_runtime
 

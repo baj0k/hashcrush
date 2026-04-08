@@ -241,6 +241,7 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
         "RUNTIME_PATH", os.path.join(tempfile.gettempdir(), "hashcrush-runtime")
     )
     app.config.setdefault("STORAGE_PATH", os.path.join("/var", "lib", "hashcrush"))
+    app.config.setdefault("EXTERNAL_WORDLISTS_PATH", "/mnt/hashcrush-wordlists")
     app.config.setdefault("UPLOAD_OPERATION_RETENTION_SECONDS", 3600)
     app.config.setdefault("UPLOAD_OPERATION_LEASE_SECONDS", 300)
     app.config.setdefault("UPLOAD_INLINE_MAX_WORKERS", 2)

@@ -34,13 +34,6 @@ class JobsForm(FlaskForm):
         default=3,
         validators=[DataRequired()],
     )
-    domain_id = SelectField(
-        "Domain",
-        choices=[],
-        coerce=str,
-        validators=[DataRequired()],
-    )
-    domain_name = StringField("New Domain", filters=[normalize_text_input])
     submit = SubmitField("Next")
 
     def validate_name(self, name):
@@ -66,6 +59,9 @@ class JobsNewHashFileForm(FlaskForm):
     name = StringField(
         "Hashfile Name", filters=[normalize_text_input]
     )  # While required we may dynamically create this based on file upload
+    domain_name = StringField(
+        "Fallback Domain (Optional)", filters=[normalize_text_input]
+    )
     file_type = SelectField(
         "Hash File Format",
         choices=[

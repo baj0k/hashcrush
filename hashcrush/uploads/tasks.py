@@ -9,12 +9,15 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from hashcrush.audit import record_audit_event
-from hashcrush.domains.service import resolve_or_create_shared_domain
 from hashcrush.hashfiles.service import create_hashfile_from_path
 from hashcrush.models import Jobs, Rules, Wordlists, db
 from hashcrush.utils.file_ops import analyze_text_file
 from hashcrush.utils.storage_paths import get_storage_subdir
 from hashcrush.view_utils import append_query_params
+from hashcrush.wordlists.service import (
+    create_static_wordlist_from_path,
+    remove_managed_wordlist_file,
+)
 
 
 def _make_stage_progress_callback(
@@ -80,12 +83,6 @@ def _make_hashfile_progress_callback(reporter):
     return callback
 
 
-def _managed_wordlists_dir() -> str:
-    path = get_storage_subdir("wordlists")
-    os.makedirs(path, exist_ok=True)
-    return path
-
-
 def _managed_rules_dir() -> str:
     path = get_storage_subdir("rules")
     os.makedirs(path, exist_ok=True)
@@ -145,7 +142,6 @@ def _process_wordlist_upload(payload: dict[str, object], reporter) -> None:
     redirect_url = str(payload.get("redirect_url") or "").strip() or None
     fallback_url = str(payload.get("fallback_url") or "/wordlists").strip()
     audit_actor = payload.get("audit_actor")
-    managed_root = _managed_wordlists_dir()
 
     try:
         reporter.update(
@@ -153,7 +149,8 @@ def _process_wordlist_upload(payload: dict[str, object], reporter) -> None:
             title="Processing wordlist...",
             detail="Analyzing the uploaded wordlist.",
         )
-        file_analysis = analyze_text_file(
+        wordlist = create_static_wordlist_from_path(
+            wordlist_name,
             wordlist_path,
             progress_callback=_make_stage_progress_callback(
                 reporter,
@@ -163,23 +160,9 @@ def _process_wordlist_upload(payload: dict[str, object], reporter) -> None:
                 end_percent=92,
             ),
         )
-        reporter.update(
-            percent=95,
-            title="Saving wordlist...",
-            detail="Registering the wordlist in the database.",
-        )
-        wordlist = Wordlists(
-            name=wordlist_name,
-            type="static",
-            path=wordlist_path,
-            checksum=file_analysis.checksum,
-            size=file_analysis.line_count,
-        )
-        db.session.add(wordlist)
-        db.session.commit()
     except IntegrityError:
         db.session.rollback()
-        _remove_managed_file(wordlist_path, managed_root)
+        remove_managed_wordlist_file(wordlist_path)
         reporter.fail(
             title="Wordlist upload failed.",
             detail=(
@@ -190,7 +173,7 @@ def _process_wordlist_upload(payload: dict[str, object], reporter) -> None:
         return
     except Exception:
         db.session.rollback()
-        _remove_managed_file(wordlist_path, managed_root)
+        remove_managed_wordlist_file(wordlist_path)
         current_app.logger.exception(
             "Failed processing queued wordlist upload for %s", wordlist_name
         )
@@ -211,6 +194,7 @@ def _process_wordlist_upload(payload: dict[str, object], reporter) -> None:
             "wordlist_name": wordlist.name,
             "path": wordlist.path,
             "type": wordlist.type,
+            "source": "managed",
             "size": wordlist.size,
         },
         actor=audit_actor if isinstance(audit_actor, dict) else None,
@@ -224,6 +208,85 @@ def _process_wordlist_upload(payload: dict[str, object], reporter) -> None:
             wordlist_id=wordlist.id,
         ),
         completion_flashes=[("success", "Wordlist uploaded!")],
+    )
+
+
+def _process_wordlist_external_register(payload: dict[str, object], reporter) -> None:
+    wordlist_name = str(payload.get("wordlist_name") or "").strip()
+    wordlist_path = os.path.abspath(str(payload.get("wordlist_path") or "").strip())
+    redirect_url = str(payload.get("redirect_url") or "").strip() or None
+    fallback_url = str(payload.get("fallback_url") or "/wordlists").strip()
+    audit_actor = payload.get("audit_actor")
+
+    try:
+        reporter.update(
+            percent=5,
+            title="Scanning mounted wordlist...",
+            detail="Reading the mounted wordlist and collecting metadata.",
+        )
+        wordlist = create_static_wordlist_from_path(
+            wordlist_name,
+            wordlist_path,
+            progress_callback=_make_stage_progress_callback(
+                reporter,
+                title="Scanning mounted wordlist...",
+                detail="Reading the mounted wordlist and collecting metadata.",
+                start_percent=5,
+                end_percent=92,
+            ),
+        )
+        reporter.update(
+            percent=95,
+            title="Saving wordlist...",
+            detail="Registering the mounted wordlist in the database.",
+        )
+    except IntegrityError:
+        db.session.rollback()
+        reporter.fail(
+            title="Mounted wordlist registration failed.",
+            detail=(
+                "Wordlist could not be registered because that name or path "
+                "already exists. Refresh and retry."
+            ),
+        )
+        return
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception(
+            "Failed registering mounted wordlist %s", wordlist_name
+        )
+        reporter.fail(
+            title="Mounted wordlist registration failed.",
+            detail=(
+                "The server hit an unexpected error while processing the mounted "
+                "wordlist."
+            ),
+        )
+        return
+
+    record_audit_event(
+        "wordlist.create",
+        "wordlist",
+        target_id=wordlist.id,
+        summary=f'Registered external shared wordlist "{wordlist.name}".',
+        details={
+            "wordlist_name": wordlist.name,
+            "path": wordlist.path,
+            "type": wordlist.type,
+            "source": "external",
+            "size": wordlist.size,
+        },
+        actor=audit_actor if isinstance(audit_actor, dict) else None,
+    )
+    reporter.complete(
+        title="Mounted wordlist ready.",
+        detail=f'Shared wordlist "{wordlist.name}" is available.',
+        redirect_url=_wordlist_redirect_target(
+            redirect_url,
+            fallback_url=fallback_url,
+            wordlist_id=wordlist.id,
+        ),
+        completion_flashes=[("success", "External wordlist registered!")],
     )
 
 
@@ -318,45 +381,24 @@ def _process_hashfile_upload(payload: dict[str, object], reporter) -> None:
         str(payload.get("staged_hashfile_path") or "").strip()
     )
     hashfile_name = str(payload.get("hashfile_name") or "").strip()
-    domain_selection = str(payload.get("domain_selection") or "").strip()
-    new_domain_name = str(payload.get("new_domain_name") or "").strip() or None
+    default_domain_name = (
+        str(payload.get("default_domain_name") or "").strip() or None
+    )
     file_type = str(payload.get("file_type") or "").strip()
     hash_type = str(payload.get("hash_type") or "").strip()
     audit_actor = payload.get("audit_actor")
 
-    domain_result = None
-    domain_id: int | None = None
-    domain_name: str | None = None
-    domain_created = False
     try:
         reporter.update(
             percent=4,
             title="Preparing hashfile...",
-            detail="Resolving the selected shared domain.",
+            detail="Checking the uploaded hashfile before import.",
         )
-        domain_result, domain_error = resolve_or_create_shared_domain(
-            domain_selection,
-            new_domain_name=new_domain_name,
-            allow_create=True,
-        )
-        if domain_error or domain_result is None:
-            db.session.rollback()
-            reporter.fail(
-                title="Hashfile upload failed.",
-                detail=(
-                    domain_error
-                    or "Selected domain is invalid or no longer available."
-                ),
-            )
-            return
-        domain_id = int(domain_result.domain.id)
-        domain_name = str(domain_result.domain.name)
-        domain_created = bool(domain_result.created)
 
         creation_result, error_message = create_hashfile_from_path(
             hashfile_path=staged_hashfile_path,
             hashfile_name=hashfile_name,
-            domain_id=domain_id,
+            default_domain_name=default_domain_name,
             file_type=file_type,
             hash_type=hash_type,
             progress_callback=_make_hashfile_progress_callback(reporter),
@@ -391,23 +433,6 @@ def _process_hashfile_upload(payload: dict[str, object], reporter) -> None:
 
     flashes: list[tuple[str, str]] = []
     actor = audit_actor if isinstance(audit_actor, dict) else None
-    if domain_created and domain_id is not None and domain_name:
-        record_audit_event(
-            "domain.create",
-            "domain",
-            target_id=domain_id,
-            summary=f'Created shared domain "{domain_name}" from hashfile creation.',
-            details={
-                "domain_name": domain_name,
-                "source": "hashfiles.add",
-            },
-            actor=actor,
-        )
-    elif domain_selection == "add_new" and domain_name:
-        flashes.append(
-            ("info", f'Using existing shared domain "{domain_name}".')
-        )
-
     record_audit_event(
         "hashfile.create",
         "hashfile",
@@ -415,8 +440,8 @@ def _process_hashfile_upload(payload: dict[str, object], reporter) -> None:
         summary=f'Registered shared hashfile "{hashfile.name}".',
         details={
             "hashfile_name": hashfile.name,
-            "domain_id": domain_id,
-            "domain_name": domain_name,
+            "domain_id": hashfile.domain_id,
+            "domain_name": hashfile.domain.name if hashfile.domain else None,
             "hash_type": creation_result.hash_type,
             "imported_hash_links": creation_result.imported_hash_links,
         },
@@ -437,11 +462,13 @@ def _process_job_hashfile_upload(payload: dict[str, object], reporter) -> None:
     hashfile_name = str(payload.get("hashfile_name") or "").strip()
     file_type = str(payload.get("file_type") or "").strip()
     hash_type = str(payload.get("hash_type") or "").strip()
+    default_domain_name = (
+        str(payload.get("default_domain_name") or "").strip() or None
+    )
     audit_actor = payload.get("audit_actor")
 
     try:
         job_id = int(payload.get("job_id") or 0)
-        domain_id = int(payload.get("domain_id") or 0)
     except (TypeError, ValueError):
         reporter.fail(
             title="Hashfile upload failed.",
@@ -457,11 +484,11 @@ def _process_job_hashfile_upload(payload: dict[str, object], reporter) -> None:
             detail="Checking the draft job before attaching the uploaded hashfile.",
         )
         job = db.session.get(Jobs, job_id)
-        if job is None or int(job.domain_id or 0) != domain_id:
+        if job is None:
             db.session.rollback()
             reporter.fail(
                 title="Hashfile upload failed.",
-                detail="The draft job no longer exists or changed domains.",
+                detail="The draft job no longer exists.",
             )
             return
         if job.status in {"Running", "Queued", "Paused"}:
@@ -471,11 +498,13 @@ def _process_job_hashfile_upload(payload: dict[str, object], reporter) -> None:
                 detail="Stop the job before changing its hashfile.",
             )
             return
+        job_reference_id = int(job.id)
+        job_name = str(job.name)
 
         creation_result, error_message = create_hashfile_from_path(
             hashfile_path=staged_hashfile_path,
             hashfile_name=hashfile_name,
-            domain_id=domain_id,
+            default_domain_name=default_domain_name,
             file_type=file_type,
             hash_type=hash_type,
             progress_callback=_make_hashfile_progress_callback(reporter),
@@ -491,8 +520,17 @@ def _process_job_hashfile_upload(payload: dict[str, object], reporter) -> None:
             )
             return
 
-        hashfile = creation_result.hashfile
+        hashfile = db.session.get(type(creation_result.hashfile), creation_result.hashfile.id)
+        job = db.session.get(Jobs, job_reference_id)
+        if hashfile is None or job is None:
+            db.session.rollback()
+            reporter.fail(
+                title="Hashfile upload failed.",
+                detail="The draft job or uploaded hashfile changed while processing.",
+            )
+            return
         job.hashfile_id = hashfile.id
+        job.domain_id = hashfile.domain_id
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
@@ -526,8 +564,8 @@ def _process_job_hashfile_upload(payload: dict[str, object], reporter) -> None:
         summary=f'Registered shared hashfile "{hashfile.name}" via job assignment.',
         details={
             "hashfile_name": hashfile.name,
-            "domain_id": domain_id,
-            "job_id": job.id,
+            "domain_id": hashfile.domain_id,
+            "job_id": job_reference_id,
             "hash_type": creation_result.hash_type,
             "imported_hash_links": creation_result.imported_hash_links,
         },
@@ -535,7 +573,7 @@ def _process_job_hashfile_upload(payload: dict[str, object], reporter) -> None:
     )
     reporter.complete(
         title="Hashfile ready.",
-        detail=f'Shared hashfile "{hashfile.name}" was attached to job "{job.name}".',
+        detail=f'Shared hashfile "{hashfile.name}" was attached to job "{job_name}".',
         completion_flashes=[("success", "Hashfile created and assigned to the job.")],
     )
 
@@ -551,6 +589,9 @@ def process_upload_operation(
     normalized_type = str(operation_type or "").strip().lower()
     if normalized_type == "wordlist_upload":
         _process_wordlist_upload(payload, reporter)
+        return
+    if normalized_type == "wordlist_external_register":
+        _process_wordlist_external_register(payload, reporter)
         return
     if normalized_type == "rule_upload":
         _process_rule_upload(payload, reporter)

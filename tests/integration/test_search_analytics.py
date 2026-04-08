@@ -18,6 +18,8 @@ def test_analytics_download_rejects_invalid_domain_id_and_uses_hashfile_id_in_fi
         hashfile = Hashfiles(name="sample.txt", domain_id=domain.id)
         db.session.add(hashfile)
         db.session.commit()
+        hash_row = _seed_hash("sample-ciphertext", cracked=False)
+        _seed_hashfile_hash(hash_id=hash_row.id, hashfile_id=hashfile.id, username="ACME\\sample")
 
         client = app.test_client()
         _login_client_as_user(client, user)
@@ -52,6 +54,8 @@ def test_analytics_download_normalizes_export_type_query_param():
         hashfile = Hashfiles(name="normalized.txt", domain_id=domain.id)
         db.session.add(hashfile)
         db.session.commit()
+        hash_row = _seed_hash("normalized-ciphertext", cracked=False)
+        _seed_hashfile_hash(hash_id=hash_row.id, hashfile_id=hashfile.id, username="ACME-Normalized\\sample")
 
         client = app.test_client()
         _login_client_as_user(client, user)

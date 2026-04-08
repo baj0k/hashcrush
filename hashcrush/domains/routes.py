@@ -10,12 +10,12 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required
-from sqlalchemy import delete, exists, func, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from hashcrush.audit import record_audit_event
 from hashcrush.authz import visible_jobs_query
-from hashcrush.domains.forms import DomainsForm
+from hashcrush.domains.service import visible_domains_with_hashes
 from hashcrush.models import (
     Domains,
     Hashes,
@@ -70,28 +70,37 @@ def _count_orphan_uncracked_hashes_for_hashfiles(hashfile_ids: list[int]) -> int
 
 def _domain_delete_impact(domain_id: int) -> dict:
     all_job_ids = db.session.scalars(
-        select(Jobs.id).filter_by(domain_id=domain_id)
+        select(Jobs.id)
+        .select_from(Jobs)
+        .outerjoin(Hashfiles, Hashfiles.id == Jobs.hashfile_id)
+        .outerjoin(HashfileHashes, HashfileHashes.hashfile_id == Hashfiles.id)
+        .where(or_(Jobs.domain_id == domain_id, HashfileHashes.domain_id == domain_id))
+        .distinct()
     ).all()
     active_job_ids = db.session.scalars(
         select(Jobs.id)
-        .filter_by(domain_id=domain_id)
+        .select_from(Jobs)
+        .outerjoin(Hashfiles, Hashfiles.id == Jobs.hashfile_id)
+        .outerjoin(HashfileHashes, HashfileHashes.hashfile_id == Hashfiles.id)
+        .where(or_(Jobs.domain_id == domain_id, HashfileHashes.domain_id == domain_id))
         .where(Jobs.status.in_(ACTIVE_JOB_STATUSES))
+        .distinct()
     ).all()
     inactive_job_ids = [job_id for job_id in all_job_ids if job_id not in active_job_ids]
     hashfile_ids = db.session.scalars(
-        select(Hashfiles.id).filter_by(domain_id=domain_id)
+        select(Hashfiles.id)
+        .select_from(Hashfiles)
+        .outerjoin(HashfileHashes, HashfileHashes.hashfile_id == Hashfiles.id)
+        .where(or_(Hashfiles.domain_id == domain_id, HashfileHashes.domain_id == domain_id))
+        .distinct()
     ).all()
-    hash_links = (
-        int(
-            db.session.scalar(
-                select(func.count())
-                .select_from(HashfileHashes)
-                .where(HashfileHashes.hashfile_id.in_(hashfile_ids))
-            )
-            or 0
+    hash_links = int(
+        db.session.scalar(
+            select(func.count())
+            .select_from(HashfileHashes)
+            .where(HashfileHashes.domain_id == domain_id)
         )
-        if hashfile_ids
-        else 0
+        or 0
     )
     return {
         'active_jobs': len(active_job_ids),
@@ -100,19 +109,24 @@ def _domain_delete_impact(domain_id: int) -> dict:
         'hashfiles': len(hashfile_ids),
         'hashfile_ids': hashfile_ids,
         'hash_links': hash_links,
-        'orphan_uncracked_hashes': _count_orphan_uncracked_hashes_for_hashfiles(hashfile_ids),
+        'orphan_uncracked_hashes': 0,
     }
 
 
 def _domain_detail_context(domain: Domains) -> dict[str, object]:
     associated_jobs = db.session.execute(
         visible_jobs_query()
-        .where(Jobs.domain_id == domain.id)
+        .outerjoin(Hashfiles, Hashfiles.id == Jobs.hashfile_id)
+        .outerjoin(HashfileHashes, HashfileHashes.hashfile_id == Hashfiles.id)
+        .where(or_(Jobs.domain_id == domain.id, HashfileHashes.domain_id == domain.id))
+        .distinct()
         .order_by(Jobs.created_at.desc())
     ).scalars().all()
     associated_hashfiles = db.session.execute(
         select(Hashfiles)
-        .where(Hashfiles.domain_id == domain.id)
+        .outerjoin(HashfileHashes, HashfileHashes.hashfile_id == Hashfiles.id)
+        .where(or_(Hashfiles.domain_id == domain.id, HashfileHashes.domain_id == domain.id))
+        .distinct()
         .order_by(Hashfiles.name.asc())
     ).scalars().all()
     return {
@@ -132,12 +146,10 @@ def domains_list():
         page=page,
         per_page=LIST_PAGE_SIZE,
     )
-    domains_form = DomainsForm() if current_user.admin else None
     return render_template(
         'domains.html',
         title='Domains',
         domains=domains,
-        domainsForm=domains_form,
         pagination=pagination,
     )
 
@@ -159,39 +171,9 @@ def domains_detail(domain_id):
 @domains.route("/domains/add", methods=['POST'])
 @login_required
 def domains_add():
-    """Create a new shared domain."""
+    """Domains are inferred from imported usernames and not created manually."""
 
-    if not current_user.admin:
-        flash('Permission Denied', 'danger')
-        return redirect(url_for('domains.domains_list'))
-
-    form = DomainsForm()
-    if not form.validate_on_submit():
-        for errors in form.errors.values():
-            for error in errors:
-                flash(error, 'danger')
-        return redirect(url_for('domains.domains_list'))
-
-    domain = Domains(name=form.name.data)
-    db.session.add(domain)
-    try:
-        db.session.commit()
-    except IntegrityError:
-        db.session.rollback()
-        flash(
-            'Domain could not be created because that name already exists or changed concurrently. Refresh and retry.',
-            'danger',
-        )
-        return redirect(url_for('domains.domains_list'))
-
-    record_audit_event(
-        'domain.create',
-        'domain',
-        target_id=domain.id,
-        summary=f'Created shared domain "{domain.name}".',
-        details={'domain_name': domain.name},
-    )
-    flash('Domain created!', 'success')
+    flash('Domains are created automatically from imported usernames or fallback values.', 'info')
     return redirect(url_for('domains.domains_list'))
 
 @domains.route("/domains/delete/<int:domain_id>", methods=['POST'])
@@ -207,9 +189,14 @@ def domains_delete(domain_id):
         return redirect(next_url or url_for('domains.domains_list'))
 
     impact = _domain_delete_impact(domain_id)
-    if impact['active_jobs'] > 0:
+    if (
+        impact['active_jobs'] > 0
+        or impact['inactive_jobs'] > 0
+        or impact['hashfiles'] > 0
+        or impact['hash_links'] > 0
+    ):
         flash(
-            f"Unable to delete. Domain has {impact['active_jobs']} active job(s).",
+            'Unable to delete a domain that is still referenced by imported hashes, hashfiles, or jobs.',
             'danger',
         )
         return redirect(next_url or url_for('domains.domains_list'))
@@ -219,31 +206,12 @@ def domains_delete(domain_id):
         return redirect(next_url or url_for('domains.domains_list'))
 
     try:
-        inactive_job_ids = impact['inactive_job_ids']
-        if inactive_job_ids:
-            db.session.execute(delete(JobTasks).where(JobTasks.job_id.in_(inactive_job_ids)))
-            db.session.execute(delete(Jobs).where(Jobs.id.in_(inactive_job_ids)))
-
-        hashfile_ids = impact['hashfile_ids']
-        if hashfile_ids:
-            db.session.execute(delete(HashfileHashes).where(HashfileHashes.hashfile_id.in_(hashfile_ids)))
-            db.session.execute(delete(Hashfiles).where(Hashfiles.id.in_(hashfile_ids)))
-            db.session.execute(
-                delete(Hashes)
-                .where(Hashes.cracked.is_(False))
-                .where(~exists().where(Hashes.id == HashfileHashes.hash_id))
-            )
-
         db.session.delete(domain)
         db.session.commit()
         current_app.logger.info(
-            'Deleted domain id=%s name=%s impact inactive_jobs=%s hashfiles=%s hash_links=%s orphan_uncracked=%s',
+            'Deleted unused domain id=%s name=%s',
             domain.id,
             domain_name,
-            impact['inactive_jobs'],
-            impact['hashfiles'],
-            impact['hash_links'],
-            impact['orphan_uncracked_hashes'],
         )
         record_audit_event(
             'domain.delete',
@@ -252,19 +220,10 @@ def domains_delete(domain_id):
             summary=f'Deleted shared domain "{domain_name}".',
             details={
                 'domain_name': domain_name,
-                'inactive_jobs_removed': impact['inactive_jobs'],
-                'hashfiles_removed': impact['hashfiles'],
-                'hash_links_removed': impact['hash_links'],
-                'orphan_uncracked_hashes_removed': impact['orphan_uncracked_hashes'],
+                'hash_links_removed': 0,
             },
         )
-        flash(
-            'Domain has been deleted. '
-            f"Removed {impact['inactive_jobs']} inactive job(s), "
-            f"{impact['hashfiles']} hashfile(s), and "
-            f"{impact['orphan_uncracked_hashes']} orphaned uncracked hash(es).",
-            'success',
-        )
+        flash('Unused domain has been deleted.', 'success')
     except IntegrityError:
         db.session.rollback()
         flash('Unable to delete domain because related records changed concurrently. Refresh and retry.', 'danger')

@@ -3,7 +3,7 @@
 {% block header %}
 <div class="hc-page-header">
     <h1>Hash Files</h1>
-    <p class="hc-page-intro">The following are hash files currently configured in HashCrush. Each hash file is assigned to a single domain. Deleting a hash file removes only that file; recovered hashes remain in the database.</p>
+    <p class="hc-page-intro">The following are hash files currently configured in HashCrush. Domains are inferred from imported usernames when available, so a hash file can belong to one domain, many domains, or none.</p>
     {% if current_user.admin %}
     <div class="hc-page-actions">
         <a class="btn btn-success btn-sm" href="{{ url_for('hashfiles.hashfiles_add') }}">Add Hashfile</a>
@@ -28,38 +28,37 @@
                 </tr>
             </thead>
             <tbody>
-                {% for domain in domains %}
-                    {% for hashfile in hashfiles_by_domain.get(domain.id, []) %}
-                    <tr>
-                        <td>{{ domain.name }}</td>
-                        <td>{{ hashfile.name }}</td>
-                        <td>{{ hash_type_dict[hashfile.id] }}</td>
-                        <td>{{ cracked_rate[hashfile.id] }}</td>
-                        <td>{{ hashfile.uploaded_at }}</td>
-                        <td>
-                            {% if current_user.admin %}
-                            <a class="fa fa-download btn btn-primary" href="{{ url_for('analytics.analytics_download_hashes') }}?type=found&domain_id={{ domain.id }}&hashfile_id={{ hashfile.id }}" role="button" title="Download" aria-label="Download cracked results for hashfile {{ hashfile.name }}"></a>
-                            {% endif %}
-                            <a class="fa fa-pie-chart btn btn-warning" href="{{ url_for('analytics.get_analytics') }}?domain_id={{ domain.id }}&hashfile_id={{ hashfile.id }}" role="button" title="Analytics" aria-label="View analytics for hashfile {{ hashfile.name }}"></a>
-                            <a
-                                class="fa fa-info btn btn-info"
-                                href="{{ url_for('hashfiles.hashfiles_detail', hashfile_id=hashfile.id) }}"
-                                role="button"
-                                title="Info"
-                                aria-label="View hashfile details for {{ hashfile.name }}"
-                            ></a>
-                            {% if current_user.admin %}
-                            <a
-                                class="fa fa-trash btn btn-danger"
-                                href="{{ url_for('hashfiles.hashfiles_detail', hashfile_id=hashfile.id) }}#admin-actions"
-                                role="button"
-                                title="Delete"
-                                aria-label="Manage deletion for hashfile {{ hashfile.name }}"
-                            ></a>
-                            {% endif %}
-                        </td>
-                    </tr>
-                    {% endfor %}
+                {% for hashfile in hashfiles %}
+                    {% set domain_summary = domain_summaries.get(hashfile.id) %}
+                <tr>
+                    <td>{{ domain_summary.label if domain_summary else 'None' }}</td>
+                    <td>{{ hashfile.name }}</td>
+                    <td>{{ hash_type_dict[hashfile.id] }}</td>
+                    <td>{{ cracked_rate[hashfile.id] }}</td>
+                    <td>{{ hashfile.uploaded_at }}</td>
+                    <td>
+                        {% if current_user.admin %}
+                        <a class="fa fa-download btn btn-primary" href="{{ url_for('analytics.analytics_download_hashes', type='found', hashfile_id=hashfile.id, domain_id=domain_summary.domain_id) if domain_summary and domain_summary.domain_id else url_for('analytics.analytics_download_hashes', type='found', hashfile_id=hashfile.id) }}" role="button" title="Download" aria-label="Download cracked results for hashfile {{ hashfile.name }}"></a>
+                        {% endif %}
+                        <a class="fa fa-pie-chart btn btn-warning" href="{{ url_for('analytics.get_analytics', hashfile_id=hashfile.id, domain_id=domain_summary.domain_id) if domain_summary and domain_summary.domain_id else url_for('analytics.get_analytics', hashfile_id=hashfile.id) }}" role="button" title="Analytics" aria-label="View analytics for hashfile {{ hashfile.name }}"></a>
+                        <a
+                            class="fa fa-info btn btn-info"
+                            href="{{ url_for('hashfiles.hashfiles_detail', hashfile_id=hashfile.id) }}"
+                            role="button"
+                            title="Info"
+                            aria-label="View hashfile details for {{ hashfile.name }}"
+                        ></a>
+                        {% if current_user.admin %}
+                        <a
+                            class="fa fa-trash btn btn-danger"
+                            href="{{ url_for('hashfiles.hashfiles_detail', hashfile_id=hashfile.id) }}#admin-actions"
+                            role="button"
+                            title="Delete"
+                            aria-label="Manage deletion for hashfile {{ hashfile.name }}"
+                        ></a>
+                        {% endif %}
+                    </td>
+                </tr>
                 {% endfor %}
                 {% if not hashfiles %}
                 <tr>

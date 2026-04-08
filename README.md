@@ -127,7 +127,42 @@ docker compose run --rm bootstrap
 
 Do not use `python3 ./hashcrush.py setup` on an existing deployment. It is destructive and rebuilds the database from scratch.
 
-Current releases expect schema version `8`.
+Current releases expect schema version `9`.
+
+## External Mounted Wordlists
+
+For very large static wordlists, prefer mounting them into the containers and
+registering the container path in HashCrush instead of uploading and copying the
+file into managed storage.
+
+Recommended pattern:
+
+1. Keep normal app storage under `HASHCRUSH_STORAGE_PATH`.
+2. Mount a separate read-only host directory, for example:
+   - host: `/srv/hashcrush-wordlists`
+   - container: `/mnt/hashcrush-wordlists`
+3. HashCrush mounts that host directory read-only into `web`, `web-test`,
+   `upload-worker`, and `worker` at `/mnt/hashcrush-wordlists`.
+4. Set the host path in `.env`:
+   - `HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH=/srv/hashcrush-wordlists`
+5. In the UI, use `Wordlists -> Add Wordlist -> Register Mounted File`.
+
+Example startup:
+
+```bash
+docker compose up -d --build
+```
+
+Docker Compose reads `HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH` from `.env` and
+mounts it at the fixed container path `/mnt/hashcrush-wordlists`.
+
+Behavior notes:
+- external wordlists are stored by absolute container path in the database
+- the mounted path inside the containers is always `/mnt/hashcrush-wordlists`
+- the host directory and filenames can change, but the in-container path must
+  remain stable for already-registered external wordlists
+- deleting an external wordlist in HashCrush removes only the DB record, not the mounted file
+- external wordlists are not included in the managed `STORAGE_PATH` backup tarball
 
 ## Manual Host Installation
 
@@ -239,6 +274,7 @@ python3 ./hashcrush.py
 Restore expectations:
 - `STORAGE_PATH` should be restored to the same absolute path whenever possible.
 - Uploaded wordlists and rules are stored by absolute path in the database. If you restore them to a different path, those DB paths must be rewritten before use.
+- External mounted wordlists are not stored under `STORAGE_PATH`; back up and restore those host directories separately.
 - `RUNTIME_PATH` should exist and be writable, but its previous contents should not be restored.
 - `HASHCRUSH_DATA_ENCRYPTION_KEY` must match the key used when the data was written, or encrypted hash material will be unreadable.
 

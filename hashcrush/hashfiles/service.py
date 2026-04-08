@@ -33,6 +33,25 @@ class HashfileCreationResult:
     imported_hash_links: int
 
 
+def _summarize_hashfile_domain_id(hashfile_id: int) -> int | None:
+    """Return the one effective domain for a hashfile, or None if mixed/empty."""
+
+    distinct_domain_ids = [
+        int(domain_id)
+        for domain_id in db.session.scalars(
+            select(HashfileHashes.domain_id)
+            .where(
+                HashfileHashes.hashfile_id == hashfile_id,
+                HashfileHashes.domain_id.is_not(None),
+            )
+            .distinct()
+        ).all()
+    ]
+    if len(distinct_domain_ids) == 1:
+        return distinct_domain_ids[0]
+    return None
+
+
 def _selected_hash_type(
     *,
     file_type: str | None,
@@ -123,7 +142,8 @@ def create_hashfile_from_path(
     *,
     hashfile_path: str,
     hashfile_name: str,
-    domain_id: int,
+    domain_id: int | None = None,
+    default_domain_name: str | None = None,
     file_type: str,
     hash_type: str,
     progress_callback=None,
@@ -156,6 +176,7 @@ def create_hashfile_from_path(
         hashfile_path=hashfile_path,
         file_type=file_type,
         hash_type=normalized_hash_type,
+        default_domain_name=default_domain_name,
         progress_callback=(
             (lambda current, total: progress_callback("import", current, total))
             if progress_callback is not None
@@ -172,6 +193,7 @@ def create_hashfile_from_path(
     if persisted_hashfile is None:
         db.session.rollback()
         return None, "Failed importing hashfile. Refresh and retry."
+    persisted_hashfile.domain_id = _summarize_hashfile_domain_id(persisted_hashfile_id)
 
     imported_hash_links = int(
         db.session.scalar(
@@ -194,7 +216,8 @@ def create_hashfile_from_path(
 def create_hashfile_from_form(
     form,
     *,
-    domain_id: int,
+    domain_id: int | None = None,
+    default_domain_name: str | None = None,
 ) -> tuple[HashfileCreationResult | None, str | None]:
     """Create and import a shared hashfile from a form submission."""
 
@@ -224,6 +247,7 @@ def create_hashfile_from_form(
             hashfile_path=hashfile_path,
             hashfile_name=hashfile_name,
             domain_id=domain_id,
+            default_domain_name=default_domain_name,
             file_type=form.file_type.data,
             hash_type=(
                 _selected_hash_type(

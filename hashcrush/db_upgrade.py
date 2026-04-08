@@ -9,7 +9,7 @@ from sqlalchemy import inspect, text
 import hashcrush
 from hashcrush.models import AuditLog, SchemaVersion, UploadOperations, db, utc_now_naive
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 
 
 @dataclass(frozen=True)
@@ -311,6 +311,68 @@ def _migration_008_expand_upload_operations_queue_metadata() -> None:
         db.session.commit()
 
 
+def _foreign_keys(table_name: str) -> list[dict]:
+    inspector = inspect(db.engine)
+    if table_name not in inspector.get_table_names():
+        return []
+    return inspector.get_foreign_keys(table_name)
+
+
+def _migration_009_make_domains_optional_and_per_account() -> None:
+    """Allow optional hashfile/job domains and persist inferred domains per account."""
+
+    inspector = inspect(db.engine)
+    table_names = inspector.get_table_names()
+    if "jobs" in table_names:
+        db.session.execute(text("ALTER TABLE jobs ALTER COLUMN domain_id DROP NOT NULL"))
+        db.session.commit()
+    if "hashfiles" in table_names:
+        db.session.execute(
+            text("ALTER TABLE hashfiles ALTER COLUMN domain_id DROP NOT NULL")
+        )
+        db.session.commit()
+    if "hashfile_hashes" not in table_names:
+        return
+
+    _add_column_if_missing("hashfile_hashes", "domain_id", "INTEGER NULL")
+
+    has_domain_fk = any(
+        fk.get("referred_table") == "domains"
+        and fk.get("constrained_columns") == ["domain_id"]
+        for fk in _foreign_keys("hashfile_hashes")
+    )
+    if not has_domain_fk:
+        db.session.execute(
+            text(
+                "ALTER TABLE hashfile_hashes "
+                "ADD CONSTRAINT fk_hashfile_hashes_domain_id_domains "
+                "FOREIGN KEY (domain_id) REFERENCES domains (id) ON DELETE RESTRICT"
+            )
+        )
+        db.session.commit()
+
+    if "ix_hashfile_hashes_domain_id" not in _index_names("hashfile_hashes"):
+        db.session.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_hashfile_hashes_domain_id "
+                "ON hashfile_hashes (domain_id)"
+            )
+        )
+        db.session.commit()
+
+    db.session.execute(
+        text(
+            "UPDATE hashfile_hashes "
+            "SET domain_id = hashfiles.domain_id "
+            "FROM hashfiles "
+            "WHERE hashfile_hashes.hashfile_id = hashfiles.id "
+            "AND hashfile_hashes.domain_id IS NULL "
+            "AND hashfiles.domain_id IS NOT NULL"
+        )
+    )
+    db.session.commit()
+
+
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(
         version=1,
@@ -359,6 +421,12 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
         name="expand_upload_operations_queue_metadata",
         summary="Add queue metadata for the dedicated upload worker.",
         upgrade=_migration_008_expand_upload_operations_queue_metadata,
+    ),
+    MigrationStep(
+        version=9,
+        name="make_domains_optional_and_per_account",
+        summary="Allow optional hashfile/job domains and persist inferred domains per imported account.",
+        upgrade=_migration_009_make_domains_optional_and_per_account,
     ),
 )
 

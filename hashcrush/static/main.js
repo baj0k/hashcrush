@@ -513,7 +513,8 @@
                 ).filter(function (input) {
                     return input.files && input.files.length > 0;
                 });
-                if (!fileInputs.length) {
+                var allowNoFileProgress = form.dataset.uploadProgressNoFile === 'true';
+                if (!fileInputs.length && !allowNoFileProgress) {
                     return;
                 }
 
@@ -533,14 +534,24 @@
                     }, 0);
                 }, 0);
 
-                setUploadStatus(form, {
-                    title: 'Uploading file...',
-                    detail: totalBytes > 0
-                        ? '0 B of ' + formatUploadBytes(totalBytes)
-                        : 'Starting upload.',
-                    percent: 0,
-                    label: '0%',
-                });
+                if (fileInputs.length) {
+                    setUploadStatus(form, {
+                        title: 'Uploading file...',
+                        detail: totalBytes > 0
+                            ? '0 B of ' + formatUploadBytes(totalBytes)
+                            : 'Starting upload.',
+                        percent: 0,
+                        label: '0%',
+                    });
+                } else {
+                    setUploadStatus(form, {
+                        title: 'Starting processing...',
+                        detail: 'The server is preparing the wordlist for background processing.',
+                        percent: 0,
+                        label: 'Starting...',
+                        processing: true,
+                    });
+                }
 
                 var xhr = new XMLHttpRequest();
                 xhr.open((form.method || 'POST').toUpperCase(), form.action || window.location.href, true);
@@ -567,15 +578,17 @@
                     });
                 });
 
-                xhr.upload.addEventListener('load', function () {
-                    setUploadStatus(form, {
-                        title: 'Upload complete. Processing file...',
-                        detail: 'The server is validating and loading the file. Large uploads can take a while.',
-                        percent: 100,
-                        label: 'Processing...',
-                        processing: true,
+                if (fileInputs.length) {
+                    xhr.upload.addEventListener('load', function () {
+                        setUploadStatus(form, {
+                            title: 'Upload complete. Processing file...',
+                            detail: 'The server is validating and loading the file. Large uploads can take a while.',
+                            percent: 100,
+                            label: 'Processing...',
+                            processing: true,
+                        });
                     });
-                });
+                }
 
                 function restoreSubmitButtons() {
                     delete form.dataset.uploadSubmitting;

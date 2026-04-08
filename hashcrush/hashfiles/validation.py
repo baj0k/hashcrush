@@ -9,6 +9,10 @@ from dataclasses import dataclass
 from flask import current_app, has_app_context
 from sqlalchemy import select
 
+from hashcrush.domains.service import (
+    extract_domain_name_from_username,
+    normalize_domain_name,
+)
 from hashcrush.models import Hashes, HashfileHashes, db
 from hashcrush.utils.file_ops import get_md5_hash
 from hashcrush.utils.secret_storage import (
@@ -33,6 +37,7 @@ class _PreparedImportRow:
     alternate_digest: str | None
     encoded_username: str
     username_digest: str
+    domain_name: str | None
 
 
 def _get_hashfile_validation_limit(
@@ -156,7 +161,7 @@ def _normalize_hashfile_import_row(
     line: str,
     file_type: str | None,
     hash_type: str,
-) -> tuple[str, int, str | None] | None:
+) -> tuple[str, int, str | None, str | None] | None:
     file_type = normalize_hashfile_file_type(file_type)
 
     if file_type == "hash_only":
@@ -169,7 +174,12 @@ def _normalize_hashfile_import_row(
         if hash_type == "2100":
             dcc_parts = hash_value.split("#")
             username = dcc_parts[1] if len(dcc_parts) >= 3 else None
-        return hash_value, normalize_hash_type(hash_type), username
+        return (
+            hash_value,
+            normalize_hash_type(hash_type),
+            username,
+            extract_domain_name_from_username(username),
+        )
 
     if file_type == "user_hash":
         if ":" not in line:
@@ -180,13 +190,24 @@ def _normalize_hashfile_import_row(
             hash_value = hash_value.lower()
         elif hash_type == "2100":
             hash_value = hash_value.lower().replace("$dcc2$", "$DCC2$")
-        return hash_value, normalize_hash_type(hash_type), username
+        return (
+            hash_value,
+            normalize_hash_type(hash_type),
+            username,
+            extract_domain_name_from_username(username),
+        )
 
     if file_type == "shadow":
         line_parts = line.split(":")
         if len(line_parts) < 2:
             raise ValueError("Invalid shadow line")
-        return line_parts[1], normalize_hash_type(hash_type), line_parts[0]
+        username = line_parts[0]
+        return (
+            line_parts[1],
+            normalize_hash_type(hash_type),
+            username,
+            extract_domain_name_from_username(username),
+        )
 
     if file_type == "pwdump":
         line_parts = line.split(":")
@@ -194,7 +215,13 @@ def _normalize_hashfile_import_row(
             raise ValueError("Invalid pwdump line")
         if re.search(r"\$$", line_parts[0]):
             return None
-        return line_parts[3].lower(), 1000, line_parts[0]
+        username = line_parts[0]
+        return (
+            line_parts[3].lower(),
+            1000,
+            username,
+            extract_domain_name_from_username(username),
+        )
 
     if file_type == "kerberos":
         hash_value = line.lower()
@@ -206,7 +233,12 @@ def _normalize_hashfile_import_row(
             if hash_type == "18200"
             else kerberos_parts[3]
         )
-        return hash_value, normalize_hash_type(hash_type), username
+        return (
+            hash_value,
+            normalize_hash_type(hash_type),
+            username,
+            extract_domain_name_from_username(username),
+        )
 
     if file_type == "NetNTLM":
         line_list = line.split(":")
@@ -219,7 +251,13 @@ def _normalize_hashfile_import_row(
         line_list[4] = line_list[4].lower()
         line_list[5] = line_list[5].lower()
         normalized_line = ":".join(line_list)
-        return normalized_line, normalize_hash_type(hash_type), line_list[0]
+        username = line_list[0]
+        return (
+            normalized_line,
+            normalize_hash_type(hash_type),
+            username,
+            extract_domain_name_from_username(username),
+        )
 
     raise ValueError("Invalid hashfile format")
 
@@ -229,6 +267,7 @@ def _prepare_import_row(
     line: str,
     file_type: str | None,
     hash_type: str,
+    default_domain_name: str | None = None,
 ) -> _PreparedImportRow | None:
     normalized_row = _normalize_hashfile_import_row(
         line=line,
@@ -238,7 +277,7 @@ def _prepare_import_row(
     if normalized_row is None:
         return None
 
-    hash_value, normalized_hash_type, username = normalized_row
+    hash_value, normalized_hash_type, username, inferred_domain_name = normalized_row
     current_digest = get_ciphertext_search_digest(hash_value)
     legacy_digest = get_md5_hash(hash_value)
     preferred_digest = current_digest or legacy_digest
@@ -259,6 +298,7 @@ def _prepare_import_row(
         alternate_digest=legacy_digest if legacy_digest != preferred_digest else None,
         encoded_username=encoded_username,
         username_digest=username_digest,
+        domain_name=inferred_domain_name or normalize_domain_name(default_domain_name),
     )
 
 
@@ -333,6 +373,16 @@ def _flush_import_batch(
             row_hash_ids[row] = hash_id
 
     hash_ids = sorted({row_hash_ids[row] for row in batch_rows})
+    domain_names = sorted({row.domain_name for row in batch_rows if row.domain_name})
+    domain_ids_by_name: dict[str, int] = {}
+    if domain_names:
+        from hashcrush.domains.service import get_or_create_domain_by_name
+
+        for domain_name in domain_names:
+            domain = get_or_create_domain_by_name(domain_name)
+            if domain is not None:
+                domain_ids_by_name[domain_name] = int(domain.id)
+
     username_digests = sorted({row.username_digest for row in batch_rows})
     existing_links = (
         db.session.execute(
@@ -364,6 +414,9 @@ def _flush_import_batch(
                 username=row.encoded_username,
                 username_digest=row.username_digest,
                 hashfile_id=hashfile_id,
+                domain_id=domain_ids_by_name.get(row.domain_name)
+                if row.domain_name
+                else None,
             )
         )
 
@@ -379,10 +432,12 @@ def import_hashfilehashes(
     hashfile_path,
     file_type,
     hash_type,
+    default_domain_name=None,
     progress_callback=None,
 ):
     """Import all hashes from a staged hashfile into DB associations."""
     file_type = normalize_hashfile_file_type(file_type)
+    normalized_default_domain_name = normalize_domain_name(default_domain_name)
     try:
         total_bytes = os.path.getsize(hashfile_path) if progress_callback is not None else 0
     except OSError:
@@ -404,6 +459,7 @@ def import_hashfilehashes(
                     line=line,
                     file_type=file_type,
                     hash_type=hash_type,
+                    default_domain_name=normalized_default_domain_name,
                 )
                 if prepared_row is not None:
                     batch_rows.append(prepared_row)

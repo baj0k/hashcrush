@@ -137,10 +137,10 @@ class Jobs(db.Model):
         ForeignKey("hashfiles.id", ondelete="RESTRICT"),
         nullable=True,
     )
-    domain_id: Mapped[int] = mapped_column(
+    domain_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("domains.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
     owner_id: Mapped[int] = mapped_column(
         Integer,
@@ -152,7 +152,7 @@ class Jobs(db.Model):
         back_populates="jobs",
         lazy="select",
     )
-    domain: Mapped[Domains] = relationship(
+    domain: Mapped[Domains | None] = relationship(
         "Domains",
         back_populates="jobs",
         lazy="select",
@@ -250,12 +250,12 @@ class Hashfiles(db.Model):
         default=utc_now_naive,
     )
     runtime: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
-    domain_id: Mapped[int] = mapped_column(
+    domain_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("domains.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
-    domain: Mapped[Domains] = relationship(
+    domain: Mapped[Domains | None] = relationship(
         "Domains",
         back_populates="hashfiles",
         lazy="select",
@@ -276,6 +276,7 @@ class HashfileHashes(db.Model):
     """Class object to represent HashfileHashes"""
 
     __table_args__ = (
+        db.Index("ix_hashfile_hashes_domain_id", "domain_id"),
         db.UniqueConstraint(
             "hashfile_id",
             "hash_id",
@@ -303,6 +304,11 @@ class HashfileHashes(db.Model):
         nullable=False,
         index=True,
     )
+    domain_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("domains.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     hash: Mapped[Hashes] = relationship(
         "Hashes",
         back_populates="hashfile_hashes",
@@ -311,6 +317,10 @@ class HashfileHashes(db.Model):
     hashfile: Mapped[Hashfiles] = relationship(
         "Hashfiles",
         back_populates="hashfile_hashes",
+        lazy="select",
+    )
+    domain: Mapped[Domains | None] = relationship(
+        "Domains",
         lazy="select",
     )
 

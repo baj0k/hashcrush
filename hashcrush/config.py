@@ -67,6 +67,28 @@ def _parse_int(value: str | None, fallback: int, minimum: int = 0) -> int:
     return parsed
 
 
+def _parse_path_list(
+    value: str | None,
+    fallback: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    normalized_value = sanitize_config_input(value)
+    if not normalized_value.strip():
+        return tuple(
+            os.path.abspath(os.path.expanduser(str(item).strip()))
+            for item in fallback
+            if str(item).strip()
+        )
+    results: list[str] = []
+    for raw_item in normalized_value.replace(";", ",").split(","):
+        selected = raw_item.strip()
+        if not selected:
+            continue
+        normalized = os.path.abspath(os.path.expanduser(selected))
+        if normalized not in results:
+            results.append(normalized)
+    return tuple(results)
+
+
 def _load_file_config(config_path: str) -> tuple[ConfigParser, list[str]]:
     parser = ConfigParser(interpolation=None)
     loaded_files = parser.read(config_path)
@@ -291,6 +313,7 @@ def build_config(overrides: dict[str, object] | None = None) -> dict[str, object
     default_storage_path = "/var/lib/hashcrush"
     default_ssl_cert_path = "/etc/hashcrush/ssl/cert.pem"
     default_ssl_key_path = "/etc/hashcrush/ssl/key.pem"
+    default_external_wordlists_path = "/mnt/hashcrush-wordlists"
 
     return {
         "HASHCRUSH_CONFIG_PATH": config_path,
@@ -324,6 +347,10 @@ def build_config(overrides: dict[str, object] | None = None) -> dict[str, object
             os.getenv("HASHCRUSH_STORAGE_PATH")
             or file_config.get("app", "storage_path", fallback=default_storage_path),
             default_storage_path,
+        ),
+        "EXTERNAL_WORDLISTS_PATH": _normalize_dir_path(
+            default_external_wordlists_path,
+            default_external_wordlists_path,
         ),
         "SSL_CERT_PATH": _normalize_file_path(
             os.getenv("HASHCRUSH_SSL_CERT_PATH")

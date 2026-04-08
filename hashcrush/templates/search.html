@@ -48,15 +48,8 @@
                     {% for entry in results %}
                         <tr>
                             <td>
-                                {% for hashfile in hashfiles %}
-                                    {% if hashfile.id == entry[1].hashfile_id %}
-                                        {% for domain in domains %}
-                                            {% if domain.id == hashfile.domain_id %}
-                                                {{ domain.name }}
-                                            {% endif %}
-                                        {% endfor %}
-                                    {% endif %}
-                                {% endfor %}
+                                {% set row_domain_id = entry[1].domain_id or hashfile_domain_ids.get(entry[1].hashfile_id) %}
+                                {{ domain_names_by_id.get(row_domain_id, 'None') }}
                             </td>
                             <td>
                                 {% if entry[1].username %}

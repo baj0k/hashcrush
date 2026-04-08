@@ -14,6 +14,10 @@ from sqlalchemy.exc import IntegrityError
 
 from hashcrush import create_app
 from hashcrush.config import sanitize_config_input
+from hashcrush.domains.service import (
+    extract_domain_name_from_username,
+    get_or_create_domain_by_name,
+)
 from hashcrush.forms_utils import normalize_text_input
 from hashcrush.models import (
     AuditLog,
@@ -226,6 +230,7 @@ def _seed_hashfile_hash(
     hash_id: int,
     hashfile_id: int,
     username: str | None = None,
+    domain_id: int | None = None,
 ) -> HashfileHashes:
     normalized_username = username or ""
     encoded_username = ""
@@ -233,9 +238,19 @@ def _seed_hashfile_hash(
     if username is not None:
         encoded_username = encode_username_for_storage(normalized_username)
         username_digest = get_username_search_digest(normalized_username) or ""
+    resolved_domain_id = domain_id
+    if resolved_domain_id is None:
+        inferred_domain_name = extract_domain_name_from_username(username)
+        if inferred_domain_name:
+            inferred_domain = get_or_create_domain_by_name(inferred_domain_name)
+            resolved_domain_id = inferred_domain.id if inferred_domain else None
+        else:
+            hashfile = db.session.get(Hashfiles, hashfile_id)
+            resolved_domain_id = hashfile.domain_id if hashfile is not None else None
     row = HashfileHashes(
         hash_id=hash_id,
         hashfile_id=hashfile_id,
+        domain_id=resolved_domain_id,
         username=encoded_username,
         username_digest=username_digest,
     )

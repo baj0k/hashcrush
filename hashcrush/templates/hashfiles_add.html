@@ -2,7 +2,7 @@
 {% block header %}
 <div class="hc-page-header">
     <h1>Create Shared Hashfile</h1>
-    <p class="hc-page-intro">Register a shared hashfile outside the job flow so it can be reused by jobs in the selected domain.</p>
+    <p class="hc-page-intro">Register a shared hashfile outside the job flow so it can be reused by jobs. Domains are inferred from usernames like <code>domain\user</code>; use the fallback field only when the file has no domain prefix.</p>
 </div>
 {% endblock header %}
 {% block content %}
@@ -11,19 +11,6 @@
         {{ hashfilesForm.hidden_tag() }}
         <fieldset class="form-group">
             <div class="form-group">
-                {{ hashfilesForm.domain_id.label(class="form-control-label") }}
-                {% if hashfilesForm.domain_id.errors %}
-                    {{ hashfilesForm.domain_id(class="form-control form-control-lg is-invalid", data_toggle_target="new_domain_div", data_toggle_value="add_new") }}
-                    <div class="invalid-feedback">
-                        {% for error in hashfilesForm.domain_id.errors %}
-                            <span>{{ error }}</span>
-                        {% endfor %}
-                    </div>
-                {% else %}
-                    {{ hashfilesForm.domain_id(class="form-control form-control-lg", data_toggle_target="new_domain_div", data_toggle_value="add_new") }}
-                {% endif %}
-            </div>
-            <div class="form-group{% if hashfilesForm.domain_id.data != 'add_new' %} hc-hidden{% endif %}" id="new_domain_div">
                 {{ hashfilesForm.domain_name.label(class="form-control-label") }}
                 {% if hashfilesForm.domain_name.errors %}
                     {{ hashfilesForm.domain_name(class="form-control form-control-lg is-invalid") }}
@@ -33,10 +20,10 @@
                         {% endfor %}
                     </div>
                 {% else %}
-                    {{ hashfilesForm.domain_name(class="form-control form-control-lg") }}
+                    {{ hashfilesForm.domain_name(class="form-control form-control-lg", placeholder="Optional fallback for rows without domain\\username") }}
                 {% endif %}
                 <small class="form-text text-muted">
-                    If this domain already exists, the existing shared domain will be reused.
+                    Leave blank when usernames already contain a prefix like <code>domain\username</code>. If provided, the fallback is only used for rows without an inferred domain.
                 </small>
             </div>
             <div class="form-group">

@@ -8,7 +8,7 @@
     <div class="hc-page-actions">
         <a class="btn btn-secondary btn-sm" href="{{ url_for('jobs.jobs_list') }}">Back to Jobs</a>
         {% if selected_hashfile %}
-        <a class="btn btn-warning btn-sm" href="{{ url_for('analytics.get_analytics') }}?domain_id={{ job.domain_id }}&hashfile_id={{ job.hashfile_id }}">Analytics</a>
+        <a class="btn btn-warning btn-sm" href="{{ url_for('analytics.get_analytics', hashfile_id=job.hashfile_id, domain_id=domain.id) if domain else url_for('analytics.get_analytics', hashfile_id=job.hashfile_id) }}">Analytics</a>
         {% endif %}
         {% if can_edit_job %}
         <a class="btn btn-primary btn-sm" href="{{ url_for('jobs.jobs_builder', job_id=job.id, tab='basics') }}">Edit Builder</a>
@@ -41,12 +41,12 @@
                 <td>{{ job.ended_at or 'N/A' }}</td>
             </tr>
             <tr>
-                <th scope="row">Domain</th>
+                <th scope="row">Effective Domain</th>
                 <td>
                     {% if domain %}
                     <a href="{{ url_for('domains.domains_detail', domain_id=domain.id) }}">{{ domain.name }}</a>
                     {% else %}
-                    N/A
+                    Mixed / None
                     {% endif %}
                 </td>
             </tr>

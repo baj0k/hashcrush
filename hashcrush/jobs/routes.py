@@ -18,7 +18,6 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
 from hashcrush.audit import capture_audit_actor, record_audit_event
-from hashcrush.domains.service import resolve_or_create_shared_domain
 from hashcrush.hashfiles.service import create_hashfile_from_form
 from hashcrush.hashfiles.validation import normalize_hashfile_file_type
 from hashcrush.jobs.access import (
@@ -95,16 +94,6 @@ def jobs_add():
     """Render and create draft jobs through the unified builder."""
     jobs_form = _build_jobs_form()
     if jobs_form.validate_on_submit():
-        domain_result, domain_error = resolve_or_create_shared_domain(
-            jobs_form.domain_id.data,
-            new_domain_name=jobs_form.domain_name.data,
-            allow_create=current_user.admin,
-        )
-        if domain_error:
-            flash(domain_error, 'danger')
-            return _render_jobs_builder(jobs_form=jobs_form, active_tab='basics')
-        visible_domain = domain_result.domain
-
         try:
             selected_priority = int(jobs_form.priority.data)
         except (TypeError, ValueError):
@@ -114,25 +103,15 @@ def jobs_add():
         job = Jobs( name = jobs_form.name.data,
                     priority = job_priority,
                     status = 'Incomplete',
-                    domain_id = int(visible_domain.id),
+                    domain_id = None,
                     owner_id = current_user.id)
         db.session.add(job)
         try:
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
-            flash('Job could not be created because its name already exists or the selected domain changed. Refresh and retry.', 'danger')
+            flash('Job could not be created because its name already exists. Refresh and retry.', 'danger')
             return _render_jobs_builder(jobs_form=jobs_form, active_tab='basics')
-        if domain_result.created:
-            record_audit_event(
-                'domain.create',
-                'domain',
-                target_id=visible_domain.id,
-                summary=f'Created shared domain "{visible_domain.name}" from job creation.',
-                details={'domain_name': visible_domain.name, 'source': 'jobs.add'},
-            )
-        elif jobs_form.domain_id.data == 'add_new':
-            flash(f'Using existing shared domain "{visible_domain.name}".', 'info')
         record_audit_event(
             'job.create',
             'job',
@@ -176,54 +155,21 @@ def jobs_builder_update_basics(job_id):
     if not jobs_form.validate_on_submit():
         return _render_jobs_builder(job=job, jobs_form=jobs_form, active_tab='basics')
 
-    domain_result, domain_error = resolve_or_create_shared_domain(
-        jobs_form.domain_id.data,
-        new_domain_name=jobs_form.domain_name.data,
-        allow_create=current_user.admin,
-    )
-    if domain_error:
-        flash(domain_error, 'danger')
-        return _render_jobs_builder(job=job, jobs_form=jobs_form, active_tab='basics')
-    visible_domain = domain_result.domain
-
     try:
         selected_priority = int(jobs_form.priority.data)
     except (TypeError, ValueError):
         selected_priority = 3
     job_priority = selected_priority if 1 <= selected_priority <= 5 else 3
 
-    previous_domain_id = job.domain_id
     job.name = jobs_form.name.data
     job.priority = job_priority
-    job.domain_id = int(visible_domain.id)
-    if (
-        job.hashfile_id
-        and previous_domain_id != job.domain_id
-        and (
-            not db.session.get(Hashfiles, job.hashfile_id)
-            or db.session.get(Hashfiles, job.hashfile_id).domain_id != job.domain_id
-        )
-    ):
-        job.hashfile_id = None
-        flash('Domain changed. Please re-select a hashfile for the new domain.', 'warning')
 
     try:
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
-        flash('Job could not be updated because its name already exists or the selected domain changed. Refresh and retry.', 'danger')
+        flash('Job could not be updated because its name already exists. Refresh and retry.', 'danger')
         return _render_jobs_builder(job=job, jobs_form=jobs_form, active_tab='basics')
-
-    if domain_result.created:
-        record_audit_event(
-            'domain.create',
-            'domain',
-            target_id=visible_domain.id,
-            summary=f'Created shared domain "{visible_domain.name}" from job builder.',
-            details={'domain_name': visible_domain.name, 'source': 'jobs.builder'},
-        )
-    elif jobs_form.domain_id.data == 'add_new':
-        flash(f'Using existing shared domain "{visible_domain.name}".', 'info')
 
     flash('Updated draft job basics.', 'success')
     return _builder_redirect(job.id, 'hashes')
@@ -283,7 +229,7 @@ def jobs_assigned_hashfile(job_id):
                         or 'uploaded-hashfile.txt'
                     ),
                     'job_id': job.id,
-                    'domain_id': job.domain_id,
+                    'default_domain_name': jobs_new_hashfile_form.domain_name.data,
                     'file_type': normalized_file_type or jobs_new_hashfile_form.file_type.data,
                     'hash_type': hash_type or '',
                     'audit_actor': capture_audit_actor(),
@@ -293,7 +239,7 @@ def jobs_assigned_hashfile(job_id):
 
         creation_result, error_message = create_hashfile_from_form(
             jobs_new_hashfile_form,
-            domain_id=job.domain_id,
+            default_domain_name=jobs_new_hashfile_form.domain_name.data,
         )
         if error_message:
             flash(error_message, 'danger')
@@ -306,6 +252,7 @@ def jobs_assigned_hashfile(job_id):
 
         hashfile = creation_result.hashfile
         job.hashfile_id = hashfile.id
+        job.domain_id = hashfile.domain_id
         db.session.commit()
         record_audit_event(
             'hashfile.create',
@@ -314,7 +261,7 @@ def jobs_assigned_hashfile(job_id):
             summary=f'Registered shared hashfile "{hashfile.name}" via job assignment.',
             details={
                 'hashfile_name': hashfile.name,
-                'domain_id': job.domain_id,
+                'domain_id': hashfile.domain_id,
                 'job_id': job.id,
                 'hash_type': creation_result.hash_type,
                 'imported_hash_links': creation_result.imported_hash_links,
@@ -328,7 +275,7 @@ def jobs_assigned_hashfile(job_id):
     elif request.method == 'POST' and request.form.get('hashfile_id'):
         selected_hashfile = _get_assignable_hashfile(job, request.form.get('hashfile_id'))
         if not selected_hashfile:
-            flash('Selected hashfile is invalid for this job domain.', 'danger')
+            flash('Selected hashfile is invalid or no longer available.', 'danger')
             return _render_jobs_builder(
                 job=job,
                 active_tab='hashes',
@@ -336,6 +283,7 @@ def jobs_assigned_hashfile(job_id):
             )
 
         job.hashfile_id = selected_hashfile.id
+        job.domain_id = selected_hashfile.domain_id
         db.session.commit()
         return _builder_redirect(job.id, 'tasks')
     elif request.method == 'POST' and 'hashfile_id' in request.form:
@@ -367,7 +315,6 @@ def jobs_assigned_hashfile_cracked(job_id, hashfile_id):
     if (
         not hashfile
         or hashfile.id != job.hashfile_id
-        or hashfile.domain_id != job.domain_id
     ):
         flash('Invalid hashfile for this job.', 'danger')
         return _builder_redirect(job.id, 'hashes')

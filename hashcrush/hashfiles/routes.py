@@ -19,7 +19,7 @@ from sqlalchemy.sql import exists
 
 from hashcrush.audit import capture_audit_actor, record_audit_event
 from hashcrush.authz import admin_required_redirect, visible_jobs_query
-from hashcrush.domains.service import resolve_or_create_shared_domain
+from hashcrush.domains.service import hashfile_domain_summaries
 from hashcrush.hashfiles.forms import HashfilesAddForm
 from hashcrush.hashfiles.validation import normalize_hashfile_file_type
 from hashcrush.hashfiles.service import create_hashfile_from_form
@@ -127,21 +127,15 @@ def _hashfile_detail_context(hashfile: Hashfiles) -> dict[str, object]:
         'associated_jobs': associated_jobs,
         'hashfile_stats': stats,
         'delete_impact': _hashfile_delete_impact(hashfile.id),
+        'domain_summary': hashfile_domain_summaries([hashfile.id]).get(hashfile.id),
     }
 
 
-def _shared_domains() -> list[Domains]:
-    return db.session.execute(
-        select(Domains).order_by(Domains.name.asc())
-    ).scalars().all()
-
-
-def _render_hashfiles_add_form(form, domains):
+def _render_hashfiles_add_form(form):
     return render_template(
         'hashfiles_add.html',
         title='Hashfiles Add',
         hashfilesForm=form,
-        domains=domains,
     )
 
 
@@ -157,7 +151,15 @@ def hashfiles_list():
         page=page,
         per_page=LIST_PAGE_SIZE,
     )
-    domain_ids = sorted({hashfile.domain_id for hashfile in hashfiles})
+    hashfile_ids = [hashfile.id for hashfile in hashfiles]
+    domain_summaries = hashfile_domain_summaries(hashfile_ids)
+    domain_ids = sorted(
+        {
+            summary.domain_id
+            for summary in domain_summaries.values()
+            if summary is not None and summary.domain_id is not None
+        }
+    )
     domains = (
         db.session.execute(
             select(Domains)
@@ -167,10 +169,11 @@ def hashfiles_list():
         if domain_ids
         else []
     )
-    hashfile_ids = [hashfile.id for hashfile in hashfiles]
     hashfiles_by_domain: dict[int, list[Hashfiles]] = defaultdict(list)
     for hashfile in hashfiles:
-        hashfiles_by_domain[hashfile.domain_id].append(hashfile)
+        summary = domain_summaries.get(hashfile.id)
+        if summary and summary.domain_id is not None:
+            hashfiles_by_domain[summary.domain_id].append(hashfile)
 
     cracked_rate = {}
     hash_type_dict = {}
@@ -187,6 +190,7 @@ def hashfiles_list():
         title='Hashfiles',
         hashfiles=hashfiles,
         domains=domains,
+        domain_summaries=domain_summaries,
         hashfiles_by_domain=hashfiles_by_domain,
         cracked_rate=cracked_rate,
         hash_type_dict=hash_type_dict,
@@ -214,12 +218,7 @@ def hashfiles_detail(hashfile_id):
 def hashfiles_add():
     """Create a new shared hashfile from the UI."""
 
-    domains = _shared_domains()
     form = HashfilesAddForm()
-    form.domain_id.choices = [('', '--SELECT DOMAIN--')] + [
-        (str(domain.id), domain.name) for domain in domains
-    ]
-    form.domain_id.choices.append(('add_new', 'Add New Domain'))
 
     if request.method == 'POST' and form.validate_on_submit():
         if _is_async_upload_request() and form.hashfile.data:
@@ -249,8 +248,7 @@ def hashfiles_add():
                         or form.hashfile.data.filename
                         or 'uploaded-hashfile.txt'
                     ),
-                    'domain_selection': form.domain_id.data,
-                    'new_domain_name': form.domain_name.data,
+                    'default_domain_name': form.domain_name.data,
                     'file_type': normalized_file_type or form.file_type.data,
                     'hash_type': hash_type or '',
                     'audit_actor': capture_audit_actor(),
@@ -258,36 +256,16 @@ def hashfiles_add():
             )
             return _async_operation_response(operation)
 
-        domain_result, domain_error = resolve_or_create_shared_domain(
-            form.domain_id.data,
-            new_domain_name=form.domain_name.data,
-            allow_create=True,
-        )
-        if domain_error:
-            flash(domain_error, 'danger')
-            return _render_hashfiles_add_form(form, domains)
-        domain = domain_result.domain
-
         creation_result, error_message = create_hashfile_from_form(
             form,
-            domain_id=domain.id,
+            default_domain_name=form.domain_name.data,
         )
         if error_message:
             flash(error_message, 'danger')
-            return _render_hashfiles_add_form(form, domains)
+            return _render_hashfiles_add_form(form)
 
         hashfile = creation_result.hashfile
         db.session.commit()
-        if domain_result.created:
-            record_audit_event(
-                'domain.create',
-                'domain',
-                target_id=domain.id,
-                summary=f'Created shared domain "{domain.name}" from hashfile creation.',
-                details={'domain_name': domain.name, 'source': 'hashfiles.add'},
-            )
-        elif form.domain_id.data == 'add_new':
-            flash(f'Using existing shared domain "{domain.name}".', 'info')
         record_audit_event(
             'hashfile.create',
             'hashfile',
@@ -295,8 +273,8 @@ def hashfiles_add():
             summary=f'Registered shared hashfile "{hashfile.name}".',
             details={
                 'hashfile_name': hashfile.name,
-                'domain_id': domain.id,
-                'domain_name': domain.name,
+                'domain_id': hashfile.domain_id,
+                'domain_name': hashfile.domain.name if hashfile.domain else None,
                 'hash_type': creation_result.hash_type,
                 'imported_hash_links': creation_result.imported_hash_links,
             },
@@ -304,7 +282,7 @@ def hashfiles_add():
         flash('Hashfile created!', 'success')
         return redirect(url_for('hashfiles.hashfiles_list'))
 
-    return _render_hashfiles_add_form(form, domains)
+    return _render_hashfiles_add_form(form)
 
 @hashfiles.route("/hashfiles/delete/<int:hashfile_id>", methods=['POST'])
 @login_required

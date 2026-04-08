@@ -16,6 +16,7 @@ from sqlalchemy import func, or_, select
 
 from hashcrush import jinja_ciphertext_decode, jinja_hex_decode
 from hashcrush.audit import record_audit_event
+from hashcrush.domains.service import visible_domains_with_hashes
 from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles, db
 from hashcrush.searches.forms import SearchForm
 from hashcrush.utils.file_ops import get_md5_hash
@@ -27,15 +28,6 @@ from hashcrush.utils.secret_storage import (
 )
 
 searches = Blueprint('searches', __name__)
-
-
-def _visible_domains_for_hashfiles(hashfile_rows: list[Hashfiles]) -> list[Domains]:
-    domain_ids = sorted({hashfile.domain_id for hashfile in hashfile_rows})
-    if not domain_ids:
-        return []
-    return db.session.execute(
-        select(Domains).where(Domains.id.in_(domain_ids))
-    ).scalars().all()
 
 
 def _scoped_search_stmt():
@@ -105,7 +97,9 @@ def searches_list():
     """Function to return list of search results"""
 
     hashfiles = db.session.execute(select(Hashfiles)).scalars().all()
-    domains = _visible_domains_for_hashfiles(hashfiles)
+    domains = visible_domains_with_hashes()
+    domain_names_by_id = {domain.id: domain.name for domain in domains}
+    hashfile_domain_ids = {hashfile.id: hashfile.domain_id for hashfile in hashfiles}
     search_form = SearchForm()
     # Domain and hashfile labels are resolved at render/export time.
     if search_form.validate_on_submit():
@@ -174,7 +168,16 @@ def searches_list():
             )
             return export_results(domains, results, hashfiles, search_form.export_type.data)
 
-    return render_template('search.html', title='Search', searchForm=search_form, domains=domains, results=results, hashfiles=hashfiles )
+    return render_template(
+        'search.html',
+        title='Search',
+        searchForm=search_form,
+        domains=domains,
+        domain_names_by_id=domain_names_by_id,
+        hashfile_domain_ids=hashfile_domain_ids,
+        results=results,
+        hashfiles=hashfiles,
+    )
 
 # Creating this in memory instead of on disk to avoid extra cleanup.
 def export_results(domains, results, hashfiles, separator):
@@ -195,13 +198,10 @@ def get_rows(str_io, domains, results, hashfiles, separator):
     writer = csv.writer(str_io,delimiter=separator)
 
     domain_names_by_id = {domain.id: domain.name for domain in domains}
-    domain_names_by_hashfile_id = {
-        hashfile.id: domain_names_by_id.get(hashfile.domain_id, "None")
-        for hashfile in hashfiles
-    }
-
+    hashfile_domain_ids = {hashfile.id: hashfile.domain_id for hashfile in hashfiles}
     for entry in results:
-        col = [domain_names_by_hashfile_id.get(entry[1].hashfile_id, "None")] # Domain
+        row_domain_id = entry[1].domain_id or hashfile_domain_ids.get(entry[1].hashfile_id)
+        col = [domain_names_by_id.get(row_domain_id, "None")] # Domain
 
         if entry[1].username: # Username
             col.append(jinja_hex_decode(entry[1].username))

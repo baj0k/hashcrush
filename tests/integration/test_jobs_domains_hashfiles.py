@@ -579,9 +579,8 @@ def test_jobs_assigned_hashfile_validates_domain_but_allows_shared_hashfiles():
             f"/jobs/{job.id}/assigned_hashfile/",
             data={"hashfile_id": str(wrong_domain_hashfile.id)},
         )
-        assert response_wrong_domain.status_code == 200
-        assert b"Selected hashfile is invalid for this job domain." in response_wrong_domain.data
-        assert db.session.get(Jobs, job.id).hashfile_id == wrong_owner_hashfile.id
+        assert response_wrong_domain.status_code == 302
+        assert db.session.get(Jobs, job.id).hashfile_id == wrong_domain_hashfile.id
 
         response_valid = client.post(
             f"/jobs/{job.id}/assigned_hashfile/",
@@ -654,7 +653,7 @@ def test_domains_delete_blocks_when_active_jobs_exist():
         assert db.session.get(Jobs, active_job.id) is not None
 
 @pytest.mark.security
-def test_domains_delete_removes_inactive_jobs_and_orphans():
+def test_domains_delete_blocks_when_hashfiles_or_inactive_jobs_still_reference_domain():
     from hashcrush.utils.utils import get_md5_hash
 
     app = _build_app()
@@ -725,11 +724,11 @@ def test_domains_delete_removes_inactive_jobs_and_orphans():
         )
         assert response.status_code == 302
 
-        assert db.session.get(Domains, domain_id) is None
-        assert db.session.get(Jobs, inactive_job_id) is None
-        assert db.session.get(Hashfiles, hashfile_id) is None
-        assert _count_rows(HashfileHashes, hashfile_id=hashfile_id) == 0
-        assert db.session.get(Hashes, orphan_hash_id) is None
+        assert db.session.get(Domains, domain_id) is not None
+        assert db.session.get(Jobs, inactive_job_id) is not None
+        assert db.session.get(Hashfiles, hashfile_id) is not None
+        assert _count_rows(HashfileHashes, hashfile_id=hashfile_id) == 1
+        assert db.session.get(Hashes, orphan_hash_id) is not None
 
 @pytest.mark.security
 def test_domains_delete_requires_exact_name_confirmation():
@@ -794,7 +793,7 @@ def test_domain_detail_page_shows_associated_hashfiles_and_jobs():
         assert "domain-detail.txt" in html
 
 @pytest.mark.security
-def test_domains_page_is_shared_read_and_admin_can_add_domains():
+def test_domains_page_is_shared_read_and_manual_creation_is_disabled():
     app = _build_app()
     with app.app_context():
         db.create_all()
@@ -809,7 +808,8 @@ def test_domains_page_is_shared_read_and_admin_can_add_domains():
         admin_client = app.test_client()
         _login_client_as_user(admin_client, admin)
         admin_html = admin_client.get("/domains").get_data(as_text=True)
-        assert 'action="/domains/add"' in admin_html
+        assert 'action="/domains/add"' not in admin_html
+        assert "created automatically" in admin_html
 
         response = admin_client.post(
             "/domains/add",
@@ -817,8 +817,8 @@ def test_domains_page_is_shared_read_and_admin_can_add_domains():
             follow_redirects=True,
         )
         assert response.status_code == 200
-        assert b"Domain created!" in response.data
-        assert _count_rows(Domains, name="New Shared Domain") == 1
+        assert b"Domains are created automatically" in response.data
+        assert _count_rows(Domains, name="New Shared Domain") == 0
 
         viewer_client = app.test_client()
         _login_client_as_user(viewer_client, viewer)
@@ -826,11 +826,10 @@ def test_domains_page_is_shared_read_and_admin_can_add_domains():
         viewer_html = viewer_response.get_data(as_text=True)
         assert viewer_response.status_code == 200
         assert "Existing Domain" in viewer_html
-        assert "New Shared Domain" in viewer_html
         assert 'href="/domains"' in viewer_client.get("/jobs").get_data(as_text=True)
 
 @pytest.mark.security
-def test_non_admin_cannot_add_domains():
+def test_non_admin_sees_same_manual_domain_creation_disabled_message():
     app = _build_app()
     with app.app_context():
         db.create_all()
@@ -850,7 +849,7 @@ def test_non_admin_cannot_add_domains():
             follow_redirects=True,
         )
         assert response.status_code == 200
-        assert b"Permission Denied" in response.data
+        assert b"Domains are created automatically" in response.data
         assert _count_rows(Domains, name="Unauthorized Domain") == 0
 
 
@@ -875,7 +874,7 @@ def test_hashfiles_page_allows_admin_to_add_shared_hashfiles():
         response = client.post(
             "/hashfiles/add",
             data={
-                "domain_id": str(domain.id),
+                "domain_name": domain.name,
                 "file_type": "hash_only",
                 "hash_type": "0",
                 "hashfile": (io.BytesIO(b"5f4dcc3b5aa765d61d8327deb882cf99\n"), "shared-hashes.txt"),
@@ -936,7 +935,7 @@ def test_hashfiles_add_supports_async_processing_progress():
         response = client.post(
             "/hashfiles/add",
             data={
-                "domain_id": str(domain.id),
+                "domain_name": domain.name,
                 "file_type": "hash_only",
                 "hash_type": "0",
                 "hashfile": (
@@ -969,7 +968,7 @@ def test_hashfiles_add_supports_async_processing_progress():
 
 
 @pytest.mark.security
-def test_hashfiles_add_allows_admin_to_create_new_domain_inline():
+def test_hashfiles_add_supports_optional_fallback_domain_creation():
     app = _build_app()
     with app.app_context():
         db.create_all()
@@ -981,15 +980,14 @@ def test_hashfiles_add_allows_admin_to_create_new_domain_inline():
 
         form_response = client.get("/hashfiles/add")
         assert form_response.status_code == 200
-        assert b"Add New Domain" in form_response.data
-        assert b"New Domain" in form_response.data
+        assert b"Fallback Domain (Optional)" in form_response.data
+        assert b"Add New Domain" not in form_response.data
         assert b'data-upload-progress-form="true"' in form_response.data
         assert b"Large file uploads continue processing" in form_response.data
 
         response = client.post(
             "/hashfiles/add",
             data={
-                "domain_id": "add_new",
                 "domain_name": "Inline Hashfile Domain",
                 "file_type": "hash_only",
                 "hash_type": "0",
@@ -1005,7 +1003,7 @@ def test_hashfiles_add_allows_admin_to_create_new_domain_inline():
         assert response.status_code == 200
         assert b"Hashfile created!" in response.data
 
-        domain = _first_row(Domains, name="Inline Hashfile Domain")
+        domain = _first_row(Domains, name="inline hashfile domain")
         assert domain is not None
         hashfile = _first_row(Hashfiles, name="inline-hashes.txt")
         assert hashfile is not None
@@ -1041,6 +1039,7 @@ def test_jobs_builder_hashfile_upload_can_run_async_and_redirect_to_tasks():
             data={
                 "file_type": "hash_only",
                 "hash_type": "0",
+                "domain_name": domain.name,
                 "hashfile": (
                     io.BytesIO(b"5f4dcc3b5aa765d61d8327deb882cf99\n"),
                     "builder-async.txt",
@@ -1086,7 +1085,6 @@ def test_hashfiles_add_reuses_existing_domain_when_admin_selects_add_new():
         response = client.post(
             "/hashfiles/add",
             data={
-                "domain_id": "add_new",
                 "domain_name": "Existing Hashfile Domain",
                 "file_type": "hash_only",
                 "hash_type": "0",
@@ -1136,7 +1134,6 @@ def test_non_admin_cannot_add_hashfiles():
         response = client.post(
             "/hashfiles/add",
             data={
-                "domain_id": str(domain.id),
                 "file_type": "hash_only",
                 "hash_type": "0",
                 "hashfile": (io.BytesIO(b"5f4dcc3b5aa765d61d8327deb882cf99\n"), "blocked.txt"),
@@ -1334,7 +1331,7 @@ def test_jobs_assign_task_group_normalizes_string_ids_and_skips_duplicates():
         assert assigned_task_ids.count(task_b.id) == 1
 
 @pytest.mark.security
-def test_jobs_add_rejects_invalid_domain_selection():
+def test_jobs_add_does_not_require_or_offer_manual_domain_selection():
     app = _build_app()
     with app.app_context():
         db.create_all()
@@ -1346,25 +1343,25 @@ def test_jobs_add_rejects_invalid_domain_selection():
 
         form_response = client.get("/jobs/add")
         assert form_response.status_code == 200
-        assert b"Add New Domain" in form_response.data
-        assert b"New Domain" in form_response.data
+        assert b"Add New Domain" not in form_response.data
+        assert b"Domains are inferred from imported usernames" in form_response.data
 
         response = client.post(
             "/jobs/add",
             data={
-                "name": "blocked-domain-job",
+                "name": "domainless-draft-job",
                 "priority": "3",
-                "domain_id": "999999",
             },
         )
-        assert response.status_code == 200
-        assert b"Not a valid choice." in response.data
+        assert response.status_code == 302
         assert _count_rows(Domains) == 0
-        assert _count_rows(Jobs) == 0
+        job = _first_row(Jobs, name="domainless-draft-job")
+        assert job is not None
+        assert job.domain_id is None
 
 
 @pytest.mark.security
-def test_jobs_add_allows_admin_to_create_new_domain_inline():
+def test_jobs_add_ignores_legacy_domain_fields_and_keeps_domain_unset():
     app = _build_app()
     with app.app_context():
         db.create_all()
@@ -1388,22 +1385,21 @@ def test_jobs_add_allows_admin_to_create_new_domain_inline():
         assert response.status_code == 302
 
         domain = _first_row(Domains, name="Inline Job Domain")
-        assert domain is not None
+        assert domain is None
 
         job = _first_row(Jobs, name="inline-domain-job")
         assert job is not None
-        assert job.domain_id == domain.id
+        assert job.domain_id is None
 
         audit_events = [
             entry.event_type
             for entry in _all_rows(AuditLog, order_by=AuditLog.id.asc())
         ]
-        assert "domain.create" in audit_events
         assert "job.create" in audit_events
 
 
 @pytest.mark.security
-def test_jobs_add_non_admin_cannot_create_new_domain_inline():
+def test_jobs_add_for_non_admin_ignores_legacy_domain_fields():
     app = _build_app()
     with app.app_context():
         db.create_all()
@@ -1425,7 +1421,6 @@ def test_jobs_add_non_admin_cannot_create_new_domain_inline():
         form_response = client.get("/jobs/add")
         assert form_response.status_code == 200
         assert b"Add New Domain" not in form_response.data
-        assert b"New Domain" not in form_response.data
 
         response = client.post(
             "/jobs/add",
@@ -1436,13 +1431,14 @@ def test_jobs_add_non_admin_cannot_create_new_domain_inline():
                 "domain_name": "Blocked Inline Domain",
             },
         )
-        assert response.status_code == 200
-        assert b"Not a valid choice." in response.data
+        assert response.status_code == 302
         assert _count_rows(Domains, name="Blocked Inline Domain") == 0
-        assert _count_rows(Jobs, name="blocked-inline-domain-job") == 0
+        job = _first_row(Jobs, name="blocked-inline-domain-job")
+        assert job is not None
+        assert job.domain_id is None
 
 @pytest.mark.security
-def test_jobs_add_uses_existing_selected_domain():
+def test_jobs_add_creates_domainless_draft_even_when_domains_exist():
     app = _build_app()
     with app.app_context():
         db.create_all()
@@ -1468,12 +1464,12 @@ def test_jobs_add_uses_existing_selected_domain():
 
         job = _first_row(Jobs, name="selected-domain-job")
         assert job is not None
-        assert job.domain_id == existing_domain.id
+        assert job.domain_id is None
         assert _count_rows(Domains) == 1
 
 
 @pytest.mark.security
-def test_jobs_add_reuses_existing_domain_when_admin_selects_add_new():
+def test_jobs_add_does_not_create_or_reuse_domains_from_legacy_fields():
     app = _build_app()
     with app.app_context():
         db.create_all()
@@ -1503,13 +1499,12 @@ def test_jobs_add_reuses_existing_domain_when_admin_selects_add_new():
 
         job = _first_row(Jobs, name="reuse-inline-domain-job")
         assert job is not None
-        assert job.domain_id == existing_domain.id
+        assert job.domain_id is None
 
         audit_events = [
             entry.event_type
             for entry in _all_rows(AuditLog, order_by=AuditLog.id.asc())
         ]
-        assert audit_events.count("domain.create") == 0
         assert "job.create" in audit_events
 
 @pytest.mark.security
@@ -1532,7 +1527,6 @@ def test_jobs_add_rejects_whitespace_only_name():
             data={
                 "name": "   ",
                 "priority": "3",
-                "domain_id": str(domain.id),
             },
         )
         assert response.status_code == 200
@@ -1562,7 +1556,6 @@ def test_jobs_add_handles_job_commit_conflict_without_mutating_domains(monkeypat
             data={
                 "name": "conflicting-job",
                 "priority": "3",
-                "domain_id": str(domain.id),
             },
         )
         assert response.status_code == 200
@@ -1735,7 +1728,7 @@ def test_non_owner_can_view_scheduled_jobs_but_cannot_stop_them():
         summary_response = client.get(f"/jobs/{job.id}/summary")
         assert summary_response.status_code == 200
         assert b"Job:" in summary_response.data
-        assert b"Only the job owner or an admin can accept this job." in summary_response.data
+        assert b"Only the job owner or an admin can accept, edit, or delete this job." in summary_response.data
 
         draft_tasks_response = client.get(f"/jobs/{draft_job.id}/tasks")
         assert draft_tasks_response.status_code == 302
@@ -1841,7 +1834,7 @@ def test_hashfiles_add_rejects_oversized_request_before_processing():
             "/hashfiles/add",
             data={
                 "name": "oversized-hashfile",
-                "domain_id": str(domain.id),
+                "domain_name": domain.name,
                 "file_type": "hash_only",
                 "hash_type": "0",
                 "hashfile": (io.BytesIO(b"a" * 2048), "oversized.txt"),

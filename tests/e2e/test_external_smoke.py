@@ -90,15 +90,15 @@ def test_external_worker_cracks_dictionary_job_end_to_end(
 
     page.goto(f"{external_live_server}/wordlists/add", wait_until="domcontentloaded")
     _assert_heading(
-        page,
-        "Upload Wordlist",
-        failure_message=(
-            "External worker smoke test requires an admin account so it can upload a shared wordlist"
-        ),
+            page,
+            "Add Wordlist",
+            failure_message=(
+                "External worker smoke test requires an admin account so it can upload a shared wordlist"
+            ),
     )
     page.get_by_label("Name").fill(wordlist_name)
     page.set_input_files("input[name='upload']", str(wordlist_path))
-    page.get_by_role("button", name="Upload", exact=True).click()
+    page.get_by_role("button", name="Save Wordlist", exact=True).click()
     expect(page).to_have_url(re.compile(r".*/wordlists(?:\?.*)?$"), timeout=30000)
     expect(page.get_by_role("cell", name=wordlist_name, exact=True)).to_be_visible(timeout=30000)
 
@@ -126,19 +126,13 @@ def test_external_worker_cracks_dictionary_job_end_to_end(
     page.get_by_label("Job Name").fill(job_name)
     if page.locator("#priority").count() > 0:
         page.locator("#priority").select_option("3")
-    option = page.locator("#domain_id option[value='add_new']")
-    if option.count() == 0:
-        pytest.fail(
-            "External worker smoke test expected an admin-capable job form with an add_new domain option."
-        )
-    page.locator("#domain_id").select_option("add_new")
-    page.get_by_label("New Domain").fill(domain_name)
     page.get_by_role("button", name="Continue to Hashes", exact=True).click()
 
     expect(page).to_have_url(re.compile(r".*/jobs/\d+/builder.*"))
     expect(page.get_by_role("heading", name="Hashes")).to_be_visible()
     page.locator("select[name='file_type']").select_option("hash_only")
     page.locator("select[name='hash_type']").select_option("0")
+    page.get_by_label("Fallback Domain (Optional)").fill(domain_name)
     page.set_input_files("input[name='hashfile']", str(hashfile_path))
     page.get_by_role("button", name="Save Hashfile and Continue", exact=True).click()
 
