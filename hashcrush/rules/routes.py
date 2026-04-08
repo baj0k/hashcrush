@@ -11,8 +11,7 @@ from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Rules, Tasks, db
 from hashcrush.rules.forms import RulesForm
 from hashcrush.utils.file_ops import (
-    get_filehash,
-    get_linecount,
+    analyze_text_file,
     save_file,
 )
 from hashcrush.utils.storage_paths import get_storage_subdir
@@ -199,11 +198,12 @@ def rules_add():
             )
             return _async_operation_response(operation)
 
+        file_analysis = analyze_text_file(rules_path)
         rule = Rules(
             name=rule_name,
             path=rules_path,
-            size=get_linecount(rules_path),
-            checksum=get_filehash(rules_path),
+            size=file_analysis.line_count,
+            checksum=file_analysis.checksum,
         )
         db.session.add(rule)
         try:

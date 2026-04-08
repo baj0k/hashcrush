@@ -10,8 +10,7 @@ from hashcrush.audit import capture_audit_actor, record_audit_event
 from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Tasks, Wordlists, db
 from hashcrush.utils.file_ops import (
-    get_filehash,
-    get_linecount,
+    analyze_text_file,
     save_file,
 )
 from hashcrush.utils.storage_paths import get_storage_subdir
@@ -199,12 +198,13 @@ def wordlists_add():
             )
             return _async_operation_response(operation)
 
+        file_analysis = analyze_text_file(wordlist_path)
         wordlist = Wordlists(
             name=wordlist_name,
             type='static',
             path=wordlist_path,
-            checksum=get_filehash(wordlist_path),
-            size=get_linecount(wordlist_path),
+            checksum=file_analysis.checksum,
+            size=file_analysis.line_count,
         )
         db.session.add(wordlist)
         try:

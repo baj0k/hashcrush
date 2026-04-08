@@ -20,7 +20,13 @@ from hashcrush.hashfiles.validation import (
     validate_user_hash_hashfile,
 )
 from hashcrush.jobs.status import update_job_task_status
-from hashcrush.utils.file_ops import get_filehash, get_linecount, get_md5_hash, save_file
+from hashcrush.utils.file_ops import (
+    analyze_text_file,
+    get_filehash,
+    get_linecount,
+    get_md5_hash,
+    save_file,
+)
 from hashcrush.utils.secret_storage import (
     decode_ciphertext_from_storage,
     decode_plaintext_from_storage,
@@ -52,6 +58,7 @@ __all__ = [
     "_utc_now_naive",
     "build_hashcat_argv",
     "build_hashcat_command",
+    "analyze_text_file",
     "decode_ciphertext_from_storage",
     "decode_plaintext_from_storage",
     "decode_username_from_storage",

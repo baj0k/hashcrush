@@ -149,9 +149,10 @@ def create_hashfile_from_path(
     hashfile = Hashfiles(name=hashfile_name, domain_id=domain_id)
     db.session.add(hashfile)
     db.session.flush()
+    persisted_hashfile_id = int(hashfile.id)
 
     if not import_hashfilehashes(
-        hashfile_id=hashfile.id,
+        hashfile_id=persisted_hashfile_id,
         hashfile_path=hashfile_path,
         file_type=file_type,
         hash_type=normalized_hash_type,
@@ -167,17 +168,22 @@ def create_hashfile_from_path(
             "Failed importing hashfile. Check file format/hash type and retry.",
         )
 
+    persisted_hashfile = db.session.get(Hashfiles, persisted_hashfile_id)
+    if persisted_hashfile is None:
+        db.session.rollback()
+        return None, "Failed importing hashfile. Refresh and retry."
+
     imported_hash_links = int(
         db.session.scalar(
             select(func.count())
             .select_from(HashfileHashes)
-            .filter_by(hashfile_id=hashfile.id)
+            .filter_by(hashfile_id=persisted_hashfile_id)
         )
         or 0
     )
     return (
         HashfileCreationResult(
-            hashfile=hashfile,
+            hashfile=persisted_hashfile,
             hash_type=str(normalized_hash_type),
             imported_hash_links=imported_hash_links,
         ),

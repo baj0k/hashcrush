@@ -12,7 +12,7 @@ from hashcrush.audit import record_audit_event
 from hashcrush.domains.service import resolve_or_create_shared_domain
 from hashcrush.hashfiles.service import create_hashfile_from_path
 from hashcrush.models import Jobs, Rules, Wordlists, db
-from hashcrush.utils.file_ops import get_filehash, get_linecount
+from hashcrush.utils.file_ops import analyze_text_file
 from hashcrush.utils.storage_paths import get_storage_subdir
 from hashcrush.view_utils import append_query_params
 
@@ -151,25 +151,15 @@ def _process_wordlist_upload(payload: dict[str, object], reporter) -> None:
         reporter.update(
             percent=5,
             title="Processing wordlist...",
-            detail="Computing the uploaded file checksum.",
+            detail="Analyzing the uploaded wordlist.",
         )
-        checksum = get_filehash(
+        file_analysis = analyze_text_file(
             wordlist_path,
             progress_callback=_make_stage_progress_callback(
                 reporter,
                 title="Processing wordlist...",
-                detail="Computing the uploaded file checksum.",
+                detail="Reading the uploaded wordlist and counting entries.",
                 start_percent=5,
-                end_percent=55,
-            ),
-        )
-        size = get_linecount(
-            wordlist_path,
-            progress_callback=_make_stage_progress_callback(
-                reporter,
-                title="Processing wordlist...",
-                detail="Counting wordlist entries.",
-                start_percent=55,
                 end_percent=92,
             ),
         )
@@ -182,8 +172,8 @@ def _process_wordlist_upload(payload: dict[str, object], reporter) -> None:
             name=wordlist_name,
             type="static",
             path=wordlist_path,
-            checksum=checksum,
-            size=size,
+            checksum=file_analysis.checksum,
+            size=file_analysis.line_count,
         )
         db.session.add(wordlist)
         db.session.commit()
@@ -249,25 +239,15 @@ def _process_rule_upload(payload: dict[str, object], reporter) -> None:
         reporter.update(
             percent=5,
             title="Processing rule...",
-            detail="Computing the uploaded file checksum.",
+            detail="Analyzing the uploaded rule file.",
         )
-        checksum = get_filehash(
+        file_analysis = analyze_text_file(
             rules_path,
             progress_callback=_make_stage_progress_callback(
                 reporter,
                 title="Processing rule...",
-                detail="Computing the uploaded file checksum.",
+                detail="Reading the uploaded rule file and counting entries.",
                 start_percent=5,
-                end_percent=55,
-            ),
-        )
-        size = get_linecount(
-            rules_path,
-            progress_callback=_make_stage_progress_callback(
-                reporter,
-                title="Processing rule...",
-                detail="Counting rule entries.",
-                start_percent=55,
                 end_percent=92,
             ),
         )
@@ -279,8 +259,8 @@ def _process_rule_upload(payload: dict[str, object], reporter) -> None:
         rule = Rules(
             name=rule_name,
             path=rules_path,
-            size=size,
-            checksum=checksum,
+            size=file_analysis.line_count,
+            checksum=file_analysis.checksum,
         )
         db.session.add(rule)
         db.session.commit()
@@ -345,6 +325,9 @@ def _process_hashfile_upload(payload: dict[str, object], reporter) -> None:
     audit_actor = payload.get("audit_actor")
 
     domain_result = None
+    domain_id: int | None = None
+    domain_name: str | None = None
+    domain_created = False
     try:
         reporter.update(
             percent=4,
@@ -366,11 +349,14 @@ def _process_hashfile_upload(payload: dict[str, object], reporter) -> None:
                 ),
             )
             return
+        domain_id = int(domain_result.domain.id)
+        domain_name = str(domain_result.domain.name)
+        domain_created = bool(domain_result.created)
 
         creation_result, error_message = create_hashfile_from_path(
             hashfile_path=staged_hashfile_path,
             hashfile_name=hashfile_name,
-            domain_id=domain_result.domain.id,
+            domain_id=domain_id,
             file_type=file_type,
             hash_type=hash_type,
             progress_callback=_make_hashfile_progress_callback(reporter),
@@ -405,24 +391,21 @@ def _process_hashfile_upload(payload: dict[str, object], reporter) -> None:
 
     flashes: list[tuple[str, str]] = []
     actor = audit_actor if isinstance(audit_actor, dict) else None
-    if domain_result.created:
+    if domain_created and domain_id is not None and domain_name:
         record_audit_event(
             "domain.create",
             "domain",
-            target_id=domain_result.domain.id,
-            summary=(
-                f'Created shared domain "{domain_result.domain.name}" from hashfile '
-                "creation."
-            ),
+            target_id=domain_id,
+            summary=f'Created shared domain "{domain_name}" from hashfile creation.',
             details={
-                "domain_name": domain_result.domain.name,
+                "domain_name": domain_name,
                 "source": "hashfiles.add",
             },
             actor=actor,
         )
-    elif domain_selection == "add_new":
+    elif domain_selection == "add_new" and domain_name:
         flashes.append(
-            ("info", f'Using existing shared domain "{domain_result.domain.name}".')
+            ("info", f'Using existing shared domain "{domain_name}".')
         )
 
     record_audit_event(
@@ -432,8 +415,8 @@ def _process_hashfile_upload(payload: dict[str, object], reporter) -> None:
         summary=f'Registered shared hashfile "{hashfile.name}".',
         details={
             "hashfile_name": hashfile.name,
-            "domain_id": domain_result.domain.id,
-            "domain_name": domain_result.domain.name,
+            "domain_id": domain_id,
+            "domain_name": domain_name,
             "hash_type": creation_result.hash_type,
             "imported_hash_links": creation_result.imported_hash_links,
         },

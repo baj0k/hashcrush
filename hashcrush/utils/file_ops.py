@@ -6,9 +6,18 @@ import _md5
 import hashlib
 import os
 import secrets
+from dataclasses import dataclass
 
 from flask import current_app
 from werkzeug.utils import secure_filename
+
+
+@dataclass(frozen=True)
+class FileAnalysisResult:
+    """Combined file metadata from a single streaming pass."""
+
+    checksum: str
+    line_count: int
 
 
 def save_file(path, form_file):
@@ -31,6 +40,46 @@ def _count_generator(reader):
     while block:
         yield block
         block = reader(1024 * 1024)
+
+
+def analyze_text_file(filepath, progress_callback=None):
+    """Return SHA-256 and logical line count in a single streaming pass."""
+    sha256_hash = hashlib.sha256()
+    try:
+        file_size = os.path.getsize(filepath)
+    except OSError:
+        file_size = 0
+
+    count = 0
+    has_content = False
+    trailing_newline = False
+    total_bytes = 0
+    with open(filepath, "rb") as handle:
+        for buffer in _count_generator(handle.raw.read):
+            if not buffer:
+                continue
+            has_content = True
+            sha256_hash.update(buffer)
+            total_bytes += len(buffer)
+            count += buffer.count(b"\n")
+            trailing_newline = buffer.endswith(b"\n")
+            if progress_callback is not None:
+                progress_callback(total_bytes, file_size)
+
+    if progress_callback is not None:
+        progress_callback(total_bytes, file_size)
+
+    if not has_content:
+        line_count = 0
+    elif trailing_newline:
+        line_count = count
+    else:
+        line_count = count + 1
+
+    return FileAnalysisResult(
+        checksum=sha256_hash.hexdigest(),
+        line_count=line_count,
+    )
 
 
 def get_linecount(filepath, progress_callback=None):
@@ -77,7 +126,7 @@ def get_filehash(filepath, progress_callback=None):
         file_size = 0
     total_bytes = 0
     with open(filepath, "rb") as handle:
-        for byte_block in iter(lambda: handle.read(4096), b""):
+        for byte_block in iter(lambda: handle.read(1024 * 1024), b""):
             sha256_hash.update(byte_block)
             total_bytes += len(byte_block)
             if progress_callback is not None:

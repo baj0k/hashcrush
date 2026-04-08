@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import os
 import re
+from dataclasses import dataclass
 
 from flask import current_app, has_app_context
 from sqlalchemy import select
 
 from hashcrush.models import Hashes, HashfileHashes, db
-from hashcrush.utils.file_ops import get_linecount, get_md5_hash
+from hashcrush.utils.file_ops import get_md5_hash
 from hashcrush.utils.secret_storage import (
     encode_ciphertext_for_storage,
     encode_username_for_storage,
@@ -21,6 +22,17 @@ DEFAULT_HASHFILE_MAX_LINE_LENGTH = 50_000
 DEFAULT_HASHFILE_MAX_TOTAL_LINES = 1_000_000
 DEFAULT_HASHFILE_MAX_TOTAL_BYTES = 1024 * 1024 * 1024
 WINDOWS_PWDUMP_FILE_TYPES = frozenset({"pwdump", "secretsdump"})
+IMPORT_BATCH_SIZE = 1000
+
+
+@dataclass(frozen=True)
+class _PreparedImportRow:
+    hash_value: str
+    normalized_hash_type: int
+    preferred_digest: str
+    alternate_digest: str | None
+    encoded_username: str
+    username_digest: str
 
 
 def _get_hashfile_validation_limit(
@@ -139,6 +151,229 @@ def import_hash_only(line, hash_type):
     return new_hash.id
 
 
+def _normalize_hashfile_import_row(
+    *,
+    line: str,
+    file_type: str | None,
+    hash_type: str,
+) -> tuple[str, int, str | None] | None:
+    file_type = normalize_hashfile_file_type(file_type)
+
+    if file_type == "hash_only":
+        hash_value = line
+        if hash_type in ("300", "1731"):
+            hash_value = hash_value.lower()
+        elif hash_type == "2100":
+            hash_value = hash_value.lower().replace("$dcc2$", "$DCC2$")
+        username = None
+        if hash_type == "2100":
+            dcc_parts = hash_value.split("#")
+            username = dcc_parts[1] if len(dcc_parts) >= 3 else None
+        return hash_value, normalize_hash_type(hash_type), username
+
+    if file_type == "user_hash":
+        if ":" not in line:
+            raise ValueError("Invalid user_hash line")
+        username, hash_value = line.split(":", 1)
+        hash_value = hash_value.rstrip()
+        if hash_type in ("300", "1731"):
+            hash_value = hash_value.lower()
+        elif hash_type == "2100":
+            hash_value = hash_value.lower().replace("$dcc2$", "$DCC2$")
+        return hash_value, normalize_hash_type(hash_type), username
+
+    if file_type == "shadow":
+        line_parts = line.split(":")
+        if len(line_parts) < 2:
+            raise ValueError("Invalid shadow line")
+        return line_parts[1], normalize_hash_type(hash_type), line_parts[0]
+
+    if file_type == "pwdump":
+        line_parts = line.split(":")
+        if len(line_parts) < 4:
+            raise ValueError("Invalid pwdump line")
+        if re.search(r"\$$", line_parts[0]):
+            return None
+        return line_parts[3].lower(), 1000, line_parts[0]
+
+    if file_type == "kerberos":
+        hash_value = line.lower()
+        kerberos_parts = hash_value.split("$")
+        if len(kerberos_parts) <= 3:
+            raise ValueError("Invalid kerberos line")
+        username = (
+            kerberos_parts[3].split(":")[0]
+            if hash_type == "18200"
+            else kerberos_parts[3]
+        )
+        return hash_value, normalize_hash_type(hash_type), username
+
+    if file_type == "NetNTLM":
+        line_list = line.split(":")
+        if len(line_list) < 6:
+            raise ValueError("Invalid NetNTLM line")
+        if re.search(r"\$$", line_list[0]):
+            return None
+        line_list[0] = line_list[0].upper()
+        line_list[3] = line_list[3].lower()
+        line_list[4] = line_list[4].lower()
+        line_list[5] = line_list[5].lower()
+        normalized_line = ":".join(line_list)
+        return normalized_line, normalize_hash_type(hash_type), line_list[0]
+
+    raise ValueError("Invalid hashfile format")
+
+
+def _prepare_import_row(
+    *,
+    line: str,
+    file_type: str | None,
+    hash_type: str,
+) -> _PreparedImportRow | None:
+    normalized_row = _normalize_hashfile_import_row(
+        line=line,
+        file_type=file_type,
+        hash_type=hash_type,
+    )
+    if normalized_row is None:
+        return None
+
+    hash_value, normalized_hash_type, username = normalized_row
+    current_digest = get_ciphertext_search_digest(hash_value)
+    legacy_digest = get_md5_hash(hash_value)
+    preferred_digest = current_digest or legacy_digest
+
+    encoded_username = ""
+    username_digest = ""
+    if username is not None:
+        normalized_username = username.encode("latin-1", errors="replace").decode(
+            "latin-1"
+        )
+        encoded_username = encode_username_for_storage(normalized_username)
+        username_digest = get_username_search_digest(normalized_username) or ""
+
+    return _PreparedImportRow(
+        hash_value=hash_value,
+        normalized_hash_type=normalized_hash_type,
+        preferred_digest=preferred_digest,
+        alternate_digest=legacy_digest if legacy_digest != preferred_digest else None,
+        encoded_username=encoded_username,
+        username_digest=username_digest,
+    )
+
+
+def _flush_import_batch(
+    *,
+    hashfile_id: int,
+    batch_rows: list[_PreparedImportRow],
+) -> None:
+    if not batch_rows:
+        return
+
+    rows_by_hash_type: dict[int, list[_PreparedImportRow]] = {}
+    for row in batch_rows:
+        rows_by_hash_type.setdefault(row.normalized_hash_type, []).append(row)
+
+    row_hash_ids: dict[_PreparedImportRow, int] = {}
+    for normalized_hash_type, typed_rows in rows_by_hash_type.items():
+        digest_values = sorted(
+            {
+                digest
+                for row in typed_rows
+                for digest in (row.preferred_digest, row.alternate_digest)
+                if digest
+            }
+        )
+        existing_rows = (
+            db.session.execute(
+                select(Hashes).where(
+                    Hashes.hash_type == normalized_hash_type,
+                    Hashes.sub_ciphertext.in_(digest_values),
+                )
+            ).scalars().all()
+            if digest_values
+            else []
+        )
+        existing_by_digest = {
+            hash_row.sub_ciphertext: hash_row.id for hash_row in existing_rows
+        }
+
+        new_hashes_by_digest: dict[str, Hashes] = {}
+        for row in typed_rows:
+            hash_id = existing_by_digest.get(row.preferred_digest)
+            if hash_id is None and row.alternate_digest is not None:
+                hash_id = existing_by_digest.get(row.alternate_digest)
+            if hash_id is not None:
+                row_hash_ids[row] = hash_id
+                continue
+            if row.preferred_digest not in new_hashes_by_digest:
+                new_hash = Hashes(
+                    hash_type=normalized_hash_type,
+                    sub_ciphertext=row.preferred_digest,
+                    ciphertext=encode_ciphertext_for_storage(row.hash_value),
+                    cracked=0,
+                    plaintext_digest=None,
+                )
+                db.session.add(new_hash)
+                new_hashes_by_digest[row.preferred_digest] = new_hash
+
+        if new_hashes_by_digest:
+            db.session.flush()
+            for digest, new_hash in new_hashes_by_digest.items():
+                existing_by_digest[digest] = new_hash.id
+
+        for row in typed_rows:
+            if row in row_hash_ids:
+                continue
+            hash_id = existing_by_digest.get(row.preferred_digest)
+            if hash_id is None and row.alternate_digest is not None:
+                hash_id = existing_by_digest.get(row.alternate_digest)
+            if hash_id is None:
+                raise ValueError("Unable to resolve imported hash id")
+            row_hash_ids[row] = hash_id
+
+    hash_ids = sorted({row_hash_ids[row] for row in batch_rows})
+    username_digests = sorted({row.username_digest for row in batch_rows})
+    existing_links = (
+        db.session.execute(
+            select(HashfileHashes.hash_id, HashfileHashes.username_digest).where(
+                HashfileHashes.hashfile_id == hashfile_id,
+                HashfileHashes.hash_id.in_(hash_ids),
+                HashfileHashes.username_digest.in_(username_digests),
+            )
+        ).all()
+        if hash_ids
+        else []
+    )
+    existing_pairs = {
+        (int(hash_id), str(username_digest))
+        for hash_id, username_digest in existing_links
+    }
+
+    pending_pairs: set[tuple[int, str]] = set()
+    new_links: list[HashfileHashes] = []
+    for row in batch_rows:
+        hash_id = row_hash_ids[row]
+        pair = (hash_id, row.username_digest)
+        if pair in existing_pairs or pair in pending_pairs:
+            continue
+        pending_pairs.add(pair)
+        new_links.append(
+            HashfileHashes(
+                hash_id=hash_id,
+                username=row.encoded_username,
+                username_digest=row.username_digest,
+                hashfile_id=hashfile_id,
+            )
+        )
+
+    if new_links:
+        db.session.add_all(new_links)
+
+    db.session.flush()
+    db.session.expunge_all()
+
+
 def import_hashfilehashes(
     hashfile_id,
     hashfile_path,
@@ -148,116 +383,53 @@ def import_hashfilehashes(
 ):
     """Import all hashes from a staged hashfile into DB associations."""
     file_type = normalize_hashfile_file_type(file_type)
-    total_lines = get_linecount(hashfile_path) if progress_callback is not None else 0
-    processed_lines = 0
-    with open(hashfile_path, encoding="utf-8", errors="replace") as handle:
-        for raw_line in handle:
-            processed_lines += 1
-            line = raw_line.rstrip("\r\n")
-            if not line:
+    try:
+        total_bytes = os.path.getsize(hashfile_path) if progress_callback is not None else 0
+    except OSError:
+        total_bytes = 0
+
+    processed_bytes = 0
+    batch_rows: list[_PreparedImportRow] = []
+    try:
+        with open(hashfile_path, "rb") as handle:
+            for raw_line in handle:
+                processed_bytes += len(raw_line)
+                line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+                if not line:
+                    if progress_callback is not None:
+                        progress_callback(processed_bytes, total_bytes)
+                    continue
+
+                prepared_row = _prepare_import_row(
+                    line=line,
+                    file_type=file_type,
+                    hash_type=hash_type,
+                )
+                if prepared_row is not None:
+                    batch_rows.append(prepared_row)
+                    if len(batch_rows) >= IMPORT_BATCH_SIZE:
+                        _flush_import_batch(
+                            hashfile_id=hashfile_id,
+                            batch_rows=batch_rows,
+                        )
+                        batch_rows.clear()
+
                 if progress_callback is not None:
-                    progress_callback(processed_lines, total_lines)
-                continue
+                    progress_callback(processed_bytes, total_bytes)
 
-            username = None
-            if file_type == "hash_only":
-                hash_value = line
-                if hash_type in ("300", "1731"):
-                    hash_value = hash_value.lower()
-                elif hash_type == "2100":
-                    hash_value = hash_value.lower().replace("$dcc2$", "$DCC2$")
-                hash_id = import_hash_only(line=hash_value, hash_type=hash_type)
-                if hash_type == "2100":
-                    dcc_parts = hash_value.split("#")
-                    username = dcc_parts[1] if len(dcc_parts) >= 3 else None
-            elif file_type == "user_hash":
-                if ":" not in line:
-                    db.session.rollback()
-                    return False
-                username, hash_value = line.split(":", 1)
-                hash_value = hash_value.rstrip()
-                if hash_type in ("300", "1731"):
-                    hash_value = hash_value.lower()
-                elif hash_type == "2100":
-                    hash_value = hash_value.lower().replace("$dcc2$", "$DCC2$")
-                hash_id = import_hash_only(line=hash_value, hash_type=hash_type)
-            elif file_type == "shadow":
-                line_parts = line.split(":")
-                if len(line_parts) < 2:
-                    db.session.rollback()
-                    return False
-                username = line_parts[0]
-                hash_id = import_hash_only(line=line_parts[1], hash_type=hash_type)
-            elif file_type == "pwdump":
-                line_parts = line.split(":")
-                if len(line_parts) < 4:
-                    db.session.rollback()
-                    return False
-                if re.search(r"\$$", line_parts[0]):
-                    continue
-                hash_id = import_hash_only(line=line_parts[3].lower(), hash_type="1000")
-                username = line_parts[0]
-            elif file_type == "kerberos":
-                hash_value = line.lower()
-                hash_id = import_hash_only(line=hash_value, hash_type=hash_type)
-                kerberos_parts = hash_value.split("$")
-                if len(kerberos_parts) <= 3:
-                    db.session.rollback()
-                    return False
-                if hash_type == "18200":
-                    username = kerberos_parts[3].split(":")[0]
-                else:
-                    username = kerberos_parts[3]
-            elif file_type == "NetNTLM":
-                line_list = line.split(":")
-                if len(line_list) < 6:
-                    db.session.rollback()
-                    return False
-                if re.search(r"\$$", line_list[0]):
-                    continue
-                line_list[0] = line_list[0].upper()
-                line_list[3] = line_list[3].lower()
-                line_list[4] = line_list[4].lower()
-                line_list[5] = line_list[5].lower()
-                normalized_line = ":".join(line_list)
-                hash_id = import_hash_only(line=normalized_line, hash_type=hash_type)
-                username = line_list[0]
-            else:
-                db.session.rollback()
-                return False
-
-            encoded_username = ""
-            username_digest = ""
-            if username is not None:
-                normalized_username = username.encode(
-                    "latin-1", errors="replace"
-                ).decode("latin-1")
-                encoded_username = encode_username_for_storage(normalized_username)
-                username_digest = get_username_search_digest(normalized_username) or ""
-
-            existing_link = db.session.scalar(
-                select(HashfileHashes).filter_by(
-                    hash_id=hash_id,
-                    hashfile_id=hashfile_id,
-                    username_digest=username_digest,
-                )
+        if batch_rows:
+            _flush_import_batch(
+                hashfile_id=hashfile_id,
+                batch_rows=batch_rows,
             )
-            if not existing_link:
-                db.session.add(
-                    HashfileHashes(
-                        hash_id=hash_id,
-                        username=encoded_username,
-                        username_digest=username_digest,
-                        hashfile_id=hashfile_id,
-                    )
-                )
 
-            if progress_callback is not None:
-                progress_callback(processed_lines, total_lines)
+    except ValueError:
+        db.session.rollback()
+        return False
 
     db.session.commit()
     if progress_callback is not None:
-        progress_callback(total_lines, total_lines)
+        progress_callback(total_bytes, total_bytes)
     return True
 
 

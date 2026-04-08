@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from hashcrush.models import Hashes, HashfileHashes, Hashfiles, Wordlists, db
-from hashcrush.utils.file_ops import get_filehash, get_linecount
+from hashcrush.utils.file_ops import analyze_text_file
 from hashcrush.utils.secret_storage import decode_plaintext_from_storage
 from hashcrush.utils.storage_paths import resolve_stored_path
 
@@ -38,8 +38,9 @@ def update_dynamic_wordlist(wordlist_id, *, commit=True):
             if decoded_plaintext is not None:
                 handle.write(decoded_plaintext + "\n")
 
-    wordlist.size = get_linecount(resolved_path)
-    wordlist.checksum = get_filehash(resolved_path)
+    file_analysis = analyze_text_file(resolved_path)
+    wordlist.size = file_analysis.line_count
+    wordlist.checksum = file_analysis.checksum
     wordlist.last_updated = datetime.now(UTC).replace(tzinfo=None)
     if commit:
         db.session.commit()

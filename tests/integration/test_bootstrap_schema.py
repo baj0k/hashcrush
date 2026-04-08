@@ -6,6 +6,7 @@ from pathlib import Path
 
 from sqlalchemy import text
 
+from hashcrush.utils.file_ops import analyze_text_file, get_filehash
 from tests.integration.support import *
 
 
@@ -1258,6 +1259,17 @@ def test_get_linecount_handles_newline_edge_cases(tmp_path):
     empty_file.write_text("", encoding="utf-8")
     assert get_linecount(str(empty_file)) == 0
 
+
+@pytest.mark.security
+def test_analyze_text_file_returns_checksum_and_line_count_in_one_pass(tmp_path):
+    target_file = tmp_path / "analysis.txt"
+    target_file.write_text("line1\nline2", encoding="utf-8")
+
+    analysis = analyze_text_file(str(target_file))
+
+    assert analysis.line_count == 2
+    assert analysis.checksum == get_filehash(str(target_file))
+
 @pytest.mark.security
 def test_hashfile_validator_rejects_overlong_lines(tmp_path):
     app = _build_app({"HASHFILE_MAX_LINE_LENGTH": 10})
@@ -1399,6 +1411,40 @@ def test_import_secretsdump_alias_uses_nt_hash_and_preserves_username(tmp_path):
             decode_ciphertext_from_storage(imported_hash.ciphertext)
             == "5f4dcc3b5aa765d61d8327deb882cf99"
         )
+
+
+@pytest.mark.security
+def test_import_hashfilehashes_deduplicates_duplicate_rows_in_single_batch(tmp_path):
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="BatchImportDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="duplicates.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_path = tmp_path / "duplicates.txt"
+        hash_path.write_text(
+            "alice:5f4dcc3b5aa765d61d8327deb882cf99\n"
+            "alice:5f4dcc3b5aa765d61d8327deb882cf99\n",
+            encoding="utf-8",
+        )
+
+        assert import_hashfilehashes(
+            hashfile_id=hashfile.id,
+            hashfile_path=str(hash_path),
+            file_type="user_hash",
+            hash_type="0",
+        )
+
+        assert _count_rows(Hashes) == 1
+        assert _count_rows(HashfileHashes, hashfile_id=hashfile.id) == 1
 
 
 @pytest.mark.security
