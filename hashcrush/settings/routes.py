@@ -6,19 +6,46 @@ import sys
 from flask import (
     Blueprint,
     abort,
+    current_app,
     flash,
+    jsonify,
     redirect,
     render_template,
+    request,
     url_for,
 )
 from flask_login import current_user, login_required
 
 import hashcrush
-from hashcrush.audit import record_audit_event
+from hashcrush.audit import capture_audit_actor, record_audit_event
 from hashcrush.db_upgrade import get_schema_status
+from hashcrush.hibp.service import (
+    get_hibp_ntlm_dataset_mount_root,
+    get_hibp_ntlm_dataset_summary,
+    list_mounted_hibp_ntlm_dataset_files,
+    validate_mounted_hibp_ntlm_dataset_path,
+)
+from hashcrush.utils.file_ops import save_file
 from hashcrush.utils.storage_paths import get_runtime_subdir
 
 settings = Blueprint("settings", __name__)
+
+
+def _is_async_upload_request() -> bool:
+    return request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+
+def _async_operation_response(operation):
+    payload = operation.to_response_dict()
+    payload["status_url"] = url_for(
+        "uploads.upload_operation_status",
+        operation_id=operation.id,
+    )
+    return jsonify(payload), 202
+
+
+def _async_error_response(title: str, detail: str):
+    return jsonify({"title": title, "detail": detail}), 400
 
 
 def _temp_folder_path() -> str:
@@ -55,6 +82,31 @@ def _temp_folder_size_bytes() -> int:
     return total
 
 
+def _breach_intelligence_context() -> dict[str, object]:
+    """Build template context for the offline HIBP management page."""
+
+    hibp_dataset_summary = get_hibp_ntlm_dataset_summary()
+    hibp_dataset_mount_root = get_hibp_ntlm_dataset_mount_root()
+    hibp_mounted_dataset_files = list_mounted_hibp_ntlm_dataset_files()
+    default_mounted_dataset_path = os.path.join(
+        hibp_dataset_mount_root,
+        "hibp-ntlm.txt",
+    )
+    if default_mounted_dataset_path in hibp_mounted_dataset_files:
+        hibp_selected_mounted_dataset_path = default_mounted_dataset_path
+    elif hibp_mounted_dataset_files:
+        hibp_selected_mounted_dataset_path = hibp_mounted_dataset_files[0]
+    else:
+        hibp_selected_mounted_dataset_path = default_mounted_dataset_path
+
+    return {
+        "hibp_dataset_summary": hibp_dataset_summary,
+        "hibp_dataset_mount_root": hibp_dataset_mount_root,
+        "hibp_mounted_dataset_files": hibp_mounted_dataset_files,
+        "hibp_selected_mounted_dataset_path": hibp_selected_mounted_dataset_path,
+    }
+
+
 @settings.route("/settings", methods=["GET"])
 @login_required
 def settings_list():
@@ -80,6 +132,21 @@ def settings_list():
         )
 
     abort(403)
+
+
+@settings.route("/breach-intelligence", methods=["GET"])
+@login_required
+def breach_intelligence():
+    """Render the offline breach-intelligence admin page."""
+
+    if not current_user.admin:
+        abort(403)
+
+    return render_template(
+        "breach_intelligence.html",
+        title="breach intelligence",
+        **_breach_intelligence_context(),
+    )
 
 
 @settings.route("/settings/clear_temp", methods=["POST"])
@@ -132,3 +199,120 @@ def clear_temp_folder():
         },
     )
     return redirect(url_for("settings.settings_list") + "#nav-data")
+
+
+@settings.route("/settings/hibp_ntlm_dataset", methods=["POST"])
+@login_required
+def load_hibp_ntlm_dataset():
+    """Queue an offline HIBP NTLM dataset load from the admin UI."""
+
+    if not current_user.admin:
+        abort(403)
+
+    dataset_file = request.files.get("dataset_file")
+    if dataset_file is None or not (dataset_file.filename or "").strip():
+        message = "Choose an offline HIBP NTLM dataset file to upload."
+        if _is_async_upload_request():
+            return _async_error_response("Dataset upload failed.", message)
+        flash(message, "danger")
+        return redirect(url_for("settings.breach_intelligence"))
+
+    version_label = (request.form.get("version_label") or "").strip() or None
+    runtime_tmp_dir = get_runtime_subdir("tmp")
+    os.makedirs(runtime_tmp_dir, exist_ok=True)
+    staged_dataset_path = save_file(runtime_tmp_dir, dataset_file)
+    operation = current_app.extensions["upload_operations"].start_operation(
+        owner_user_id=getattr(current_user, "id", None),
+        operation_type="hibp_ntlm_dataset_upload",
+        redirect_url=url_for("settings.breach_intelligence"),
+        payload={
+            "staged_dataset_path": staged_dataset_path,
+            "version_label": version_label or "",
+            "source_filename": dataset_file.filename or "",
+            "audit_actor": capture_audit_actor(),
+        },
+    )
+
+    if _is_async_upload_request():
+        return _async_operation_response(operation)
+
+    flash(
+        "Offline HIBP NTLM dataset upload queued. Processing will continue in the background.",
+        "info",
+    )
+    return redirect(url_for("settings.breach_intelligence"))
+
+
+@settings.route("/settings/hibp_ntlm_dataset/mounted", methods=["POST"])
+@login_required
+def load_mounted_hibp_ntlm_dataset():
+    """Queue an offline HIBP NTLM dataset load from a mounted container path."""
+
+    if not current_user.admin:
+        abort(403)
+
+    mounted_dataset_path, error_message = validate_mounted_hibp_ntlm_dataset_path(
+        request.form.get("mounted_dataset_path")
+    )
+    if error_message:
+        if _is_async_upload_request():
+            return _async_error_response("Mounted dataset load failed.", error_message)
+        flash(error_message, "danger")
+        return redirect(url_for("settings.breach_intelligence"))
+
+    version_label = (request.form.get("version_label") or "").strip() or None
+    operation = current_app.extensions["upload_operations"].start_operation(
+        owner_user_id=getattr(current_user, "id", None),
+        operation_type="hibp_ntlm_dataset_register",
+        redirect_url=url_for("settings.breach_intelligence"),
+        payload={
+            "source_path": mounted_dataset_path,
+            "version_label": version_label or "",
+            "source_filename": os.path.basename(mounted_dataset_path),
+            "audit_actor": capture_audit_actor(),
+        },
+    )
+
+    if _is_async_upload_request():
+        return _async_operation_response(operation)
+
+    flash(
+        "Mounted offline HIBP NTLM dataset load queued. Processing will continue in the background.",
+        "info",
+    )
+    return redirect(url_for("settings.breach_intelligence"))
+
+
+@settings.route("/settings/hibp_ntlm_dataset/backfill", methods=["POST"])
+@login_required
+def backfill_hibp_ntlm_dataset():
+    """Queue a refresh of stored NTLM hashes against the active offline dataset."""
+
+    if not current_user.admin:
+        abort(403)
+
+    dataset_summary = get_hibp_ntlm_dataset_summary()
+    if not dataset_summary.loaded:
+        message = "Load an offline HIBP NTLM dataset before refreshing existing hashes."
+        if _is_async_upload_request():
+            return _async_error_response("Exposure refresh failed.", message)
+        flash(message, "danger")
+        return redirect(url_for("settings.breach_intelligence"))
+
+    operation = current_app.extensions["upload_operations"].start_operation(
+        owner_user_id=getattr(current_user, "id", None),
+        operation_type="hibp_ntlm_dataset_backfill",
+        redirect_url=url_for("settings.breach_intelligence"),
+        payload={
+            "audit_actor": capture_audit_actor(),
+        },
+    )
+
+    if _is_async_upload_request():
+        return _async_operation_response(operation)
+
+    flash(
+        "Existing NTLM hashes queued for refresh against the offline dataset.",
+        "info",
+    )
+    return redirect(url_for("settings.breach_intelligence"))

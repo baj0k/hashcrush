@@ -99,6 +99,17 @@
         return value.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1') + ' ' + units[unitIndex];
     }
 
+    function formatProgressPercent(percent) {
+        var value = Math.max(0, Math.min(100, Number(percent) || 0));
+        if (value === 0 || value === 100) {
+            return Math.round(value) + '%';
+        }
+        if (Math.abs(value - Math.round(value)) < 0.05) {
+            return Math.round(value) + '%';
+        }
+        return value.toFixed(1).replace(/\.0$/, '') + '%';
+    }
+
     var UPLOAD_TRACK_STORAGE_KEY = 'hashcrush.uploadOperations.v1';
     var UPLOAD_COMPLETED_RETENTION_MS = 6 * 60 * 60 * 1000;
     var uploadMonitorTimer = 0;
@@ -308,7 +319,7 @@
             statusBadge.textContent = 'Done';
         } else {
             statusBadge.classList.add('badge-info');
-            statusBadge.textContent = Math.round(Math.max(0, Math.min(100, entry.percent || 0))) + '%';
+            statusBadge.textContent = formatProgressPercent(entry.percent || 0);
         }
         header.appendChild(statusBadge);
         wrapper.appendChild(header);
@@ -329,7 +340,7 @@
         }
         progressBar.style.width = Math.max(0, Math.min(100, entry.percent || 0)) + '%';
         progressBar.setAttribute('aria-valuenow', String(Math.round(entry.percent || 0)));
-        progressBar.textContent = entry.success ? 'Done' : entry.failed ? 'Failed' : Math.round(entry.percent || 0) + '%';
+        progressBar.textContent = entry.success ? 'Done' : entry.failed ? 'Failed' : formatProgressPercent(entry.percent || 0);
         progress.appendChild(progressBar);
         wrapper.appendChild(progress);
 
@@ -489,7 +500,7 @@
             : 0;
         progressBar.style.width = width + '%';
         progressBar.setAttribute('aria-valuenow', String(Math.round(width)));
-        progressBar.textContent = options.label || (Math.round(width) + '%');
+        progressBar.textContent = options.label || formatProgressPercent(width);
     }
 
     function bindUploadProgressForms() {
@@ -544,9 +555,12 @@
                         label: '0%',
                     });
                 } else {
+                    var noFileStartTitle = form.dataset.uploadStartTitle || 'Starting processing...';
+                    var noFileStartDetail = form.dataset.uploadStartDetail
+                        || 'The server is preparing the request for background processing.';
                     setUploadStatus(form, {
-                        title: 'Starting processing...',
-                        detail: 'The server is preparing the wordlist for background processing.',
+                        title: noFileStartTitle,
+                        detail: noFileStartDetail,
                         percent: 0,
                         label: 'Starting...',
                         processing: true,
@@ -564,7 +578,7 @@
                             title: 'Uploading file...',
                             detail: formatUploadBytes(progressEvent.loaded) + ' of ' + formatUploadBytes(progressEvent.total),
                             percent: percent,
-                            label: Math.round(percent) + '%',
+                            label: formatProgressPercent(percent),
                         });
                         return;
                     }
@@ -645,7 +659,7 @@
                         var percent = typeof payload.percent === 'number' ? payload.percent : 0;
                         var label = payload.complete
                             ? (payload.success ? 'Done' : 'Failed')
-                            : (Math.round(percent) + '%');
+                            : formatProgressPercent(percent);
                         setUploadStatus(form, {
                             title: payload.title || 'Processing file...',
                             detail: payload.detail || 'The server is processing the uploaded file.',
@@ -797,6 +811,28 @@
         });
     }
 
+    function bindHashActivatedTabs() {
+        function activateFromHash() {
+            var hash = window.location.hash;
+            if (!hash || hash.length < 2) {
+                return;
+            }
+            var selector = '.nav-tabs a[data-toggle="tab"][href="' + hash.replace(/"/g, '\\"') + '"]';
+            var link = document.querySelector(selector);
+            if (!link) {
+                return;
+            }
+            if (window.jQuery && typeof window.jQuery(link).tab === 'function') {
+                window.jQuery(link).tab('show');
+                return;
+            }
+            link.click();
+        }
+
+        window.addEventListener('hashchange', activateFromHash);
+        activateFromHash();
+    }
+
     document.addEventListener('DOMContentLoaded', function () {
         renderGlobalUploadMonitor();
         if (loadTrackedUploadEntries().some(function (entry) { return !entry.complete; })) {
@@ -807,5 +843,6 @@
         bindConfirmForms();
         bindUploadProgressForms();
         bindFilterInputs();
+        bindHashActivatedTabs();
     });
 })();

@@ -8,6 +8,9 @@
         <a class="btn btn-warning btn-sm" href="{{ url_for('analytics.get_analytics', hashfile_id=hashfile.id, domain_id=domain_summary.domain_id) if domain_summary and domain_summary.domain_id else url_for('analytics.get_analytics', hashfile_id=hashfile.id) }}">Analytics</a>
         {% if current_user.admin %}
         <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='found', hashfile_id=hashfile.id, domain_id=domain_summary.domain_id) if domain_summary and domain_summary.domain_id else url_for('analytics.analytics_download_hashes', type='found', hashfile_id=hashfile.id) }}">Download Found</a>
+        {% if public_exposure_summary.dataset_loaded %}
+        <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='public_exposures', hashfile_id=hashfile.id, domain_id=domain_summary.domain_id) if domain_summary and domain_summary.domain_id else url_for('analytics.analytics_download_hashes', type='public_exposures', hashfile_id=hashfile.id) }}">Download Exposed</a>
+        {% endif %}
         {% endif %}
     </div>
 </div>
@@ -33,6 +36,34 @@
             <tr>
                 <th scope="row">Crack Rate</th>
                 <td>{{ hashfile_stats.cracked_count }}/{{ hashfile_stats.total_count }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Publicly Exposed Hashes</th>
+                <td>
+                    {% if public_exposure_summary.dataset_loaded %}
+                    {{ public_exposure_summary.exposed_hash_count }}/{{ public_exposure_summary.eligible_hash_count }}
+                    {% else %}
+                    Dataset not loaded
+                    {% endif %}
+                </td>
+            </tr>
+            <tr>
+                <th scope="row">Accounts Using Publicly Exposed Hashes</th>
+                <td>
+                    {% if public_exposure_summary.dataset_loaded %}
+                    {{ public_exposure_summary.exposed_account_count }}/{{ public_exposure_summary.eligible_account_count }}
+                    {% else %}
+                    Dataset not loaded
+                    {% endif %}
+                </td>
+            </tr>
+            <tr>
+                <th scope="row">Exposure Dataset</th>
+                <td>{{ public_exposure_summary.dataset_version_label or 'Not loaded' }}</td>
+            </tr>
+            <tr>
+                <th scope="row">Last Exposure Check</th>
+                <td>{{ public_exposure_summary.last_checked_at or 'N/A' }}</td>
             </tr>
             <tr>
                 <th scope="row">Uploaded At</th>

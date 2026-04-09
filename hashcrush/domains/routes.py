@@ -167,15 +167,6 @@ def domains_detail(domain_id):
         **_domain_detail_context(domain),
     )
 
-
-@domains.route("/domains/add", methods=['POST'])
-@login_required
-def domains_add():
-    """Domains are inferred from imported usernames and not created manually."""
-
-    flash('Domains are created automatically from imported usernames or fallback values.', 'info')
-    return redirect(url_for('domains.domains_list'))
-
 @domains.route("/domains/delete/<int:domain_id>", methods=['POST'])
 @login_required
 def domains_delete(domain_id):

@@ -20,6 +20,10 @@ from sqlalchemy.sql import exists
 from hashcrush.audit import capture_audit_actor, record_audit_event
 from hashcrush.authz import admin_required_redirect, visible_jobs_query
 from hashcrush.domains.service import hashfile_domain_summaries
+from hashcrush.hibp.service import (
+    public_exposure_summary_for_hashfile_ids,
+    scan_hashfile_against_hibp_dataset,
+)
 from hashcrush.hashfiles.forms import HashfilesAddForm
 from hashcrush.hashfiles.validation import normalize_hashfile_file_type
 from hashcrush.hashfiles.service import create_hashfile_from_form
@@ -128,6 +132,7 @@ def _hashfile_detail_context(hashfile: Hashfiles) -> dict[str, object]:
         'hashfile_stats': stats,
         'delete_impact': _hashfile_delete_impact(hashfile.id),
         'domain_summary': hashfile_domain_summaries([hashfile.id]).get(hashfile.id),
+        'public_exposure_summary': public_exposure_summary_for_hashfile_ids([hashfile.id]),
     }
 
 
@@ -266,6 +271,19 @@ def hashfiles_add():
 
         hashfile = creation_result.hashfile
         db.session.commit()
+        scan_warning = None
+        scan_result = None
+        if creation_result.hash_type == '1000':
+            try:
+                scan_result = scan_hashfile_against_hibp_dataset(hashfile.id)
+            except Exception:
+                current_app.logger.exception(
+                    'Offline public exposure scan failed for hashfile id=%s',
+                    hashfile.id,
+                )
+                scan_warning = (
+                    'Hashfile created, but the offline public exposure check could not be completed.'
+                )
         record_audit_event(
             'hashfile.create',
             'hashfile',
@@ -280,6 +298,15 @@ def hashfiles_add():
             },
         )
         flash('Hashfile created!', 'success')
+        if scan_result and scan_result.matched_account_count > 0:
+            flash(
+                'Offline public exposure check matched '
+                f'{scan_result.matched_hash_count} unique NTLM hash(es) across '
+                f'{scan_result.matched_account_count} account row(s).',
+                'info',
+            )
+        elif scan_warning:
+            flash(scan_warning, 'warning')
         return redirect(url_for('hashfiles.hashfiles_list'))
 
     return _render_hashfiles_add_form(form)

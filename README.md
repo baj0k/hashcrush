@@ -127,7 +127,7 @@ docker compose run --rm bootstrap
 
 Do not use `python3 ./hashcrush.py setup` on an existing deployment. It is destructive and rebuilds the database from scratch.
 
-Current releases expect schema version `9`.
+Current releases expect schema version `11`.
 
 ## External Mounted Wordlists
 
@@ -163,6 +163,46 @@ Behavior notes:
   remain stable for already-registered external wordlists
 - deleting an external wordlist in HashCrush removes only the DB record, not the mounted file
 - external wordlists are not included in the managed `STORAGE_PATH` backup tarball
+
+## Offline HIBP Dataset Mount
+
+For very large offline Have I Been Pwned NTLM datasets, prefer mounting the raw
+dataset into the containers and loading it by container path from `Settings ->
+Breach Intelligence` instead of uploading tens of gigabytes through the browser.
+
+Recommended pattern:
+
+1. Keep the raw offline dataset on the host, for example:
+   - host: `/srv/hashcrush-hibp`
+   - container: `/mnt/hashcrush-hibp`
+2. Set the host path in `.env`:
+   - `HASHCRUSH_HIBP_DATASETS_HOST_PATH=/srv/hashcrush-hibp`
+3. Start or redeploy normally:
+   - `docker compose up -d --build`
+4. In the UI, open `Settings -> Breach Intelligence -> Load Mounted Dataset`.
+5. Enter a container path such as:
+   - `/mnt/hashcrush-hibp/hibp-ntlm.txt`
+6. After the dataset is loaded, use `Refresh Existing Hashes` if you want to
+   backfill NTLM hashes that were already stored before the current dataset was
+   activated.
+
+Behavior notes:
+- Docker Compose mounts `HASHCRUSH_HIBP_DATASETS_HOST_PATH` read-only into
+  `web`, `web-test`, and `upload-worker` at `/mnt/hashcrush-hibp`
+- the mounted path inside the containers is always `/mnt/hashcrush-hibp`
+- HashCrush builds its own local LMDB lookup dataset under managed storage after
+  loading the mounted raw dataset
+- new NTLM hashfile imports are checked automatically once the dataset is active
+- refreshing older stored NTLM hashes is a separate background action
+- you can keep browser upload for smaller datasets, but mounted-path loading is
+  the recommended path for very large corpora
+
+For very large corpora, you can tune the LMDB map floor in `.env`:
+- `HASHCRUSH_HIBP_DATASET_MIN_MAP_SIZE_GB`
+
+HashCrush now streams sorted HIBP NTLM datasets directly into LMDB, so mounted
+loads avoid the older shard-partition/sort phase. The default minimum map size
+is `128 GiB`.
 
 ## Manual Host Installation
 

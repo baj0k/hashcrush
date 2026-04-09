@@ -811,13 +811,8 @@ def test_domains_page_is_shared_read_and_manual_creation_is_disabled():
         assert 'action="/domains/add"' not in admin_html
         assert "created automatically" in admin_html
 
-        response = admin_client.post(
-            "/domains/add",
-            data={"name": "New Shared Domain"},
-            follow_redirects=True,
-        )
-        assert response.status_code == 200
-        assert b"Domains are created automatically" in response.data
+        response = admin_client.post("/domains/add", data={"name": "New Shared Domain"})
+        assert response.status_code == 404
         assert _count_rows(Domains, name="New Shared Domain") == 0
 
         viewer_client = app.test_client()
@@ -843,13 +838,8 @@ def test_non_admin_sees_same_manual_domain_creation_disabled_message():
         assert list_response.status_code == 200
         assert 'action="/domains/add"' not in list_response.get_data(as_text=True)
 
-        response = client.post(
-            "/domains/add",
-            data={"name": "Unauthorized Domain"},
-            follow_redirects=True,
-        )
-        assert response.status_code == 200
-        assert b"Domains are created automatically" in response.data
+        response = client.post("/domains/add", data={"name": "Unauthorized Domain"})
+        assert response.status_code == 404
         assert _count_rows(Domains, name="Unauthorized Domain") == 0
 
 
@@ -1396,6 +1386,51 @@ def test_jobs_add_ignores_legacy_domain_fields_and_keeps_domain_unset():
             for entry in _all_rows(AuditLog, order_by=AuditLog.id.asc())
         ]
         assert "job.create" in audit_events
+
+
+@pytest.mark.security
+def test_job_builder_tasks_tab_uses_natural_task_ordering():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        first_task = Tasks(
+            name="All Characters [1 char]",
+            hc_attackmode="maskmode",
+            hc_mask="?a",
+        )
+        second_task = Tasks(
+            name="All Characters [2 chars]",
+            hc_attackmode="maskmode",
+            hc_mask="?a?a",
+        )
+        tenth_task = Tasks(
+            name="All Characters [10 chars]",
+            hc_attackmode="maskmode",
+            hc_mask="?a" * 10,
+        )
+        db.session.add_all([tenth_task, second_task, first_task])
+        db.session.commit()
+
+        job = Jobs(
+            name="natural-order-job",
+            status="Incomplete",
+            domain_id=None,
+            owner_id=admin.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        html = client.get(f"/jobs/{job.id}/builder?tab=tasks").get_data(as_text=True)
+        index_one = html.index("All Characters [1 char]")
+        index_two = html.index("All Characters [2 chars]")
+        index_ten = html.index("All Characters [10 chars]")
+        assert index_one < index_two < index_ten
 
 
 @pytest.mark.security

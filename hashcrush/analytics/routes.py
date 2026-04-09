@@ -17,7 +17,15 @@ from sqlalchemy import func, select
 
 from hashcrush.audit import record_audit_event
 from hashcrush.domains.service import hashfile_ids_for_domain, visible_domains_with_hashes
-from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles, db
+from hashcrush.hibp.service import HIBP_NTLM_KIND, public_exposure_summary_for_hashfile_ids
+from hashcrush.models import (
+    Domains,
+    HashPublicExposure,
+    Hashes,
+    HashfileHashes,
+    Hashfiles,
+    db,
+)
 from hashcrush.utils.secret_storage import (
     decode_ciphertext_from_storage,
     decode_plaintext_from_storage,
@@ -259,6 +267,7 @@ def _write_account_export_line(
     account_row: HashfileHashes,
     *,
     include_plaintext: bool,
+    trailing_fields: list[str] | None = None,
 ) -> None:
     parts: list[str] = []
     if account_row.username:
@@ -268,6 +277,7 @@ def _write_account_export_line(
     parts.append(str(decode_ciphertext_from_storage(hash_row.ciphertext)))
     if include_plaintext:
         parts.append(str(_decoded_plaintext(hash_row.plaintext)))
+    parts.extend(str(field) for field in (trailing_fields or []))
     output.write(":".join(parts) + "\n")
 
 
@@ -411,7 +421,9 @@ def _format_length_value(value: float | None) -> str:
 
 
 def _build_scope_findings(
-    posture_summary: dict[str, object], hash_reuse_summary: dict[str, int | float]
+    posture_summary: dict[str, object],
+    hash_reuse_summary: dict[str, int | float],
+    public_exposure_summary,
 ) -> list[str]:
     total_accounts = int(posture_summary['total_accounts'])
     recovered_accounts = int(posture_summary['recovered_accounts'])
@@ -453,6 +465,23 @@ def _build_scope_findings(
         )
     else:
         findings.append("No account rows currently share a non-unique hash value in this scope.")
+
+    if not public_exposure_summary.dataset_loaded:
+        findings.append(
+            "Offline public exposure checks are unavailable until a HIBP NTLM dataset is loaded in Settings."
+        )
+    elif public_exposure_summary.eligible_account_count <= 0:
+        findings.append(
+            "No NTLM account rows are present in this scope, so offline public exposure checks do not apply here."
+        )
+    elif public_exposure_summary.exposed_account_count > 0:
+        findings.append(
+            f"{format_display(public_exposure_summary.exposed_account_count)} account row(s) in this scope use NTLM hashes found in the offline public breach dataset."
+        )
+    else:
+        findings.append(
+            "No NTLM account rows in this scope currently match the offline public breach dataset."
+        )
 
     if username_match_count > 0:
         findings.append(
@@ -577,6 +606,7 @@ def get_analytics():
     )
 
     if not scoped_hashfile_ids:
+        empty_public_exposure_summary = public_exposure_summary_for_hashfile_ids([])
         return render_template(
             'analytics.html',
             title='analytics',
@@ -592,6 +622,7 @@ def get_analytics():
             findings=_build_scope_findings(
                 _build_posture_summary(0, _build_cracked_password_metrics([])),
                 _build_hash_reuse_summary([]),
+                empty_public_exposure_summary,
             ),
             scope_posture={
                 'recovered_accounts': format_display(0),
@@ -607,7 +638,14 @@ def get_analytics():
                 'username_match_count': format_display(0),
                 'median_length': "N/A",
                 'risk_band': "Unknown",
+                'public_exposed_hash_count': format_display(0),
+                'public_exposed_hash_percent': _format_percent(0.0),
+                'public_exposed_account_count': format_display(0),
+                'public_exposed_account_percent': _format_percent(0.0),
+                'public_exposure_dataset_label': empty_public_exposure_summary.dataset_version_label or 'Not loaded',
+                'public_exposure_last_checked': empty_public_exposure_summary.last_checked_at or 'N/A',
             },
+            public_exposure_summary=empty_public_exposure_summary,
             domain_posture_rows=domain_posture_rows,
             show_domain_comparison=hashfile_id is None and bool(domain_posture_rows),
             reused_password_rows=[],
@@ -686,6 +724,7 @@ def get_analytics():
     total_accounts = fig1_total
     total_unique_hashes = int(hash_reuse_summary['total_unique_hashes'])
     posture_summary = _build_posture_summary(fig1_total, cracked_metrics)
+    public_exposure_summary = public_exposure_summary_for_hashfile_ids(scoped_hashfile_ids)
     total_accounts_display = format_display(total_accounts)
     total_unique_hashes_display = format_display(total_unique_hashes)
 
@@ -755,6 +794,22 @@ def get_analytics():
         'username_match_count': format_display(posture_summary['username_match_count']),
         'median_length': _format_length_value(posture_summary['median_length']),
         'risk_band': posture_summary['risk_band'],
+        'public_exposed_hash_count': format_display(public_exposure_summary.exposed_hash_count),
+        'public_exposed_hash_percent': _format_percent(
+            _ratio(
+                public_exposure_summary.exposed_hash_count,
+                public_exposure_summary.eligible_hash_count,
+            )
+        ),
+        'public_exposed_account_count': format_display(public_exposure_summary.exposed_account_count),
+        'public_exposed_account_percent': _format_percent(
+            _ratio(
+                public_exposure_summary.exposed_account_count,
+                public_exposure_summary.eligible_account_count,
+            )
+        ),
+        'public_exposure_dataset_label': public_exposure_summary.dataset_version_label or 'Not loaded',
+        'public_exposure_last_checked': public_exposure_summary.last_checked_at or 'N/A',
     }
 
     return render_template(
@@ -785,8 +840,13 @@ def get_analytics():
         },
         fig7_values=fig7_values,
         fig7_total=fig7_total,
-        findings=_build_scope_findings(posture_summary, hash_reuse_summary),
+        findings=_build_scope_findings(
+            posture_summary,
+            hash_reuse_summary,
+            public_exposure_summary,
+        ),
         scope_posture=scope_posture,
+        public_exposure_summary=public_exposure_summary,
         domain_posture_rows=domain_posture_rows,
         show_domain_comparison=hashfile_id is None and bool(domain_posture_rows),
         reused_password_rows=reused_password_rows,
@@ -819,6 +879,7 @@ def analytics_download_hashes():
         'left': 'unrecovered_accounts',
         'reused_hashes': 'reused_hash_accounts',
         'reused_passwords': 'reused_password_accounts',
+        'public_exposures': 'public_exposure_accounts',
     }
     base_filename = export_names.get(export_type)
     if base_filename is None:
@@ -845,6 +906,7 @@ def analytics_download_hashes():
         uncracked_hashes = []
         reused_hash_accounts = []
         reused_password_accounts = []
+        public_exposure_accounts = []
     else:
         cracked_hashes = db.session.execute(
             _scoped_hash_rows_stmt(scoped_hashfile_ids).where(Hashes.cracked.is_(True))
@@ -881,6 +943,16 @@ def analytics_download_hashes():
             .where(plaintext_key.in_(reused_password_subquery))
             .order_by(plaintext_key.asc(), HashfileHashes.id.asc())
         ).tuples().all()
+        public_exposure_accounts = db.session.execute(
+            select(Hashes, HashfileHashes, HashPublicExposure.prevalence_count)
+            .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+            .join(HashPublicExposure, HashPublicExposure.hash_id == Hashes.id)
+            .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
+            .where(Hashes.hash_type == 1000)
+            .where(HashPublicExposure.source_kind == HIBP_NTLM_KIND)
+            .where(HashPublicExposure.matched.is_(True))
+            .order_by(HashfileHashes.id.asc())
+        ).all()
 
     output = io.StringIO()
     if export_type == 'found':
@@ -900,6 +972,16 @@ def analytics_download_hashes():
     elif export_type == 'reused_passwords':
         for entry in reused_password_accounts:
             _write_account_export_line(output, entry[0], entry[1], include_plaintext=True)
+    elif export_type == 'public_exposures':
+        for entry in public_exposure_accounts:
+            trailing_fields = [str(int(entry[2]))] if int(entry[2] or 0) > 0 else []
+            _write_account_export_line(
+                output,
+                entry[0],
+                entry[1],
+                include_plaintext=bool(entry[0].cracked),
+                trailing_fields=trailing_fields,
+            )
 
     record_audit_event(
         'analytics.download',
@@ -918,6 +1000,8 @@ def analytics_download_hashes():
                 else len(reused_hash_accounts)
                 if export_type == 'reused_hashes'
                 else len(reused_password_accounts)
+                if export_type == 'reused_passwords'
+                else len(public_exposure_accounts)
             ),
         },
     )

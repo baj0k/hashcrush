@@ -207,6 +207,37 @@ def test_wordlists_add_form_includes_upload_progress_status_panel():
 
 
 @pytest.mark.security
+def test_wordlists_add_lists_mounted_wordlist_files(tmp_path):
+    external_root = tmp_path / "mounted-wordlists"
+    nested_root = external_root / "nested"
+    nested_root.mkdir(parents=True, exist_ok=True)
+    (external_root / "list10.txt").write_text("password\n", encoding="utf-8")
+    (external_root / "list2.txt").write_text("letmein\n", encoding="utf-8")
+    (nested_root / "inside.txt").write_text("hashcrush\n", encoding="utf-8")
+
+    app = _build_app(
+        {
+            "EXTERNAL_WORDLISTS_PATH": str(external_root),
+        }
+    )
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get("/wordlists/add")
+        assert response.status_code == 200
+        body = response.data.decode("utf-8")
+        assert 'value="' + str((external_root / "list2.txt").resolve()) + '"' in body
+        assert 'value="' + str((external_root / "list10.txt").resolve()) + '"' in body
+        assert 'value="' + str((nested_root / "inside.txt").resolve()) + '"' in body
+        assert body.index("list2.txt") < body.index("list10.txt")
+
+
+@pytest.mark.security
 def test_wordlists_add_registers_external_wordlist_without_copying(tmp_path):
     external_root = tmp_path / "mounted-wordlists"
     external_root.mkdir(parents=True, exist_ok=True)
@@ -532,6 +563,58 @@ def test_rule_detail_page_shows_associated_tasks():
         assert "Rule: detail-rule" in html
         assert f"/tasks/{task.id}" in html
         assert "detail-rule-task" in html
+
+
+@pytest.mark.security
+def test_tasks_list_uses_natural_name_ordering():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        db.session.add_all(
+            [
+                Tasks(name="All Characters [10 chars]", hc_attackmode="maskmode", hc_mask="?a" * 10),
+                Tasks(name="All Characters [2 chars]", hc_attackmode="maskmode", hc_mask="?a?a"),
+                Tasks(name="All Characters [1 char]", hc_attackmode="maskmode", hc_mask="?a"),
+            ]
+        )
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        html = client.get("/tasks").get_data(as_text=True)
+        index_one = html.index("All Characters [1 char]")
+        index_two = html.index("All Characters [2 chars]")
+        index_ten = html.index("All Characters [10 chars]")
+        assert index_one < index_two < index_ten
+
+
+@pytest.mark.security
+def test_task_group_assignment_page_uses_natural_task_ordering():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        first_task = Tasks(name="All Characters [1 char]", hc_attackmode="maskmode", hc_mask="?a")
+        second_task = Tasks(name="All Characters [2 chars]", hc_attackmode="maskmode", hc_mask="?a?a")
+        tenth_task = Tasks(name="All Characters [10 chars]", hc_attackmode="maskmode", hc_mask="?a" * 10)
+        task_group = TaskGroups(name="natural-order-group", tasks="[]")
+        db.session.add_all([tenth_task, second_task, first_task, task_group])
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        html = client.get(f"/task_groups/assigned_tasks/{task_group.id}").get_data(as_text=True)
+        index_one = html.index("All Characters [1 char]")
+        index_two = html.index("All Characters [2 chars]")
+        index_ten = html.index("All Characters [10 chars]")
+        assert index_one < index_two < index_ten
 
 
 @pytest.mark.security

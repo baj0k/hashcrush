@@ -1,0 +1,164 @@
+{% extends "layout.html"%}
+{% block header %}
+<div class="hc-page-header">
+    <h1>Breach Intelligence</h1>
+</div>
+{% endblock header %}
+{% block content %}
+    <div class="content-section">
+        <p class="text-muted mb-3">
+            Load an offline copy of the Have I Been Pwned NTLM dataset in <code>NTLM_HASH</code> or <code>NTLM_HASH:COUNT</code> format.
+            After the load finishes, new NTLM hashfile imports will be checked automatically.
+            Existing stored hashes can be refreshed separately when you are ready.
+        </p>
+        <table class="table">
+            <tbody>
+                <tr>
+                    <td>Dataset Status</td>
+                    <td>{{ 'Loaded' if hibp_dataset_summary.loaded else 'Not loaded' }}</td>
+                </tr>
+                <tr>
+                    <td>Version Label</td>
+                    <td>{{ hibp_dataset_summary.version_label or 'N/A' }}</td>
+                </tr>
+                <tr>
+                    <td>Source Filename</td>
+                    <td>{{ hibp_dataset_summary.source_filename or 'N/A' }}</td>
+                </tr>
+                <tr>
+                    <td>Record Count</td>
+                    <td>{{ hibp_dataset_summary.record_count }}</td>
+                </tr>
+                <tr>
+                    <td>Loaded At</td>
+                    <td>{{ hibp_dataset_summary.loaded_at or 'N/A' }}</td>
+                </tr>
+                <tr>
+                    <td>Mounted Dataset Root</td>
+                    <td><code>{{ hibp_dataset_mount_root }}</code></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="mb-4">
+            <h2 class="h5">Load Mounted Dataset</h2>
+            <p class="text-muted mb-3">
+                Recommended for very large offline corpora. Copy the raw HIBP NTLM file onto the host,
+                mount it into the containers, then load it by container path without uploading the file
+                through the browser.
+            </p>
+            <form action="{{ url_for('settings.load_mounted_hibp_ntlm_dataset') }}" method="POST" data-upload-progress-form="true" data-upload-progress-no-file="true" data-upload-start-title="Starting dataset load..." data-upload-start-detail="The server is preparing the mounted HIBP NTLM dataset for background indexing.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="form-group">
+                    <label class="form-control-label" for="mounted_version_label">Version Label (Optional)</label>
+                    <input id="mounted_version_label" class="form-control form-control-lg" type="text" name="version_label" placeholder="Example: HIBP NTLM 2026-04">
+                    <small class="form-text text-muted">
+                        Leave blank to reuse the mounted filename.
+                    </small>
+                </div>
+                <div class="form-group">
+                    <label class="form-control-label" for="mounted_dataset_path">Mounted Dataset Path</label>
+                    {% if hibp_mounted_dataset_files %}
+                    <select id="mounted_dataset_path" name="mounted_dataset_path" class="form-control form-control-lg" required>
+                        {% for mounted_path in hibp_mounted_dataset_files %}
+                        <option value="{{ mounted_path }}" {% if mounted_path == hibp_selected_mounted_dataset_path %}selected{% endif %}>{{ mounted_path }}</option>
+                        {% endfor %}
+                    </select>
+                    <small class="form-text text-muted">
+                        Pick a readable file under <code>{{ hibp_dataset_mount_root }}</code>.
+                    </small>
+                    {% else %}
+                    <input id="mounted_dataset_path" class="form-control form-control-lg" type="text" name="mounted_dataset_path" value="{{ hibp_selected_mounted_dataset_path }}" required>
+                    <small class="form-text text-muted">
+                        No readable files were found under <code>{{ hibp_dataset_mount_root }}</code>. You can still enter a mounted path manually.
+                    </small>
+                    {% endif %}
+                </div>
+                <div class="hc-upload-status hc-hidden" data-upload-status aria-live="polite">
+                    <div class="hc-upload-status-header">
+                        <span class="hc-upload-status-title" data-upload-status-title>Starting dataset load...</span>
+                        <span class="hc-upload-status-detail" data-upload-status-detail>Waiting to start.</span>
+                    </div>
+                    <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+                        <div class="progress-bar" data-upload-progress-bar style="width: 0%" aria-valuenow="0">0%</div>
+                    </div>
+                </div>
+                <div class="hc-form-actions">
+                    <div class="hc-form-actions-right">
+                        <button class="btn btn-primary" type="submit">Load Mounted Dataset</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        <hr>
+
+        <div class="mb-4">
+            <h2 class="h5">Refresh Existing Hashes</h2>
+            <p class="text-muted mb-3">
+                Run this after loading or updating the offline dataset to scan NTLM hashes that were already stored
+                before the current dataset became active.
+            </p>
+            <form action="{{ url_for('settings.backfill_hibp_ntlm_dataset') }}" method="POST" data-upload-progress-form="true" data-upload-progress-no-file="true" data-upload-start-title="Starting exposure refresh..." data-upload-start-detail="The server is preparing stored NTLM hashes for an offline exposure refresh.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="hc-upload-status hc-hidden" data-upload-status aria-live="polite">
+                    <div class="hc-upload-status-header">
+                        <span class="hc-upload-status-title" data-upload-status-title>Starting exposure refresh...</span>
+                        <span class="hc-upload-status-detail" data-upload-status-detail>Waiting to start.</span>
+                    </div>
+                    <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+                        <div class="progress-bar" data-upload-progress-bar style="width: 0%" aria-valuenow="0">0%</div>
+                    </div>
+                </div>
+                <div class="hc-form-actions">
+                    <div class="hc-form-actions-right">
+                        <button class="btn btn-outline-primary" type="submit" {% if not hibp_dataset_summary.loaded %}disabled{% endif %}>Refresh Existing Hashes</button>
+                    </div>
+                </div>
+                {% if not hibp_dataset_summary.loaded %}
+                <small class="form-text text-muted">
+                    Load a dataset first to enable historical backfill.
+                </small>
+                {% endif %}
+            </form>
+        </div>
+
+        <hr>
+
+        <h2 class="h5">Upload Dataset File</h2>
+        <p class="text-muted mb-3">
+            Keep browser upload for smaller datasets. Very large files are better loaded from the mounted dataset root above.
+        </p>
+        <form action="{{ url_for('settings.load_hibp_ntlm_dataset') }}" method="POST" enctype="multipart/form-data" data-upload-progress-form="true">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="form-group">
+                <label class="form-control-label" for="uploaded_version_label">Version Label (Optional)</label>
+                <input id="uploaded_version_label" class="form-control form-control-lg" type="text" name="version_label" placeholder="Example: HIBP NTLM 2026-04">
+                <small class="form-text text-muted">
+                    Leave blank to reuse the uploaded filename.
+                </small>
+            </div>
+            <div class="form-group">
+                <label class="form-control-label" for="dataset_file">Offline HIBP NTLM Dataset</label>
+                <input id="dataset_file" class="hc-file-input hc-file-input--wide" type="file" name="dataset_file" required>
+                <small class="form-text text-muted">
+                    Large datasets are processed in the background and remain visible in the global background-processing banner while you keep browsing.
+                </small>
+            </div>
+            <div class="hc-upload-status hc-hidden" data-upload-status aria-live="polite">
+                <div class="hc-upload-status-header">
+                    <span class="hc-upload-status-title" data-upload-status-title>Uploading dataset...</span>
+                    <span class="hc-upload-status-detail" data-upload-status-detail>Waiting to start.</span>
+                </div>
+                <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+                    <div class="progress-bar" data-upload-progress-bar style="width: 0%" aria-valuenow="0">0%</div>
+                </div>
+            </div>
+            <div class="hc-form-actions mb-0">
+                <div class="hc-form-actions-right">
+                    <button class="btn btn-primary" type="submit">Load Offline Dataset</button>
+                </div>
+            </div>
+        </form>
+    </div>
+{% endblock content %}

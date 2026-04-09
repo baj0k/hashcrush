@@ -80,6 +80,7 @@
         <li><strong>Recovered Password Quality</strong> is calculated from recovered passwords only. A password meets the current baseline when length is at least 8 and at least 3 of 4 character classes are present: lower, upper, digit, symbol.</li>
         <li><strong>Hash Reuse</strong> measures account rows that share the same stored hash value with at least one other row in the selected scope, regardless of whether the password is recovered.</li>
         <li><strong>Password Reuse</strong> measures recovered account rows that share the same recovered password within the selected scope.</li>
+        <li><strong>Public Exposure</strong> checks NTLM hashes against the locally loaded offline HIBP dataset and reports account rows that use hashes seen in public breach data.</li>
         <li><strong>Domain Posture Comparison</strong> ranks shared domains using observed weak-password rate, reuse rate, and password-equals-username findings from recovered accounts only.</li>
     </ul>
 </div>
@@ -230,6 +231,22 @@
                         <td>{{ scope_posture.reused_hash_account_count }} ({{ scope_posture.reused_hash_account_percent }})</td>
                     </tr>
                     <tr>
+                        <td>Publicly Exposed Hashes</td>
+                        <td>{{ scope_posture.public_exposed_hash_count }} ({{ scope_posture.public_exposed_hash_percent }})</td>
+                    </tr>
+                    <tr>
+                        <td>Accounts Using Publicly Exposed Hashes</td>
+                        <td>{{ scope_posture.public_exposed_account_count }} ({{ scope_posture.public_exposed_account_percent }})</td>
+                    </tr>
+                    <tr>
+                        <td>Exposure Dataset</td>
+                        <td>{{ scope_posture.public_exposure_dataset_label }}</td>
+                    </tr>
+                    <tr>
+                        <td>Last Exposure Check</td>
+                        <td>{{ scope_posture.public_exposure_last_checked }}</td>
+                    </tr>
+                    <tr>
                         <td>Weak Recovered Passwords</td>
                         <td>{{ scope_posture.weak_recovered_count }} ({{ scope_posture.weak_recovered_percent }})</td>
                     </tr>
@@ -297,6 +314,26 @@
                                 {% else %}
                                 <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='reused_hashes') }}" role="button">Reused Hash Accounts</a>
                                 <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='reused_passwords') }}" role="button">Reused Password Accounts</a>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>Public Exposure Export</td>
+                        <td>
+                            <div class="hc-inline-actions">
+                                {% if public_exposure_summary.dataset_loaded %}
+                                    {% if domain_id %}
+                                        {% if hashfile_id %}
+                                        <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='public_exposures', domain_id=domain_id, hashfile_id=hashfile_id) }}" role="button">Public Exposure Accounts</a>
+                                        {% else %}
+                                        <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='public_exposures', domain_id=domain_id) }}" role="button">Public Exposure Accounts</a>
+                                        {% endif %}
+                                    {% else %}
+                                    <a class="btn btn-primary btn-sm" href="{{ url_for('analytics.analytics_download_hashes', type='public_exposures') }}" role="button">Public Exposure Accounts</a>
+                                    {% endif %}
+                                {% else %}
+                                <span class="text-muted">Load an offline HIBP NTLM dataset in Settings first.</span>
                                 {% endif %}
                             </div>
                         </td>

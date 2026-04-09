@@ -23,7 +23,7 @@ TEST_SECOND_USERNAME = "operator"
 TEST_SECOND_PASSWORD = "supersecretpassword2"
 TEST_DOMAIN_NAME = "E2E Domain"
 TEST_HASHFILE_NAME = "e2e-existing-hashes.txt"
-TEST_TASK_NAME = "?a [1]"
+TEST_TASK_NAME = "All Characters [1 char]"
 TEST_SECRET_KEY = "local-e2e-test-secret-key-for-hashcrush-0123456789"
 TEST_DATA_ENCRYPTION_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 _SETUP_COMPLETED = False

@@ -4,12 +4,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, select, text
 
 import hashcrush
-from hashcrush.models import AuditLog, SchemaVersion, UploadOperations, db, utc_now_naive
+from hashcrush.models import (
+    AuditLog,
+    HashPublicExposure,
+    ReferenceDatasets,
+    SchemaVersion,
+    TaskGroups,
+    Tasks,
+    UploadOperations,
+    db,
+    utc_now_naive,
+)
 
-CURRENT_SCHEMA_VERSION = 9
+CURRENT_SCHEMA_VERSION = 11
 
 
 @dataclass(frozen=True)
@@ -373,6 +383,41 @@ def _migration_009_make_domains_optional_and_per_account() -> None:
     db.session.commit()
 
 
+def _migration_010_rename_default_mask_tasks() -> None:
+    """Rename legacy seeded mask tasks and group to clearer All Characters labels."""
+    from hashcrush.setup import default_mask_task_group_name, default_mask_task_name
+
+    legacy_group_name = "maskmode 1-10"
+
+    for length in range(1, 11):
+        mask = "?a" * length
+        legacy_name = f"{mask} [{length}]"
+        task = db.session.scalar(
+            select(Tasks).where(
+                Tasks.hc_attackmode == "maskmode",
+                Tasks.hc_mask == mask,
+                Tasks.name == legacy_name,
+            )
+        )
+        if task is not None:
+            task.name = default_mask_task_name(length)
+
+    task_group = db.session.scalar(
+        select(TaskGroups).where(TaskGroups.name == legacy_group_name)
+    )
+    if task_group is not None:
+        task_group.name = default_mask_task_group_name()
+
+    db.session.commit()
+
+
+def _migration_011_add_offline_reference_datasets() -> None:
+    """Add offline breach-intelligence dataset metadata and exposure cache tables."""
+
+    ReferenceDatasets.__table__.create(bind=db.engine, checkfirst=True)
+    HashPublicExposure.__table__.create(bind=db.engine, checkfirst=True)
+
+
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(
         version=1,
@@ -427,6 +472,18 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
         name="make_domains_optional_and_per_account",
         summary="Allow optional hashfile/job domains and persist inferred domains per imported account.",
         upgrade=_migration_009_make_domains_optional_and_per_account,
+    ),
+    MigrationStep(
+        version=10,
+        name="rename_default_mask_tasks",
+        summary="Rename default mask tasks and task group to clearer All Characters labels.",
+        upgrade=_migration_010_rename_default_mask_tasks,
+    ),
+    MigrationStep(
+        version=11,
+        name="add_offline_reference_datasets",
+        summary="Track offline breach-intelligence datasets and cached exposure matches.",
+        upgrade=_migration_011_add_offline_reference_datasets,
     ),
 )
 

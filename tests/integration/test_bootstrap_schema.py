@@ -523,7 +523,7 @@ def test_upgrade_database_migrates_v1_schema_forward_to_current_version():
         result = upgrade_database()
 
         assert inspect(db.engine).has_table(AuditLog.__tablename__)
-        assert [step.version for step in result.applied_steps] == [2, 3, 4, 5, 6, 7, 8]
+        assert [step.version for step in result.applied_steps] == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -550,7 +550,7 @@ def test_upgrade_database_migrates_v2_schema_forward_to_current_version():
         result = upgrade_database()
 
         assert not inspect(db.engine).has_table("settings")
-        assert [step.version for step in result.applied_steps] == [3, 4, 5, 6, 7, 8]
+        assert [step.version for step in result.applied_steps] == [3, 4, 5, 6, 7, 8, 9, 10, 11]
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -602,7 +602,7 @@ def test_upgrade_database_migrates_v3_schema_to_v4_job_task_positions():
         index_names = {
             index["name"] for index in inspect(db.engine).get_indexes("job_tasks")
         }
-        assert [step.version for step in result.applied_steps] == [4, 5, 6, 7, 8]
+        assert [step.version for step in result.applied_steps] == [4, 5, 6, 7, 8, 9, 10, 11]
         assert [row.position for row in persisted] == [0, 1]
         assert "ix_job_tasks_job_id_position" in index_names
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
@@ -628,9 +628,49 @@ def test_upgrade_database_migrates_v5_schema_to_v6_audit_filter_indexes():
         result = upgrade_database()
 
         audit_indexes = {row["name"] for row in inspect(db.engine).get_indexes("audit_logs")}
-        assert [step.version for step in result.applied_steps] == [6, 7, 8]
+        assert [step.version for step in result.applied_steps] == [6, 7, 8, 9, 10, 11]
         assert "ix_audit_logs_actor_username_created_at" in audit_indexes
         assert "ix_audit_logs_target_type_created_at" in audit_indexes
+        assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
+
+
+@pytest.mark.security
+def test_upgrade_database_migrates_v9_legacy_default_mask_names():
+    app = _build_app()
+    with app.app_context():
+        from hashcrush.db_upgrade import CURRENT_SCHEMA_VERSION, upgrade_database
+        from hashcrush.setup import default_mask_task_group_name, default_mask_task_name
+
+        db.create_all()
+        legacy_task_ids = []
+        for length in range(1, 11):
+            mask = "?a" * length
+            task = Tasks(
+                name=f"{mask} [{length}]",
+                hc_attackmode="maskmode",
+                hc_mask=mask,
+            )
+            db.session.add(task)
+            db.session.flush()
+            legacy_task_ids.append(task.id)
+
+        db.session.add(
+            TaskGroups(name="maskmode 1-10", tasks=json.dumps(legacy_task_ids))
+        )
+        db.session.add(SchemaVersion(id=1, version=9, app_version="1.0"))
+        db.session.commit()
+
+        result = upgrade_database()
+
+        renamed_tasks = _all_rows(Tasks, order_by=Tasks.id.asc())
+        renamed_group = _first_row(TaskGroups, name=default_mask_task_group_name())
+
+        assert [step.version for step in result.applied_steps] == [10, 11]
+        assert [task.name for task in renamed_tasks] == [
+            default_mask_task_name(length) for length in range(1, 11)
+        ]
+        assert renamed_group is not None
+        assert json.loads(renamed_group.tasks) == legacy_task_ids
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -650,7 +690,11 @@ def test_normalize_text_input_trims_and_rejects_whitespace_only_values():
 
 @pytest.mark.security
 def test_add_default_tasks_seeds_maskmode_mask_set_and_group():
-    from hashcrush.setup import add_default_tasks
+    from hashcrush.setup import (
+        add_default_tasks,
+        default_mask_task_group_name,
+        default_mask_task_name,
+    )
 
     app = _build_app()
     with app.app_context():
@@ -662,20 +706,18 @@ def test_add_default_tasks_seeds_maskmode_mask_set_and_group():
         seeded_tasks = _all_rows(Tasks, order_by=Tasks.id.asc())
         assert len(seeded_tasks) == 10
         expected_masks = ["?a" * length for length in range(1, 11)]
-        expected_names = [
-            f"{mask} [{length}]" for length, mask in enumerate(expected_masks, start=1)
-        ]
+        expected_names = [default_mask_task_name(length) for length in range(1, 11)]
         assert [task.hc_mask for task in seeded_tasks] == expected_masks
         assert [task.name for task in seeded_tasks] == expected_names
         assert all(task.hc_attackmode == "maskmode" for task in seeded_tasks)
 
-        task_group = _first_row(TaskGroups, name="maskmode 1-10")
+        task_group = _first_row(TaskGroups, name=default_mask_task_group_name())
         assert task_group is not None
         assert json.loads(task_group.tasks) == [task.id for task in seeded_tasks]
 
 @pytest.mark.security
 def test_add_default_tasks_no_longer_depend_on_admin_id():
-    from hashcrush.setup import add_default_tasks
+    from hashcrush.setup import add_default_tasks, default_mask_task_group_name
 
     app = _build_app()
     with app.app_context():
@@ -690,7 +732,7 @@ def test_add_default_tasks_no_longer_depend_on_admin_id():
 
         seeded_tasks = _all_rows(Tasks, order_by=Tasks.id.asc())
         assert seeded_tasks
-        task_group = _first_row(TaskGroups, name="maskmode 1-10")
+        task_group = _first_row(TaskGroups, name=default_mask_task_group_name())
         assert task_group is not None
         assert json.loads(task_group.tasks) == [task.id for task in seeded_tasks]
 
@@ -715,7 +757,9 @@ def test_seed_initial_runtime_state_creates_admin_and_default_tasks(
         assert admin is not None
         assert bcrypt.check_password_hash(admin.password, "LongEnoughBootstrapPassword!")
         assert _count_rows(Tasks) == 10
-        assert _first_row(TaskGroups, name="maskmode 1-10") is not None
+        from hashcrush.setup import default_mask_task_group_name
+
+        assert _first_row(TaskGroups, name=default_mask_task_group_name()) is not None
 
 
 @pytest.mark.security

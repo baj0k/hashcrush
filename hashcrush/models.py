@@ -98,6 +98,28 @@ class UploadOperations(db.Model):
     )
 
 
+class ReferenceDatasets(db.Model):
+    """Metadata for locally loaded offline reference datasets."""
+
+    __tablename__ = "reference_datasets"
+    __table_args__ = (
+        db.UniqueConstraint("kind", name="uq_reference_datasets_kind"),
+        db.Index("ix_reference_datasets_kind_loaded_at", "kind", "loaded_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    version_label: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    path: Mapped[str] = mapped_column(String(512), nullable=False)
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    record_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    loaded_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utc_now_naive
+    )
+
+
 class Jobs(db.Model):
     """Class object to represent Jobs"""
 
@@ -447,6 +469,50 @@ class Hashes(db.Model):
     hashfile_hashes: Mapped[list[HashfileHashes]] = relationship(
         "HashfileHashes",
         back_populates="hash",
+        lazy="select",
+    )
+    public_exposures: Mapped[list[HashPublicExposure]] = relationship(
+        "HashPublicExposure",
+        back_populates="hash",
+        lazy="select",
+    )
+
+
+class HashPublicExposure(db.Model):
+    """Cached public breach-intelligence results for stored hashes."""
+
+    __tablename__ = "hash_public_exposures"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "hash_id",
+            "source_kind",
+            name="uq_hash_public_exposures_hash_id_source_kind",
+        ),
+        db.Index(
+            "ix_hash_public_exposures_source_kind_matched",
+            "source_kind",
+            "matched",
+        ),
+        db.Index("ix_hash_public_exposures_checked_at", "checked_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    hash_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("hashes.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    matched: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    prevalence_count: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    checked_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utc_now_naive
+    )
+    hash: Mapped[Hashes] = relationship(
+        "Hashes",
+        back_populates="public_exposures",
         lazy="select",
     )
 

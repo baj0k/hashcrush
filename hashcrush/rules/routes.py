@@ -10,6 +10,7 @@ from hashcrush.audit import capture_audit_actor, record_audit_event
 from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Rules, Tasks, db
 from hashcrush.rules.forms import RulesForm
+from hashcrush.tasks.sorting import sort_tasks_naturally
 from hashcrush.utils.file_ops import (
     analyze_text_file,
     save_file,
@@ -85,11 +86,12 @@ def _derive_rule_name(form_name: str | None, uploaded_filename: str | None) -> s
 
 
 def _rule_detail_context(rule: Rules) -> dict[str, object]:
-    associated_tasks = db.session.execute(
-        select(Tasks)
-        .where(Tasks.rule_id == rule.id)
-        .order_by(Tasks.name.asc())
-    ).scalars().all()
+    associated_tasks = sort_tasks_naturally(
+        db.session.execute(
+            select(Tasks)
+            .where(Tasks.rule_id == rule.id)
+        ).scalars().all()
+    )
     return {
         'associated_tasks': associated_tasks,
         'delete_blockers': {

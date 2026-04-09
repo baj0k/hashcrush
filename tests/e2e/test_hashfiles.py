@@ -15,10 +15,11 @@ def test_shared_hashfile_add_flow(page, live_server, login, e2e_fixture_data):
     expect(page.get_by_role("heading", name="Create Shared Hashfile")).to_be_visible()
 
     hashfile_name = unique_name("E2E Shared Hashfile")
-    page.locator("#domain_id").select_option(str(e2e_fixture_data["domain_id"]))
+    page.get_by_label("Fallback Domain (Optional)").fill(e2e_fixture_data["domain_name"])
     page.locator("#file_type").select_option("hash_only")
     page.locator("#hash_type").select_option("0")
     page.locator("#name").fill(hashfile_name)
+    page.get_by_text("Paste hashes manually instead", exact=True).click()
     page.locator("textarea[name='hashfilehashes']").fill("5f4dcc3b5aa765d61d8327deb882cf99")
     page.get_by_role("button", name="Create Hashfile").click()
 

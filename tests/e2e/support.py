@@ -65,6 +65,8 @@ def assert_login_error_feedback(page) -> None:
 
 
 def select_domain(page, domain_id: str) -> None:
+    if page.locator("#domain_id").count() == 0:
+        return
     option = page.locator(f"#domain_id option[value='{domain_id}']")
     assert option.count() > 0, "Seeded E2E domain is missing from the job form."
     page.locator("#domain_id").select_option(str(domain_id))

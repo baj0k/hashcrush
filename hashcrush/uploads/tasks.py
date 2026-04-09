@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import errno
 import os
 
 from flask import current_app
+import lmdb
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from hashcrush.audit import record_audit_event
 from hashcrush.hashfiles.service import create_hashfile_from_path
+from hashcrush.hibp.service import (
+    HIBP_NTLM_KIND,
+    load_hibp_ntlm_dataset_from_source,
+    scan_all_ntlm_hashes_against_hibp_dataset,
+    scan_hashfile_against_hibp_dataset,
+)
 from hashcrush.models import Jobs, Rules, Wordlists, db
 from hashcrush.utils.file_ops import analyze_text_file
 from hashcrush.utils.storage_paths import get_storage_subdir
@@ -18,6 +26,22 @@ from hashcrush.wordlists.service import (
     create_static_wordlist_from_path,
     remove_managed_wordlist_file,
 )
+
+
+def _format_progress_bytes(size_bytes: int) -> str:
+    units = ["B", "KB", "MB", "GB", "TB"]
+    value = float(max(size_bytes, 0))
+    unit_index = 0
+    while value >= 1024 and unit_index < len(units) - 1:
+        value /= 1024
+        unit_index += 1
+    if unit_index == 0:
+        return f"{int(value)} {units[unit_index]}"
+    if value >= 100:
+        return f"{value:.0f} {units[unit_index]}"
+    if value >= 10:
+        return f"{value:.1f}".rstrip("0").rstrip(".") + f" {units[unit_index]}"
+    return f"{value:.2f}".rstrip("0").rstrip(".") + f" {units[unit_index]}"
 
 
 def _make_stage_progress_callback(
@@ -81,6 +105,161 @@ def _make_hashfile_progress_callback(reporter):
         )
 
     return callback
+
+
+def _make_hibp_dataset_progress_callback(reporter):
+    stage_config = {
+        "stream_insert": (
+            4.0,
+            97.0,
+            "Building offline dataset...",
+            "Streaming the selected HIBP NTLM dataset into the local LMDB index.",
+        ),
+        "partition": (
+            4.0,
+            88.0,
+            "Building offline dataset...",
+            "Reading the selected HIBP NTLM dataset and building the local LMDB index.",
+        ),
+        "insert": (
+            88.0,
+            97.0,
+            "Finalizing offline dataset...",
+            "Writing the deduplicated LMDB lookup store to managed storage.",
+        ),
+    }
+
+    def callback(stage: str, current: int, total: int) -> None:
+        start_percent, end_percent, title, detail = stage_config.get(
+            stage,
+            (
+                4.0,
+                97.0,
+                "Processing offline dataset...",
+                "The server is validating and loading the offline dataset.",
+            ),
+        )
+        if total > 0:
+            fraction = max(0.0, min(1.0, float(current) / float(total)))
+        else:
+            fraction = 1.0 if current else 0.0
+        if stage == "stream_insert":
+            current_amount = _format_progress_bytes(current)
+            total_amount = _format_progress_bytes(total) if total > 0 else "unknown size"
+            detail = (
+                f"Loaded {current_amount} of {total_amount} into the LMDB lookup store."
+            )
+        elif stage == "partition":
+            current_amount = _format_progress_bytes(current)
+            total_amount = _format_progress_bytes(total) if total > 0 else "unknown size"
+            detail = (
+                f"Read {current_amount} of {total_amount} from the selected "
+                "HIBP NTLM dataset."
+            )
+        elif stage == "insert":
+            if total > 0:
+                detail = (
+                    f"Loaded shard {int(current):,} of {int(total):,} into the LMDB "
+                    "lookup store."
+                )
+            else:
+                detail = "Writing the deduplicated LMDB lookup store."
+        reporter.update(
+            percent=start_percent + ((end_percent - start_percent) * fraction),
+            title=title,
+            detail=detail,
+        )
+
+    return callback
+
+
+def _make_hibp_backfill_progress_callback(reporter):
+    def callback(current: int, total: int) -> None:
+        if total > 0:
+            fraction = max(0.0, min(1.0, float(current) / float(total)))
+            detail = (
+                f"Checked {int(current):,} of {int(total):,} stored NTLM hash(es) "
+                "against the offline dataset."
+            )
+        else:
+            fraction = 1.0 if current else 0.0
+            detail = (
+                f"Checked {int(current):,} stored NTLM hash(es) against the offline dataset."
+            )
+        reporter.update(
+            percent=4.0 + (93.0 * fraction),
+            title="Refreshing exposure matches...",
+            detail=detail,
+        )
+
+    return callback
+
+
+def _hibp_dataset_failure_detail(exc: Exception) -> str:
+    if isinstance(exc, lmdb.MapFullError):
+        return (
+            "The offline dataset build ran out of LMDB map space while finalizing the "
+            "lookup store. Increase HASHCRUSH_HIBP_DATASET_MIN_MAP_SIZE_GB and retry."
+        )
+    if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+        return (
+            "The server ran out of disk space while building the offline dataset. "
+            "The HIBP build needs free space for temporary shards and the final LMDB store."
+        )
+    if isinstance(exc, MemoryError):
+        return (
+            "The server ran out of memory while finalizing the offline dataset. "
+            "Retry with the safer HIBP build settings or reduce concurrent memory pressure."
+        )
+    return str(exc)
+
+
+def _maybe_scan_hashfile_public_exposure(
+    hashfile_id: int,
+    hash_type: str,
+    *,
+    reporter=None,
+) -> list[tuple[str, str]]:
+    if str(hash_type or "").strip() != "1000":
+        return []
+
+    progress_callback = None
+    if reporter is not None:
+        progress_callback = _make_stage_progress_callback(
+            reporter,
+            title="Checking public exposures...",
+            detail="Comparing NTLM hashes against the offline HIBP dataset.",
+            start_percent=96,
+            end_percent=99,
+        )
+
+    try:
+        scan_result = scan_hashfile_against_hibp_dataset(
+            hashfile_id,
+            progress_callback=progress_callback,
+        )
+    except Exception:
+        current_app.logger.exception(
+            "Offline public exposure scan failed for hashfile %s",
+            hashfile_id,
+        )
+        return [
+            (
+                "warning",
+                "Hashfile import succeeded, but the offline public exposure check could not be completed.",
+            )
+        ]
+
+    if scan_result.matched_account_count > 0:
+        return [
+            (
+                "info",
+                "Offline public exposure check matched "
+                f"{scan_result.matched_hash_count} unique NTLM hash(es) across "
+                f"{scan_result.matched_account_count} account row(s).",
+            )
+        ]
+    return []
 
 
 def _managed_rules_dir() -> str:
@@ -448,6 +627,13 @@ def _process_hashfile_upload(payload: dict[str, object], reporter) -> None:
         actor=actor,
     )
     flashes.append(("success", "Hashfile created!"))
+    flashes.extend(
+        _maybe_scan_hashfile_public_exposure(
+            hashfile.id,
+            creation_result.hash_type,
+            reporter=reporter,
+        )
+    )
     reporter.complete(
         title="Hashfile ready.",
         detail=f'Shared hashfile "{hashfile.name}" is available.',
@@ -571,10 +757,225 @@ def _process_job_hashfile_upload(payload: dict[str, object], reporter) -> None:
         },
         actor=audit_actor if isinstance(audit_actor, dict) else None,
     )
+    flashes = [("success", "Hashfile created and assigned to the job.")]
+    flashes.extend(
+        _maybe_scan_hashfile_public_exposure(
+            hashfile.id,
+            creation_result.hash_type,
+            reporter=reporter,
+        )
+    )
     reporter.complete(
         title="Hashfile ready.",
         detail=f'Shared hashfile "{hashfile.name}" was attached to job "{job_name}".',
-        completion_flashes=[("success", "Hashfile created and assigned to the job.")],
+        completion_flashes=flashes,
+    )
+
+
+def _process_hibp_ntlm_dataset_upload(payload: dict[str, object], reporter) -> None:
+    staged_dataset_path = os.path.abspath(
+        str(payload.get("staged_dataset_path") or "").strip()
+    )
+    version_label = str(payload.get("version_label") or "").strip() or None
+    source_filename = str(payload.get("source_filename") or "").strip() or None
+    audit_actor = payload.get("audit_actor")
+
+    try:
+        reporter.update(
+            percent=4,
+            title="Preparing offline dataset...",
+            detail="Checking the uploaded HIBP NTLM dataset before indexing.",
+        )
+        load_result = load_hibp_ntlm_dataset_from_source(
+            staged_dataset_path,
+            version_label=version_label,
+            source_filename=source_filename,
+            progress_callback=_make_hibp_dataset_progress_callback(reporter),
+            persist_source_copy=True,
+        )
+    except ValueError as exc:
+        db.session.rollback()
+        reporter.fail(
+            title="Offline dataset load failed.",
+            detail=str(exc),
+        )
+        return
+    except (lmdb.MapFullError, OSError, MemoryError) as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed processing queued offline HIBP dataset upload")
+        reporter.fail(
+            title="Offline dataset load failed.",
+            detail=_hibp_dataset_failure_detail(exc),
+        )
+        return
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Failed processing queued offline HIBP dataset upload")
+        reporter.fail(
+            title="Offline dataset load failed.",
+            detail="The server hit an unexpected error while processing the offline dataset.",
+        )
+        return
+    finally:
+        _remove_staged_hashfile_file(staged_dataset_path)
+
+    _complete_hibp_ntlm_dataset_load(
+        load_result,
+        reporter,
+        audit_actor=audit_actor,
+        load_method="upload",
+    )
+
+
+def _complete_hibp_ntlm_dataset_load(
+    load_result,
+    reporter,
+    *,
+    audit_actor,
+    load_method: str,
+    source_path: str | None = None,
+) -> None:
+    audit_details = {
+        "kind": "hibp_ntlm",
+        "version_label": load_result.version_label,
+        "source_filename": load_result.source_filename,
+        "checksum": load_result.checksum,
+        "record_count": load_result.record_count,
+        "dataset_path": load_result.dataset_path,
+        "load_method": load_method,
+    }
+    if source_path:
+        audit_details["source_path"] = source_path
+
+    record_audit_event(
+        "reference_dataset.load",
+        "reference_dataset",
+        target_id=load_result.checksum,
+        summary='Loaded offline HIBP NTLM dataset.',
+        details=audit_details,
+        actor=audit_actor if isinstance(audit_actor, dict) else None,
+    )
+    completion_flashes = [
+        ("success", "Offline HIBP NTLM dataset loaded."),
+        (
+            "info",
+            "New NTLM hashfile imports will be checked automatically. "
+            "Use Refresh Existing Hashes to backfill already stored data.",
+        ),
+    ]
+    reporter.complete(
+        title="Offline dataset ready.",
+        detail=(
+            f'Loaded offline HIBP NTLM dataset "{load_result.version_label}". '
+            "Existing hashes can now be refreshed separately."
+        ),
+        completion_flashes=completion_flashes,
+    )
+
+
+def _process_hibp_ntlm_dataset_register(payload: dict[str, object], reporter) -> None:
+    source_path = os.path.abspath(str(payload.get("source_path") or "").strip())
+    version_label = str(payload.get("version_label") or "").strip() or None
+    source_filename = str(payload.get("source_filename") or "").strip() or None
+    audit_actor = payload.get("audit_actor")
+
+    try:
+        reporter.update(
+            percent=4,
+            title="Preparing offline dataset...",
+            detail="Checking the mounted HIBP NTLM dataset before indexing.",
+        )
+        load_result = load_hibp_ntlm_dataset_from_source(
+            source_path,
+            version_label=version_label,
+            source_filename=source_filename,
+            progress_callback=_make_hibp_dataset_progress_callback(reporter),
+        )
+    except ValueError as exc:
+        db.session.rollback()
+        reporter.fail(
+            title="Mounted dataset load failed.",
+            detail=str(exc),
+        )
+        return
+    except (lmdb.MapFullError, OSError, MemoryError) as exc:
+        db.session.rollback()
+        current_app.logger.exception("Failed processing queued mounted HIBP dataset load")
+        reporter.fail(
+            title="Mounted dataset load failed.",
+            detail=_hibp_dataset_failure_detail(exc),
+        )
+        return
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Failed processing queued mounted HIBP dataset load")
+        reporter.fail(
+            title="Mounted dataset load failed.",
+            detail="The server hit an unexpected error while processing the mounted dataset.",
+        )
+        return
+
+    _complete_hibp_ntlm_dataset_load(
+        load_result,
+        reporter,
+        audit_actor=audit_actor,
+        load_method="mounted_path",
+        source_path=source_path,
+    )
+
+
+def _process_hibp_ntlm_dataset_backfill(payload: dict[str, object], reporter) -> None:
+    audit_actor = payload.get("audit_actor")
+
+    try:
+        reporter.update(
+            percent=4,
+            title="Refreshing exposure matches...",
+            detail="Preparing the stored NTLM hash set for an offline exposure refresh.",
+        )
+        backfill_result = scan_all_ntlm_hashes_against_hibp_dataset(
+            progress_callback=_make_hibp_backfill_progress_callback(reporter),
+        )
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception(
+            "Failed processing queued offline HIBP dataset backfill"
+        )
+        reporter.fail(
+            title="Exposure refresh failed.",
+            detail="The server hit an unexpected error while refreshing existing hashes.",
+        )
+        return
+
+    record_audit_event(
+        "reference_dataset.backfill",
+        "reference_dataset",
+        target_id=HIBP_NTLM_KIND,
+        summary="Refreshed offline public exposure matches for stored NTLM hashes.",
+        details={
+            "kind": HIBP_NTLM_KIND,
+            "matched_hash_count": backfill_result.matched_hash_count,
+            "matched_account_count": backfill_result.matched_account_count,
+            "scanned_hash_count": backfill_result.scanned_hash_count,
+        },
+        actor=audit_actor if isinstance(audit_actor, dict) else None,
+    )
+    completion_flashes = [("success", "Existing NTLM hashes refreshed against the offline dataset.")]
+    if backfill_result.matched_account_count > 0:
+        completion_flashes.append(
+            (
+                "info",
+                "The offline dataset matched "
+                f"{backfill_result.matched_hash_count} unique NTLM hash(es) across "
+                f"{backfill_result.matched_account_count} account row(s).",
+            )
+        )
+    reporter.complete(
+        title="Exposure refresh complete.",
+        detail=(
+            "Finished refreshing stored NTLM hashes against the active offline dataset."
+        ),
+        completion_flashes=completion_flashes,
     )
 
 
@@ -601,5 +1002,14 @@ def process_upload_operation(
         return
     if normalized_type == "job_hashfile_upload":
         _process_job_hashfile_upload(payload, reporter)
+        return
+    if normalized_type == "hibp_ntlm_dataset_upload":
+        _process_hibp_ntlm_dataset_upload(payload, reporter)
+        return
+    if normalized_type == "hibp_ntlm_dataset_register":
+        _process_hibp_ntlm_dataset_register(payload, reporter)
+        return
+    if normalized_type == "hibp_ntlm_dataset_backfill":
+        _process_hibp_ntlm_dataset_backfill(payload, reporter)
         return
     raise RuntimeError(f"Unsupported upload operation type: {operation_type!r}")

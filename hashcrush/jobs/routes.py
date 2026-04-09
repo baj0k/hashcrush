@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from hashcrush.audit import capture_audit_actor, record_audit_event
 from hashcrush.hashfiles.service import create_hashfile_from_form
 from hashcrush.hashfiles.validation import normalize_hashfile_file_type
+from hashcrush.hibp.service import scan_hashfile_against_hibp_dataset
 from hashcrush.jobs.access import (
     _can_manage_job,
     _can_view_job,
@@ -254,6 +255,19 @@ def jobs_assigned_hashfile(job_id):
         job.hashfile_id = hashfile.id
         job.domain_id = hashfile.domain_id
         db.session.commit()
+        scan_warning = None
+        scan_result = None
+        if creation_result.hash_type == '1000':
+            try:
+                scan_result = scan_hashfile_against_hibp_dataset(hashfile.id)
+            except Exception:
+                current_app.logger.exception(
+                    'Offline public exposure scan failed for builder hashfile id=%s',
+                    hashfile.id,
+                )
+                scan_warning = (
+                    'Hashfile was attached, but the offline public exposure check could not be completed.'
+                )
         record_audit_event(
             'hashfile.create',
             'hashfile',
@@ -270,6 +284,15 @@ def jobs_assigned_hashfile(job_id):
         cracked_hashfiles_hashes_cnt = len(_selected_hashfile_local_hits(hashfile.id))
         if cracked_hashfiles_hashes_cnt > 0:
             flash(str(cracked_hashfiles_hashes_cnt) + " instacracked Hashes!", 'success')
+        if scan_result and scan_result.matched_account_count > 0:
+            flash(
+                'Offline public exposure check matched '
+                f'{scan_result.matched_hash_count} unique NTLM hash(es) across '
+                f'{scan_result.matched_account_count} account row(s).',
+                'info',
+            )
+        elif scan_warning:
+            flash(scan_warning, 'warning')
         return _builder_redirect(job.id, 'tasks')
 
     elif request.method == 'POST' and request.form.get('hashfile_id'):

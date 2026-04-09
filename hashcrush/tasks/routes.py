@@ -10,6 +10,7 @@ from hashcrush.audit import record_audit_event
 from hashcrush.authz import admin_required_redirect, visible_jobs_query
 from hashcrush.models import JobTasks, Jobs, Rules, TaskGroups, Tasks, Wordlists, db
 from hashcrush.tasks.forms import TasksForm
+from hashcrush.tasks.sorting import sort_tasks_naturally
 from hashcrush.view_utils import append_query_params, safe_relative_url
 
 tasks = Blueprint('tasks', __name__)
@@ -110,7 +111,9 @@ def _task_detail_context(task: Tasks) -> dict[str, object]:
 def tasks_list():
     """Function to list tasks"""
 
-    tasks = db.session.execute(select(Tasks).order_by(Tasks.name.asc())).scalars().all()
+    tasks = sort_tasks_naturally(
+        db.session.execute(select(Tasks)).scalars().all()
+    )
     return render_template(
         'tasks.html',
         title='tasks',

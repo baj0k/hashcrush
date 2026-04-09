@@ -15,19 +15,28 @@ def _xss_payload(label: str):
 
 
 @pytest.mark.e2e
-def test_domain_name_xss_is_escaped(page, live_server, login):
+def test_fallback_domain_xss_is_escaped(page, live_server, login):
     login()
     payload_token = uuid.uuid4().hex[:6]
     payload = f"<svg id=x{payload_token}>"
+    normalized_payload = payload.lower()
+
+    page.goto(f"{live_server}/hashfiles/add", wait_until="domcontentloaded")
+    expect(page.get_by_role("heading", name="Create Shared Hashfile")).to_be_visible()
+    page.get_by_label("Fallback Domain (Optional)").fill(payload)
+    page.locator("#file_type").select_option("hash_only")
+    page.locator("#hash_type").select_option("0")
+    page.get_by_label("Hashfile Name").fill(unique_name("Fallback Domain XSS"))
+    page.get_by_text("Paste hashes manually instead", exact=True).click()
+    page.locator("textarea[name='hashfilehashes']").fill("5f4dcc3b5aa765d61d8327deb882cf99")
+    page.get_by_role("button", name="Create Hashfile").click()
 
     page.goto(f"{live_server}/domains", wait_until="domcontentloaded")
     expect(page.get_by_role("heading", name="Domains")).to_be_visible()
-    page.locator("input[name='name']").fill(payload)
-    page.get_by_role("button", name="Add Domain").click()
-    expect(page.locator("body")).to_contain_text(payload)
+    expect(page.locator("body")).to_contain_text(normalized_payload)
 
     content = page.content()
-    assert payload not in content
+    assert normalized_payload not in content
     assert f"&lt;svg id=x{payload_token}&gt;" in content
 
 

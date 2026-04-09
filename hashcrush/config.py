@@ -288,6 +288,12 @@ def build_config(overrides: dict[str, object] | None = None) -> dict[str, object
         fallback=2,
         minimum=1,
     )
+    hibp_dataset_min_map_size_gb = _parse_int(
+        os.getenv("HASHCRUSH_HIBP_DATASET_MIN_MAP_SIZE_GB")
+        or file_config.get("app", "hibp_dataset_min_map_size_gb", fallback="128"),
+        fallback=128,
+        minimum=4,
+    )
     trust_x_forwarded_for = _parse_bool(
         os.getenv("HASHCRUSH_TRUST_X_FORWARDED_FOR")
         or file_config.get("app", "trust_x_forwarded_for", fallback="false"),
@@ -314,6 +320,7 @@ def build_config(overrides: dict[str, object] | None = None) -> dict[str, object
     default_ssl_cert_path = "/etc/hashcrush/ssl/cert.pem"
     default_ssl_key_path = "/etc/hashcrush/ssl/key.pem"
     default_external_wordlists_path = "/mnt/hashcrush-wordlists"
+    default_hibp_datasets_path = "/mnt/hashcrush-hibp"
 
     return {
         "HASHCRUSH_CONFIG_PATH": config_path,
@@ -335,6 +342,7 @@ def build_config(overrides: dict[str, object] | None = None) -> dict[str, object
         "UPLOAD_OPERATION_LEASE_SECONDS": upload_operation_lease_seconds,
         "UPLOAD_INLINE_MAX_WORKERS": upload_inline_max_workers,
         "UPLOAD_WORKER_POLL_INTERVAL_SECONDS": upload_worker_poll_interval_seconds,
+        "HIBP_DATASET_MIN_MAP_SIZE_GB": hibp_dataset_min_map_size_gb,
         "TRUST_X_FORWARDED_FOR": trust_x_forwarded_for,
         "SESSION_COOKIE_HTTPONLY": session_cookie_httponly,
         "SESSION_COOKIE_SAMESITE": session_cookie_samesite,
@@ -351,6 +359,10 @@ def build_config(overrides: dict[str, object] | None = None) -> dict[str, object
         "EXTERNAL_WORDLISTS_PATH": _normalize_dir_path(
             default_external_wordlists_path,
             default_external_wordlists_path,
+        ),
+        "HIBP_DATASETS_PATH": _normalize_dir_path(
+            default_hibp_datasets_path,
+            default_hibp_datasets_path,
         ),
         "SSL_CERT_PATH": _normalize_file_path(
             os.getenv("HASHCRUSH_SSL_CERT_PATH")

@@ -624,9 +624,8 @@ def test_hashfiles_page_hides_download_controls_for_non_admin():
             f"/analytics/download?type=found&domain_id={domain.id}&hashfile_id={hashfile.id}"
             not in user_html
         )
-        assert (
-            f"/analytics?domain_id={domain.id}&hashfile_id={hashfile.id}" in user_html
-        )
+        assert f"/analytics?hashfile_id={hashfile.id}" in user_html
+        assert f"domain_id={domain.id}" in user_html
 
 @pytest.mark.security
 def test_users_delete_blocks_last_admin_account():

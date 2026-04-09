@@ -2,7 +2,7 @@
 {% block header %}
 <div class="hc-page-header">
     <h1>Search</h1>
-    <p class="hc-page-intro">Search recovered and unrecovered hashes across the shared dataset.</p>
+    <p class="hc-page-intro">Admin-only search across hashes, usernames, and recovered passwords. Exact matches use indexed lookups, and broader partial matches are capped to keep the app responsive.</p>
 </div>
 {% endblock header %}
 {% block content %}
@@ -24,15 +24,12 @@
                     {{ searchForm.query(class="form-control hc-search-query", placeholder="Enter search text")}}
                 {% endif %}
                 {{ searchForm.submit(class="btn btn-primary")}}
-                {% if results and current_user.admin %}
+                {% if results %}
                     {{ searchForm.export(class="btn btn-secondary", title="Export results to a file")}}
                     {{ searchForm.export_type(class="custom-select") }}
                 {% endif %}
             </div>
         </form>
-        {% if results and not current_user.admin %}
-        <small class="form-text text-muted mt-2">Search exports are restricted to admin accounts.</small>
-        {% endif %}
         {% if results %}
             <div class="mt-3">
             <table class="table">

@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import os
+import re
 
 from flask import current_app
 
 from hashcrush.models import Wordlists, db
 from hashcrush.utils.file_ops import analyze_text_file
 from hashcrush.utils.storage_paths import get_storage_subdir
+
+
+def _natural_sort_key(value: str) -> list[object]:
+    return [
+        int(chunk) if chunk.isdigit() else chunk.lower()
+        for chunk in re.split(r"(\d+)", str(value or ""))
+    ]
 
 
 def _normalize_path(value: str | None) -> str:
@@ -42,6 +50,28 @@ def get_external_wordlist_root() -> str:
         current_app.config.get("EXTERNAL_WORDLISTS_PATH")
         or "/mnt/hashcrush-wordlists"
     )
+
+
+def list_external_wordlist_files() -> list[str]:
+    """Return readable mounted wordlist files under the configured root."""
+
+    root = get_external_wordlist_root()
+    if not root or not os.path.isdir(root):
+        return []
+
+    results: list[str] = []
+    for current_root, dirnames, filenames in os.walk(root):
+        dirnames.sort(key=_natural_sort_key)
+        for filename in sorted(filenames, key=_natural_sort_key):
+            candidate = _normalize_path(os.path.join(current_root, filename))
+            if not is_path_within_root(candidate, root):
+                continue
+            if not os.path.isfile(candidate):
+                continue
+            if not os.access(candidate, os.R_OK):
+                continue
+            results.append(candidate)
+    return results
 
 
 def is_managed_wordlist_path(stored_path: str | None) -> bool:

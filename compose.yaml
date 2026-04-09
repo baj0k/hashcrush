@@ -85,6 +85,10 @@ services:
         source: ${HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH:-./external-wordlists}
         target: /mnt/hashcrush-wordlists
         read_only: true
+      - type: bind
+        source: ${HASHCRUSH_HIBP_DATASETS_HOST_PATH:-./hibp-datasets}
+        target: /mnt/hashcrush-hibp
+        read_only: true
       - hashcrush-ssl:/etc/hashcrush/ssl
 
   web:
@@ -116,6 +120,10 @@ services:
       - type: bind
         source: ${HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH:-./external-wordlists}
         target: /mnt/hashcrush-wordlists
+        read_only: true
+      - type: bind
+        source: ${HASHCRUSH_HIBP_DATASETS_HOST_PATH:-./hibp-datasets}
+        target: /mnt/hashcrush-hibp
         read_only: true
 
   nginx:
@@ -172,6 +180,10 @@ services:
       - type: bind
         source: ${HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH:-./external-wordlists}
         target: /mnt/hashcrush-wordlists
+        read_only: true
+      - type: bind
+        source: ${HASHCRUSH_HIBP_DATASETS_HOST_PATH:-./hibp-datasets}
+        target: /mnt/hashcrush-hibp
         read_only: true
 
   nginx-test:
@@ -230,6 +242,10 @@ services:
       - type: bind
         source: ${HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH:-./external-wordlists}
         target: /mnt/hashcrush-wordlists
+        read_only: true
+      - type: bind
+        source: ${HASHCRUSH_HIBP_DATASETS_HOST_PATH:-./hibp-datasets}
+        target: /mnt/hashcrush-hibp
         read_only: true
 
   worker:

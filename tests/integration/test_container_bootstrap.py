@@ -119,8 +119,10 @@ def test_container_bootstrap_is_idempotent_for_existing_admin_and_tasks(
     bootstrap_instance(app, "admin", "ContainerAdminPassword!2026")
 
     with app.app_context():
+        from hashcrush.setup import default_mask_task_group_name
+
         assert _count_rows(Users, admin=True) == 1
-        assert _count_rows(TaskGroups, name="maskmode 1-10") == 1
+        assert _count_rows(TaskGroups, name=default_mask_task_group_name()) == 1
 
 
 @pytest.mark.security

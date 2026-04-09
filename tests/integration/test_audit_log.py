@@ -274,7 +274,7 @@ def test_audit_log_csv_export_rejects_non_admin():
         assert response.status_code == 403
 
 @pytest.mark.security
-def test_domains_add_records_audit_event():
+def test_manual_domain_create_route_is_removed():
     app = _build_app()
     with app.app_context():
         db.create_all()
@@ -285,12 +285,8 @@ def test_domains_add_records_audit_event():
 
         response = client.post("/domains/add", data={"name": "Audit Domain"})
 
-        assert response.status_code == 302
-        entry = _latest_audit_entry()
-        assert entry is not None
-        assert entry.event_type == "domain.create"
-        assert entry.summary == 'Created shared domain "Audit Domain".'
-        assert '"domain_name": "Audit Domain"' in entry.details_json
+        assert response.status_code == 404
+        assert _latest_audit_entry() is None
 
 @pytest.mark.security
 def test_jobs_start_records_audit_event():

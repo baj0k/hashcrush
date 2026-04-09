@@ -682,6 +682,7 @@ def _seed_test_environment(
             )
             db.session.add(admin_user)
             db.session.commit()
+        admin_user_id = int(admin_user.id)
 
         second_user = db.session.execute(
             select(Users).filter_by(username=E2E_SECOND_USERNAME)
@@ -711,6 +712,7 @@ def _seed_test_environment(
             )
             db.session.add(wordlist)
             db.session.commit()
+        wordlist_id = int(wordlist.id)
 
         rule = db.session.execute(
             select(Rules).filter_by(path=rule_path)
@@ -724,6 +726,7 @@ def _seed_test_environment(
             )
             db.session.add(rule)
             db.session.commit()
+        rule_id = int(rule.id)
 
         mask_task = db.session.execute(
             select(Tasks).filter_by(name=E2E_MASK_TASK_NAME)
@@ -738,6 +741,8 @@ def _seed_test_environment(
             )
             db.session.add(mask_task)
             db.session.commit()
+        mask_task_id = int(mask_task.id)
+        mask_task_name = str(mask_task.name)
 
         dictionary_task = db.session.execute(
             select(Tasks).filter_by(name=E2E_DICTIONARY_TASK_NAME)
@@ -745,13 +750,15 @@ def _seed_test_environment(
         if not dictionary_task:
             dictionary_task = Tasks(
                 name=E2E_DICTIONARY_TASK_NAME,
-                wl_id=wordlist.id,
+                wl_id=wordlist_id,
                 rule_id=None,
                 hc_attackmode="dictionary",
                 hc_mask=None,
             )
             db.session.add(dictionary_task)
             db.session.commit()
+        dictionary_task_id = int(dictionary_task.id)
+        dictionary_task_name = str(dictionary_task.name)
 
         dictionary_rule_task = db.session.execute(
             select(Tasks).filter_by(name=E2E_DICTIONARY_RULE_TASK_NAME)
@@ -759,13 +766,14 @@ def _seed_test_environment(
         if not dictionary_rule_task:
             dictionary_rule_task = Tasks(
                 name=E2E_DICTIONARY_RULE_TASK_NAME,
-                wl_id=wordlist.id,
-                rule_id=rule.id,
+                wl_id=wordlist_id,
+                rule_id=rule_id,
                 hc_attackmode="dictionary",
                 hc_mask=None,
             )
             db.session.add(dictionary_rule_task)
             db.session.commit()
+        dictionary_rule_task_name = str(dictionary_rule_task.name)
 
         domain = db.session.execute(
             select(Domains).filter_by(name=E2E_DOMAIN_NAME)
@@ -774,15 +782,17 @@ def _seed_test_environment(
             domain = Domains(name=E2E_DOMAIN_NAME)
             db.session.add(domain)
             db.session.commit()
+        domain_id = int(domain.id)
+        domain_name = str(domain.name)
 
         hashfile = db.session.execute(
             select(Hashfiles).filter_by(
                 name=E2E_SAMPLE_HASHFILE_NAME,
-                domain_id=domain.id,
+                domain_id=domain_id,
             )
         ).scalars().first()
         if not hashfile:
-            hashfile = Hashfiles(name=E2E_SAMPLE_HASHFILE_NAME, domain_id=domain.id)
+            hashfile = Hashfiles(name=E2E_SAMPLE_HASHFILE_NAME, domain_id=domain_id)
             db.session.add(hashfile)
             db.session.commit()
             if not import_hashfilehashes(
@@ -792,6 +802,7 @@ def _seed_test_environment(
                 hash_type="0",
             ):
                 raise RuntimeError("Failed importing E2E sample hashfile.")
+        hashfile_id = int(hashfile.id)
 
         sample_job = db.session.execute(
             select(Jobs).filter_by(name=E2E_SAMPLE_JOB_NAME)
@@ -801,17 +812,18 @@ def _seed_test_environment(
                 name=E2E_SAMPLE_JOB_NAME,
                 priority=3,
                 status="Incomplete",
-                domain_id=domain.id,
-                owner_id=admin_user.id,
-                hashfile_id=hashfile.id,
+                domain_id=domain_id,
+                owner_id=admin_user_id,
+                hashfile_id=hashfile_id,
             )
             db.session.add(sample_job)
             db.session.commit()
+        sample_job_id = int(sample_job.id)
 
         if not db.session.execute(
-            select(JobTasks).filter_by(job_id=sample_job.id, task_id=dictionary_task.id)
+            select(JobTasks).filter_by(job_id=sample_job_id, task_id=dictionary_task_id)
         ).scalars().first():
-            job_task = JobTasks(job_id=sample_job.id, task_id=dictionary_task.id, status="Not Started")
+            job_task = JobTasks(job_id=sample_job_id, task_id=dictionary_task_id, status="Not Started")
             db.session.add(job_task)
             db.session.commit()
 
@@ -824,16 +836,16 @@ def _seed_test_environment(
             "HASHCRUSH_E2E_SECOND_USERNAME": E2E_SECOND_USERNAME,
             "HASHCRUSH_E2E_SECOND_PASSWORD": E2E_SECOND_PASSWORD,
             "HASHCRUSH_E2E_SECOND_IS_ADMIN": "0",
-            "HASHCRUSH_E2E_DOMAIN_ID": str(domain.id),
-            "HASHCRUSH_E2E_DOMAIN_NAME": domain.name,
-            "HASHCRUSH_E2E_HASHFILE_ID": str(hashfile.id),
-            "HASHCRUSH_E2E_TASK_ID": str(mask_task.id),
-            "HASHCRUSH_E2E_TASK_NAME": mask_task.name,
+            "HASHCRUSH_E2E_DOMAIN_ID": str(domain_id),
+            "HASHCRUSH_E2E_DOMAIN_NAME": domain_name,
+            "HASHCRUSH_E2E_HASHFILE_ID": str(hashfile_id),
+            "HASHCRUSH_E2E_TASK_ID": str(mask_task_id),
+            "HASHCRUSH_E2E_TASK_NAME": mask_task_name,
         }
         _write_e2e_env_file(env_path, values)
-        values["seed_job_id"] = str(sample_job.id)
-        values["dictionary_task_name"] = dictionary_task.name
-        values["dictionary_rule_task_name"] = dictionary_rule_task.name
+        values["seed_job_id"] = str(sample_job_id)
+        values["dictionary_task_name"] = dictionary_task_name
+        values["dictionary_rule_task_name"] = dictionary_rule_task_name
         values["wordlist_path"] = wordlist_path
         values["rule_path"] = rule_path
         return values

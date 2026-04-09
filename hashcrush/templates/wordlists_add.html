@@ -50,15 +50,27 @@
             <div data-toggle-group-section="wordlist-source" data-toggle-values="external">
                 <div class="form-group">
                     {{ form.external_path.label(class="form-control-label") }}
-                    {% if form.external_path.errors %}
-                        {{ form.external_path(class="form-control form-control-lg is-invalid") }}
-                        <div class="invalid-feedback">
-                            {% for error in form.external_path.errors %}
-                                <span>{{ error }}</span>
+                    {% if external_wordlist_files %}
+                        <select id="{{ form.external_path.id }}" name="{{ form.external_path.name }}" class="form-control form-control-lg{% if form.external_path.errors %} is-invalid{% endif %}">
+                            {% if external_wordlist_files|length != 1 %}
+                            <option value="">Choose a mounted wordlist file</option>
+                            {% endif %}
+                            {% for mounted_path in external_wordlist_files %}
+                            <option value="{{ mounted_path }}" {% if mounted_path == selected_external_path %}selected{% endif %}>{{ mounted_path }}</option>
                             {% endfor %}
-                        </div>
+                        </select>
+                        {% if form.external_path.errors %}
+                            <div class="invalid-feedback">
+                                {% for error in form.external_path.errors %}
+                                    <span>{{ error }}</span>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
                     {% else %}
                         {{ form.external_path(class="form-control form-control-lg", placeholder=(external_root ~ "/example.txt") if external_root else "/mnt/hashcrush-wordlists/example.txt") }}
+                        <small class="text-muted d-block">
+                            No readable files were found under <code>{{ external_root }}</code>. You can still enter a mounted path manually.
+                        </small>
                     {% endif %}
                     <small class="text-muted d-block">
                         Register a mounted read-only file instead of uploading it.

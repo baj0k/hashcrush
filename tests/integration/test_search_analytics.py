@@ -421,6 +421,39 @@ def test_search_hash_post_is_trimmed_and_case_insensitive():
         assert response.status_code == 200
         assert b"ABCDEF0123456789" in response.data
 
+
+@pytest.mark.security
+def test_search_hash_post_supports_case_insensitive_partial_match():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="SearchHashPartialDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="search-hash-partial.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = _seed_hash("ABCDEF0123456789", cracked=False)
+        _seed_hashfile_hash(hash_id=hash_row.id, hashfile_id=hashfile.id)
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/search",
+            data={
+                "search_type": "hash",
+                "query": "cdef0123",
+            },
+        )
+        assert response.status_code == 200
+        assert b"ABCDEF0123456789" in response.data
+
 @pytest.mark.security
 def test_search_password_post_matches_canonical_and_legacy_plaintext_rows():
     app = _build_app()
@@ -477,6 +510,80 @@ def test_search_password_post_matches_canonical_and_legacy_plaintext_rows():
         assert legacy_response.status_code == 200
         assert b"legacy-ciphertext" in legacy_response.data
 
+
+@pytest.mark.security
+def test_search_password_post_supports_case_insensitive_partial_match():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="SearchPasswordPartialDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="search-password-partial.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = _seed_hash(
+            "search-password-partial-ciphertext",
+            cracked=True,
+            plaintext="SummerPass2026!",
+        )
+        _seed_hashfile_hash(hash_id=hash_row.id, hashfile_id=hashfile.id)
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/search",
+            data={
+                "search_type": "password",
+                "query": "pass2026",
+            },
+        )
+        assert response.status_code == 200
+        assert b"search-password-partial-ciphertext" in response.data
+
+
+@pytest.mark.security
+def test_search_user_post_supports_case_insensitive_partial_match():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="SearchUserPartialDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="search-user-partial.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = _seed_hash("search-user-partial-hash", cracked=False)
+        _seed_hashfile_hash(
+            hash_id=hash_row.id,
+            hashfile_id=hashfile.id,
+            username=r"domain.test\BAJOK",
+        )
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/search",
+            data={
+                "search_type": "user",
+                "query": "bajo",
+            },
+        )
+        assert response.status_code == 200
+        assert b"domain.test\\BAJOK" in response.data
+
 @pytest.mark.security
 def test_search_post_rejects_whitespace_only_query():
     app = _build_app()
@@ -515,8 +622,7 @@ def test_search_hash_id_lookup_is_global_for_shared_hashfiles():
     app = _build_app()
     with app.app_context():
         db.create_all()
-        owner = _seed_user("search-owner", password="owner-user-password", admin=False)
-        _seed_user("search-other", password="other-user-password", admin=False)
+        admin = _seed_admin_user()
         _seed_settings()
 
         domain = Domains(name="SharedDomain")
@@ -535,7 +641,7 @@ def test_search_hash_id_lookup_is_global_for_shared_hashfiles():
         _seed_hashfile_hash(hash_id=other_hash.id, hashfile_id=other_hashfile.id)
 
         client = app.test_client()
-        _login_client_as_user(client, owner)
+        _login_client_as_user(client, admin)
 
         response = client.get(f"/search?hash_id={other_hash.id}")
         assert response.status_code == 200
@@ -583,7 +689,7 @@ def test_search_hash_id_lookup_accepts_trimmed_numeric_value():
         assert b"trimmed-hash-id-ciphertext" in response.data
 
 @pytest.mark.security
-def test_search_page_hides_export_controls_for_non_admin():
+def test_search_page_is_admin_only():
     app = _build_app()
     with app.app_context():
         db.create_all()
@@ -608,21 +714,14 @@ def test_search_page_hides_export_controls_for_non_admin():
         client = app.test_client()
         _login_client_as_user(client, user)
 
-        response = client.post(
-            "/search",
-            data={
-                "search_type": "hash",
-                "query": "search-export-ciphertext",
-            },
-        )
-        html = response.get_data(as_text=True)
-        assert response.status_code == 200
-        assert "search-export-ciphertext" in html
-        assert 'value="Export"' not in html
-        assert "Search exports are restricted to admin accounts." in html
+        response = client.get("/search")
+        assert response.status_code == 403
+
+        jobs_html = client.get("/jobs").get_data(as_text=True)
+        assert 'href="/search"' not in jobs_html
 
 @pytest.mark.security
-def test_search_export_requires_admin():
+def test_search_post_requires_admin():
     app = _build_app()
     with app.app_context():
         db.create_all()
@@ -656,9 +755,7 @@ def test_search_export_requires_admin():
                 "export_type": "Comma",
             },
         )
-        assert response.status_code == 200
-        assert b"Permission Denied" in response.data
-        assert b"search-export-denied-ciphertext" in response.data
+        assert response.status_code == 403
         assert response.headers.get("Content-Disposition") is None
 
 @pytest.mark.security

@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from hashcrush.audit import capture_audit_actor, record_audit_event
 from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Tasks, Wordlists, db
+from hashcrush.tasks.sorting import sort_tasks_naturally
 from hashcrush.utils.file_ops import save_file
 from hashcrush.view_utils import append_query_params, safe_relative_url
 from hashcrush.wordlists.forms import WordlistsForm
@@ -17,6 +18,7 @@ from hashcrush.wordlists.service import (
     derive_wordlist_name,
     get_external_wordlist_root,
     get_wordlist_source,
+    list_external_wordlist_files,
     managed_wordlists_dir,
     remove_managed_wordlist_file,
     validate_external_wordlist_path,
@@ -39,12 +41,23 @@ def _async_operation_response(operation):
 
 
 def _render_wordlists_add_form(form, next_url: str | None = None):
+    external_wordlist_files = list_external_wordlist_files()
+    selected_external_path = (form.external_path.data or "").strip()
+    if (
+        (form.source_mode.data or "").strip().lower() == "external"
+        and not selected_external_path
+        and len(external_wordlist_files) == 1
+    ):
+        selected_external_path = external_wordlist_files[0]
+        form.external_path.data = selected_external_path
     return render_template(
         'wordlists_add.html',
         title='Add Wordlist',
         form=form,
         next_url=next_url or url_for('wordlists.wordlists_list'),
         external_root=get_external_wordlist_root(),
+        external_wordlist_files=external_wordlist_files,
+        selected_external_path=selected_external_path,
     )
 
 
@@ -60,11 +73,12 @@ def _wordlist_redirect_target(
 
 
 def _wordlist_detail_context(wordlist: Wordlists) -> dict[str, object]:
-    associated_tasks = db.session.execute(
-        select(Tasks)
-        .where(Tasks.wl_id == wordlist.id)
-        .order_by(Tasks.name.asc())
-    ).scalars().all()
+    associated_tasks = sort_tasks_naturally(
+        db.session.execute(
+            select(Tasks)
+            .where(Tasks.wl_id == wordlist.id)
+        ).scalars().all()
+    )
     return {
         'associated_tasks': associated_tasks,
         'delete_blockers': {

@@ -10,13 +10,22 @@ def default_tasks_need_added(db: SQLAlchemy) -> bool:
     return (db.session.scalar(select(func.count()).select_from(Tasks)) or 0) == 0
 
 
+def default_mask_task_name(length: int) -> str:
+    suffix = "char" if length == 1 else "chars"
+    return f"All Characters [{length} {suffix}]"
+
+
+def default_mask_task_group_name() -> str:
+    return "All Characters 1-10 chars"
+
+
 def add_default_tasks(db: SQLAlchemy):
     task_ids = []
 
     for length in range(1, 11):
         mask = "?a" * length
         task = Tasks(
-            name=f"{mask} [{length}]",
+            name=default_mask_task_name(length),
             wl_id=None,
             rule_id=None,
             hc_attackmode="maskmode",
@@ -26,7 +35,7 @@ def add_default_tasks(db: SQLAlchemy):
         db.session.flush()
         task_ids.append(task.id)
 
-    default_group_name = "maskmode 1-10"
+    default_group_name = default_mask_task_group_name()
     if not db.session.execute(
         select(TaskGroups).filter_by(name=default_group_name)
     ).scalars().first():

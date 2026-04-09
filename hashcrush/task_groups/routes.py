@@ -21,6 +21,7 @@ from hashcrush.audit import record_audit_event
 from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Rules, TaskGroups, Tasks, Wordlists, db
 from hashcrush.task_groups.forms import TaskGroupsForm
+from hashcrush.tasks.sorting import sort_tasks_naturally
 from hashcrush.view_utils import safe_relative_url
 
 task_groups = Blueprint("task_groups", __name__)
@@ -66,7 +67,9 @@ def _task_group_assignment_rows(
 
 
 def _ordered_task_group_tasks(task_group: TaskGroups) -> list[Tasks]:
-    task_rows = db.session.execute(select(Tasks).order_by(Tasks.name.asc())).scalars().all()
+    task_rows = sort_tasks_naturally(
+        db.session.execute(select(Tasks)).scalars().all()
+    )
     assigned_tasks, _ = _task_group_assignment_rows(task_group, task_rows)
     return assigned_tasks
 
@@ -372,7 +375,9 @@ def task_groups_import():
 def task_groups_add():
     """Function to add task group."""
     task_group_form = TaskGroupsForm()
-    task_rows = db.session.execute(select(Tasks)).scalars().all()
+    task_rows = sort_tasks_naturally(
+        db.session.execute(select(Tasks)).scalars().all()
+    )
     if task_group_form.validate_on_submit():
         task_group = TaskGroups(
             name=task_group_form.name.data,
@@ -419,7 +424,9 @@ def task_groups_add():
 def task_groups_assigned_tasks(task_group_id):
     """Function to list assigned tasks for task group."""
     task_group = db.get_or_404(TaskGroups, task_group_id)
-    task_rows = db.session.execute(select(Tasks)).scalars().all()
+    task_rows = sort_tasks_naturally(
+        db.session.execute(select(Tasks)).scalars().all()
+    )
     assigned_tasks, available_tasks = _task_group_assignment_rows(
         task_group,
         task_rows,

@@ -7,8 +7,6 @@ import os
 import threading
 import time
 
-from flask import current_app
-
 from hashcrush.models import db
 
 _UPLOAD_WORKER_HEARTBEAT_FILENAME = "upload-worker-heartbeat.json"
@@ -20,6 +18,7 @@ class UploadWorkerService:
     def __init__(self, app, poll_interval: float = 2.0):
         self.app = app
         self.poll_interval = max(0.5, float(poll_interval))
+        self.heartbeat_interval = 5.0
         self._stop_event = threading.Event()
 
     def _heartbeat_path(self) -> str:
@@ -42,7 +41,7 @@ class UploadWorkerService:
                 json.dump(payload, handle)
             os.replace(tmp_path, heartbeat_path)
         except OSError:
-            current_app.logger.warning(
+            self.app.logger.warning(
                 "Failed to update upload-worker heartbeat file: %s", heartbeat_path
             )
 
@@ -52,9 +51,34 @@ class UploadWorkerService:
             if os.path.exists(heartbeat_path):
                 os.remove(heartbeat_path)
         except OSError:
-            current_app.logger.warning(
+            self.app.logger.warning(
                 "Failed to remove upload-worker heartbeat file: %s", heartbeat_path
             )
+
+    def _process_next_operation_with_heartbeat(self, service) -> bool:
+        result: dict[str, object] = {"processed": False, "error": None}
+
+        def target() -> None:
+            try:
+                with self.app.app_context():
+                    result["processed"] = bool(service.process_next_operation())
+            except Exception as exc:  # pragma: no cover - surfaced to caller
+                result["error"] = exc
+
+        worker_thread = threading.Thread(
+            target=target,
+            name="hashcrush-upload-worker-job",
+            daemon=True,
+        )
+        worker_thread.start()
+        while worker_thread.is_alive():
+            self._write_heartbeat(status="active")
+            worker_thread.join(timeout=self.heartbeat_interval)
+
+        error = result.get("error")
+        if isinstance(error, BaseException):
+            raise error
+        return bool(result.get("processed"))
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -67,15 +91,11 @@ class UploadWorkerService:
             while not self._stop_event.is_set():
                 processed = False
                 try:
-                    with self.app.app_context():
-                        processed = bool(service.process_next_operation())
-                        self._write_heartbeat(
-                            status="active" if processed else "idle"
-                        )
+                    processed = self._process_next_operation_with_heartbeat(service)
+                    self._write_heartbeat(status="active" if processed else "idle")
                 except Exception:
                     self.app.logger.exception("Upload worker tick failed.")
-                    with self.app.app_context():
-                        self._write_heartbeat(status="error")
+                    self._write_heartbeat(status="error")
                 finally:
                     with self.app.app_context():
                         db.session.remove()

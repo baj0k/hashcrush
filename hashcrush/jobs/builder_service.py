@@ -26,6 +26,7 @@ from hashcrush.models import (
     Tasks,
     db,
 )
+from hashcrush.tasks.sorting import sort_tasks_naturally
 
 BUILDER_TABS = {"basics", "hashes", "tasks"}
 BUILDER_HASH_TABS = {"new", "existing"}
@@ -108,7 +109,9 @@ def _job_builder_context(job: Jobs | None):
         selected_hashfile.id if selected_hashfile else None
     )
 
-    tasks = db.session.execute(select(Tasks).order_by(Tasks.name.asc())).scalars().all()
+    tasks = sort_tasks_naturally(
+        db.session.execute(select(Tasks)).scalars().all()
+    )
     job_tasks = db.session.execute(
         select(JobTasks).filter_by(job_id=job.id).order_by(*_job_task_ordering())
     ).scalars().all()

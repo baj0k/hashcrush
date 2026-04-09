@@ -242,10 +242,12 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     )
     app.config.setdefault("STORAGE_PATH", os.path.join("/var", "lib", "hashcrush"))
     app.config.setdefault("EXTERNAL_WORDLISTS_PATH", "/mnt/hashcrush-wordlists")
+    app.config.setdefault("HIBP_DATASETS_PATH", "/mnt/hashcrush-hibp")
     app.config.setdefault("UPLOAD_OPERATION_RETENTION_SECONDS", 3600)
     app.config.setdefault("UPLOAD_OPERATION_LEASE_SECONDS", 300)
     app.config.setdefault("UPLOAD_INLINE_MAX_WORKERS", 2)
     app.config.setdefault("UPLOAD_WORKER_POLL_INTERVAL_SECONDS", 2)
+    app.config.setdefault("HIBP_DATASET_MIN_MAP_SIZE_GB", 128)
 
     if testing:
         app.config["TESTING"] = True
