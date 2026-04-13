@@ -314,6 +314,90 @@ def test_build_hashcat_argv_disables_outfile_autohex(tmp_path):
 
 
 @pytest.mark.security
+def test_executor_pauses_job_task_when_wordlist_file_is_missing(tmp_path):
+    from hashcrush.executor.service import LocalExecutorService
+    from hashcrush.utils.utils import get_md5_hash
+
+    app = _build_app({"RUNTIME_PATH": str(tmp_path / "runtime")})
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="missing-wordlist-domain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="missing-wordlist.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = Hashes(
+            sub_ciphertext=get_md5_hash("missing-wordlist-hash"),
+            ciphertext="missing-wordlist-hash",
+            hash_type=1000,
+            cracked=False,
+            plaintext=None,
+        )
+        db.session.add(hash_row)
+        db.session.commit()
+
+        db.session.add(HashfileHashes(hash_id=hash_row.id, hashfile_id=hashfile.id))
+        db.session.commit()
+
+        wordlist = Wordlists(
+            name="missing-wordlist",
+            type="static",
+            path=str(tmp_path / "wordlists" / "missing.txt"),
+            size=1,
+            checksum="0" * 64,
+        )
+        db.session.add(wordlist)
+        db.session.commit()
+
+        task = Tasks(
+            name="missing-wordlist-task",
+            hc_attackmode="dictionary",
+            wl_id=wordlist.id,
+            rule_id=None,
+            hc_mask=None,
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        job = Jobs(
+            name="missing-wordlist-job",
+            status="Queued",
+            domain_id=domain.id,
+            owner_id=user.id,
+            hashfile_id=hashfile.id,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        job_task = JobTasks(
+            job_id=job.id,
+            task_id=task.id,
+            status="Queued",
+            position=0,
+        )
+        db.session.add(job_task)
+        db.session.commit()
+
+        service = LocalExecutorService(app)
+        service._claim_and_start_next()
+
+        db.session.refresh(job_task)
+        db.session.refresh(job)
+        assert job_task.status == "Paused"
+        assert job.status == "Paused"
+        assert job_task.worker_pid is None
+        assert job_task.progress is not None
+        assert "Start Failed" in job_task.progress
+        assert "Wordlist file is missing" in job_task.progress
+
+
+@pytest.mark.security
 def test_executor_ownership_lock_allows_only_one_active_owner(monkeypatch):
     from hashcrush.executor import service as executor_service
 
@@ -744,6 +828,24 @@ def test_hashcat_exit_code_one_is_success_when_status_indicates_exhausted(tmp_pa
     status = _parse_hashcat_status(str(output_path))
     assert status.get("Status") == "Exhausted"
     assert _is_successful_hashcat_exit(1, status) is True
+
+
+@pytest.mark.security
+def test_parse_hashcat_status_sums_multi_gpu_speed_lines(tmp_path):
+    from hashcrush.executor.service import _parse_hashcat_status
+
+    output_path = tmp_path / "hashcat_speed_status.txt"
+    output_path.write_text(
+        "Status...........: Running\n"
+        "Speed.#1.........:   1500.0 kH/s (12.34ms) @ Accel:64 Loops:256 Thr:1024 Vec:1\n"
+        "Speed.#2.........:    500.0 kH/s (12.34ms) @ Accel:64 Loops:256 Thr:1024 Vec:1\n",
+        encoding="utf-8",
+    )
+
+    status = _parse_hashcat_status(str(output_path))
+    assert status.get("Status") == "Running"
+    assert status.get("Speed #") == "2 MH/s"
+
 
 @pytest.mark.security
 def test_hashcat_exit_code_one_without_completion_signal_is_failure():

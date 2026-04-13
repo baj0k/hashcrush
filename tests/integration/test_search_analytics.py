@@ -2,6 +2,8 @@
 # ruff: noqa: F403,F405
 from datetime import UTC, datetime
 
+import hashcrush.searches.routes as search_routes
+
 from tests.integration.support import *
 
 
@@ -217,6 +219,110 @@ def test_analytics_download_reused_password_accounts_includes_decoded_plaintext(
         assert (
             f"reused_password_accounts_domain_{domain.id}_hashfile_{hashfile.id}_{expected_date}.txt"
             in response.headers.get("Content-Disposition", "")
+        )
+
+
+@pytest.mark.security
+def test_search_warns_when_indexed_partial_search_hits_candidate_limit_without_results(
+    monkeypatch,
+):
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="SearchLimitDomain")
+        db.session.add(domain)
+        db.session.commit()
+        hashfile = Hashfiles(name="search-limit.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        first_hash = _seed_hash("search-limit-hash-1", cracked=False)
+        second_hash = _seed_hash("search-limit-hash-2", cracked=False)
+        third_hash = _seed_hash("search-limit-hash-3", cracked=False)
+        _seed_hashfile_hash(
+            hash_id=first_hash.id,
+            hashfile_id=hashfile.id,
+            username="DOMAIN\\alpha-target",
+        )
+        _seed_hashfile_hash(
+            hash_id=second_hash.id,
+            hashfile_id=hashfile.id,
+            username="DOMAIN\\bravo-target",
+        )
+        _seed_hashfile_hash(
+            hash_id=third_hash.id,
+            hashfile_id=hashfile.id,
+            username="DOMAIN\\charlie-target",
+        )
+
+        original_search_row_matches = search_routes._search_row_matches
+        monkeypatch.setattr(search_routes, "SEARCH_MAX_CANDIDATES", 2)
+        monkeypatch.setattr(
+            search_routes,
+            "_search_row_matches",
+            lambda search_type, query_key, hash_row, link_row: False,
+        )
+
+        client = app.test_client()
+        _login_client_as_user(client, user)
+
+        response = client.post(
+            "/search",
+            data={
+                "search_type": "user",
+                "query": "target",
+            },
+        )
+        assert response.status_code == 200
+        body = response.get_data(as_text=True)
+        assert (
+            "No results were found before the indexed partial search hit its safety limit."
+            in body
+        )
+        assert "No results found" not in body
+        monkeypatch.setattr(search_routes, "_search_row_matches", original_search_row_matches)
+
+
+@pytest.mark.security
+def test_search_requires_three_characters_for_partial_match():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        user = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="ShortQueryDomain")
+        db.session.add(domain)
+        db.session.commit()
+        hashfile = Hashfiles(name="short-query.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = _seed_hash("short-query-hash", cracked=False)
+        _seed_hashfile_hash(
+            hash_id=hash_row.id,
+            hashfile_id=hashfile.id,
+            username="DOMAIN\\alpha-user",
+        )
+
+        client = app.test_client()
+        _login_client_as_user(client, user)
+
+        response = client.post(
+            "/search",
+            data={
+                "search_type": "user",
+                "query": "al",
+            },
+        )
+        assert response.status_code == 200
+        body = response.get_data(as_text=True)
+        assert (
+            "Partial search requires at least 3 characters when an exact match is not found."
+            in body
         )
 
 
@@ -458,6 +564,9 @@ def test_search_hash_post_supports_case_insensitive_partial_match():
 def test_search_password_post_matches_canonical_and_legacy_plaintext_rows():
     app = _build_app()
     with app.app_context():
+        from hashcrush.searches.token_index import sync_hash_search_tokens
+        from hashcrush.utils.secret_storage import migrate_sensitive_storage_rows
+
         db.create_all()
         admin = _seed_admin_user()
         _seed_settings()
@@ -484,6 +593,8 @@ def test_search_password_post_matches_canonical_and_legacy_plaintext_rows():
         )
         db.session.add(legacy_hash)
         db.session.commit()
+        migrate_sensitive_storage_rows()
+        sync_hash_search_tokens([legacy_hash.id])
         _seed_hashfile_hash(hash_id=canonical_hash.id, hashfile_id=hashfile.id)
         _seed_hashfile_hash(hash_id=legacy_hash.id, hashfile_id=hashfile.id)
 

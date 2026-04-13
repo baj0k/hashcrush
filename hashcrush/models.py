@@ -345,6 +345,12 @@ class HashfileHashes(db.Model):
         "Domains",
         lazy="select",
     )
+    search_tokens: Mapped[list[HashfileHashSearchTokens]] = relationship(
+        "HashfileHashSearchTokens",
+        back_populates="hashfile_hash",
+        lazy="select",
+        cascade="all, delete-orphan",
+    )
 
 
 class Rules(db.Model):
@@ -474,6 +480,80 @@ class Hashes(db.Model):
     public_exposures: Mapped[list[HashPublicExposure]] = relationship(
         "HashPublicExposure",
         back_populates="hash",
+        lazy="select",
+    )
+    search_tokens: Mapped[list[HashSearchTokens]] = relationship(
+        "HashSearchTokens",
+        back_populates="hash",
+        lazy="select",
+        cascade="all, delete-orphan",
+    )
+
+
+class HashSearchTokens(db.Model):
+    """Blind-indexed trigram tokens for hash and recovered-password search."""
+
+    __tablename__ = "hash_search_tokens"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "hash_id",
+            "search_scope",
+            "token_digest",
+            name="uq_hash_search_tokens_hash_id_scope_digest",
+        ),
+        db.Index(
+            "ix_hash_search_tokens_scope_digest_hash_id",
+            "search_scope",
+            "token_digest",
+            "hash_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    hash_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("hashes.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    search_scope: Mapped[str] = mapped_column(String(20), nullable=False)
+    token_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    hash: Mapped[Hashes] = relationship(
+        "Hashes",
+        back_populates="search_tokens",
+        lazy="select",
+    )
+
+
+class HashfileHashSearchTokens(db.Model):
+    """Blind-indexed trigram tokens for username search."""
+
+    __tablename__ = "hashfile_hash_search_tokens"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "hashfile_hash_id",
+            "search_scope",
+            "token_digest",
+            name="uq_hashfile_hash_search_tokens_link_id_scope_digest",
+        ),
+        db.Index(
+            "ix_hashfile_hash_search_tokens_scope_digest_link_id",
+            "search_scope",
+            "token_digest",
+            "hashfile_hash_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    hashfile_hash_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("hashfile_hashes.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    search_scope: Mapped[str] = mapped_column(String(20), nullable=False)
+    token_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    hashfile_hash: Mapped[HashfileHashes] = relationship(
+        "HashfileHashes",
+        back_populates="search_tokens",
         lazy="select",
     )
 

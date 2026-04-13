@@ -21,12 +21,18 @@ from hashcrush.audit import capture_audit_actor, record_audit_event
 from hashcrush.db_upgrade import get_schema_status
 from hashcrush.hibp.service import (
     get_hibp_ntlm_dataset_mount_root,
+    get_mounted_hibp_ntlm_dataset_cache_snapshot,
     get_hibp_ntlm_dataset_summary,
-    list_mounted_hibp_ntlm_dataset_files,
+    rescan_mounted_hibp_ntlm_dataset_files,
     validate_mounted_hibp_ntlm_dataset_path,
 )
 from hashcrush.utils.file_ops import save_file
 from hashcrush.utils.storage_paths import get_runtime_subdir
+from hashcrush.wordlists.service import (
+    get_external_wordlist_cache_snapshot,
+    get_external_wordlist_root,
+    rescan_external_wordlist_files,
+)
 
 settings = Blueprint("settings", __name__)
 
@@ -87,7 +93,8 @@ def _breach_intelligence_context() -> dict[str, object]:
 
     hibp_dataset_summary = get_hibp_ntlm_dataset_summary()
     hibp_dataset_mount_root = get_hibp_ntlm_dataset_mount_root()
-    hibp_mounted_dataset_files = list_mounted_hibp_ntlm_dataset_files()
+    hibp_cache_snapshot = get_mounted_hibp_ntlm_dataset_cache_snapshot()
+    hibp_mounted_dataset_files = hibp_cache_snapshot.files
     default_mounted_dataset_path = os.path.join(
         hibp_dataset_mount_root,
         "hibp-ntlm.txt",
@@ -104,6 +111,7 @@ def _breach_intelligence_context() -> dict[str, object]:
         "hibp_dataset_mount_root": hibp_dataset_mount_root,
         "hibp_mounted_dataset_files": hibp_mounted_dataset_files,
         "hibp_selected_mounted_dataset_path": hibp_selected_mounted_dataset_path,
+        "hibp_cache_refreshed_at": hibp_cache_snapshot.refreshed_at,
     }
 
 
@@ -118,6 +126,8 @@ def settings_list():
         tmp_folder_size = _temp_folder_size_bytes()
         tmp_folder_size_human = _format_bytes(tmp_folder_size)
         schema_status = get_schema_status()
+        wordlist_cache_snapshot = get_external_wordlist_cache_snapshot()
+        hibp_cache_snapshot = get_mounted_hibp_ntlm_dataset_cache_snapshot()
 
         return render_template(
             "settings.html",
@@ -129,6 +139,12 @@ def settings_list():
             database_schema_mode=schema_status["mode"],
             database_schema_detail=schema_status["detail"],
             python_version=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            external_wordlist_root=get_external_wordlist_root(),
+            external_wordlist_cache_count=len(wordlist_cache_snapshot.files),
+            external_wordlist_cache_refreshed_at=wordlist_cache_snapshot.refreshed_at,
+            hibp_dataset_mount_root=get_hibp_ntlm_dataset_mount_root(),
+            hibp_cache_count=len(hibp_cache_snapshot.files),
+            hibp_cache_refreshed_at=hibp_cache_snapshot.refreshed_at,
         )
 
     abort(403)
@@ -196,6 +212,38 @@ def clear_temp_folder():
             'removed_files': removed_files,
             'removed_bytes': removed_bytes,
             'failed_files': failed_files,
+        },
+    )
+    return redirect(url_for("settings.settings_list") + "#nav-data")
+
+
+@settings.route("/settings/rescan-mounted-folders", methods=["POST"])
+@login_required
+def rescan_mounted_folders():
+    """Refresh cached file listings for mounted external resources."""
+
+    if not current_user.admin:
+        abort(403)
+
+    wordlist_snapshot = rescan_external_wordlist_files()
+    hibp_snapshot = rescan_mounted_hibp_ntlm_dataset_files()
+    flash(
+        (
+            "Rescanned mounted folders. "
+            f"Cached {len(wordlist_snapshot.files)} wordlist file(s) and "
+            f"{len(hibp_snapshot.files)} HIBP dataset file(s)."
+        ),
+        "success",
+    )
+    record_audit_event(
+        "settings.rescan_mounted_folders",
+        "mounted_folders",
+        summary="Rescanned mounted folders for cached file listings.",
+        details={
+            "external_wordlist_root": wordlist_snapshot.root,
+            "external_wordlist_count": len(wordlist_snapshot.files),
+            "hibp_root": hibp_snapshot.root,
+            "hibp_count": len(hibp_snapshot.files),
         },
     )
     return redirect(url_for("settings.settings_list") + "#nav-data")

@@ -153,7 +153,7 @@
                             {% endif %}
                         </div>
                         <small class="form-text text-muted">
-                            Domains are inferred from imported usernames like <code>domain\user</code>. If a file has no domain prefix, you can provide an optional fallback domain in the Hashes tab.
+                            Domains are inferred from imported usernames like <code>domain\user</code>. If a file has no domain prefix, the Hashes tab assigns those rows to the fallback category you provide there.
                         </small>
                     </fieldset>
                     <div class="hc-form-actions">
@@ -309,17 +309,17 @@
                                         <div class="form-group">
                                             {{ jobs_new_hashfile_form.domain_name.label(class="form-control-label", for="job_hashfile_domain_name") }}
                                             {% if jobs_new_hashfile_form.domain_name.errors %}
-                                                {{ jobs_new_hashfile_form.domain_name(class="form-control form-control-lg is-invalid", id="job_hashfile_domain_name", placeholder="Optional fallback for rows without domain\\username") }}
+                                                {{ jobs_new_hashfile_form.domain_name(class="form-control form-control-lg is-invalid", id="job_hashfile_domain_name") }}
                                                 <div class="invalid-feedback">
                                                     {% for error in jobs_new_hashfile_form.domain_name.errors %}
                                                         <span>{{ error }}</span>
                                                     {% endfor %}
                                                 </div>
                                             {% else %}
-                                                {{ jobs_new_hashfile_form.domain_name(class="form-control form-control-lg", id="job_hashfile_domain_name", placeholder="Optional fallback for rows without domain\\username") }}
+                                                {{ jobs_new_hashfile_form.domain_name(class="form-control form-control-lg", id="job_hashfile_domain_name") }}
                                             {% endif %}
                                             <small class="form-text text-muted">
-                                                Leave blank when the usernames already include a domain prefix like <code>domain\username</code>.
+                                                This category is only used for rows without an inferred prefix like <code>domain\username</code>. The default value <code>None</code> keeps those entries grouped together consistently.
                                             </small>
                                         </div>
                                         <div class="form-group">

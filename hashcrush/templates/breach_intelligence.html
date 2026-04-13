@@ -70,7 +70,12 @@
                     {% else %}
                     <input id="mounted_dataset_path" class="form-control form-control-lg" type="text" name="mounted_dataset_path" value="{{ hibp_selected_mounted_dataset_path }}" required>
                     <small class="form-text text-muted">
-                        No readable files were found under <code>{{ hibp_dataset_mount_root }}</code>. You can still enter a mounted path manually.
+                        No cached readable files were found under <code>{{ hibp_dataset_mount_root }}</code>. You can still enter a mounted path manually or use <a href="{{ url_for('settings.settings_list') }}#nav-data">Settings</a> to rescan mounted folders.
+                    </small>
+                    {% endif %}
+                    {% if hibp_cache_refreshed_at %}
+                    <small class="form-text text-muted">
+                        Cached list refreshed at {{ hibp_cache_refreshed_at }}.
                     </small>
                     {% endif %}
                 </div>

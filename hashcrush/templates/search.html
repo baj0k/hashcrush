@@ -2,7 +2,7 @@
 {% block header %}
 <div class="hc-page-header">
     <h1>Search</h1>
-    <p class="hc-page-intro">Admin-only search across hashes, usernames, and recovered passwords. Exact matches use indexed lookups, and broader partial matches are capped to keep the app responsive.</p>
+    <p class="hc-page-intro">Admin-only search across hashes, usernames, and recovered passwords. Exact matches use indexed lookups, and broader partial matches use indexed trigram search with a minimum query length of 3 characters.</p>
 </div>
 {% endblock header %}
 {% block content %}

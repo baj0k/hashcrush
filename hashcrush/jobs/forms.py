@@ -60,7 +60,10 @@ class JobsNewHashFileForm(FlaskForm):
         "Hashfile Name", filters=[normalize_text_input]
     )  # While required we may dynamically create this based on file upload
     domain_name = StringField(
-        "Fallback Domain (Optional)", filters=[normalize_text_input]
+        "Fallback category (domain) for no-domain entries",
+        default="None",
+        validators=[DataRequired()],
+        filters=[normalize_text_input],
     )
     file_type = SelectField(
         "Hash File Format",

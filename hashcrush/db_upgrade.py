@@ -9,6 +9,8 @@ from sqlalchemy import inspect, select, text
 import hashcrush
 from hashcrush.models import (
     AuditLog,
+    HashSearchTokens,
+    HashfileHashSearchTokens,
     HashPublicExposure,
     ReferenceDatasets,
     SchemaVersion,
@@ -19,7 +21,7 @@ from hashcrush.models import (
     utc_now_naive,
 )
 
-CURRENT_SCHEMA_VERSION = 11
+CURRENT_SCHEMA_VERSION = 12
 
 
 @dataclass(frozen=True)
@@ -418,6 +420,17 @@ def _migration_011_add_offline_reference_datasets() -> None:
     HashPublicExposure.__table__.create(bind=db.engine, checkfirst=True)
 
 
+def _migration_012_add_partial_search_token_indexes() -> None:
+    """Add blind-indexed trigram token tables for scalable partial search."""
+
+    HashSearchTokens.__table__.create(bind=db.engine, checkfirst=True)
+    HashfileHashSearchTokens.__table__.create(bind=db.engine, checkfirst=True)
+
+    from hashcrush.searches.token_index import migrate_search_token_rows
+
+    migrate_search_token_rows()
+
+
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(
         version=1,
@@ -484,6 +497,12 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
         name="add_offline_reference_datasets",
         summary="Track offline breach-intelligence datasets and cached exposure matches.",
         upgrade=_migration_011_add_offline_reference_datasets,
+    ),
+    MigrationStep(
+        version=12,
+        name="add_partial_search_token_indexes",
+        summary="Add blind-indexed trigram token tables for scalable partial search.",
+        upgrade=_migration_012_add_partial_search_token_indexes,
     ),
 )
 

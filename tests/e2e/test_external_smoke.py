@@ -132,7 +132,7 @@ def test_external_worker_cracks_dictionary_job_end_to_end(
     expect(page.get_by_role("heading", name="Hashes")).to_be_visible()
     page.locator("select[name='file_type']").select_option("hash_only")
     page.locator("select[name='hash_type']").select_option("0")
-    page.get_by_label("Fallback Domain (Optional)").fill(domain_name)
+    page.get_by_label("Fallback category (domain) for no-domain entries").fill(domain_name)
     page.set_input_files("input[name='hashfile']", str(hashfile_path))
     page.get_by_role("button", name="Save Hashfile and Continue", exact=True).click()
 

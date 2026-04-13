@@ -228,6 +228,9 @@ def test_wordlists_add_lists_mounted_wordlist_files(tmp_path):
         client = app.test_client()
         _login_client_as_user(client, admin)
 
+        rescan_response = client.post("/settings/rescan-mounted-folders")
+        assert rescan_response.status_code == 302
+
         response = client.get("/wordlists/add")
         assert response.status_code == 200
         body = response.data.decode("utf-8")

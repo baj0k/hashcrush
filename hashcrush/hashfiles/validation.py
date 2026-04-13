@@ -14,6 +14,10 @@ from hashcrush.domains.service import (
     normalize_domain_name,
 )
 from hashcrush.models import Hashes, HashfileHashes, db
+from hashcrush.searches.token_index import (
+    sync_hash_search_tokens,
+    sync_hashfile_hash_search_tokens,
+)
 from hashcrush.utils.file_ops import get_md5_hash
 from hashcrush.utils.secret_storage import (
     encode_ciphertext_for_storage,
@@ -153,6 +157,8 @@ def import_hash_only(line, hash_type):
     )
     db.session.add(new_hash)
     db.session.flush()
+    sync_hash_search_tokens([new_hash.id], commit=False)
+    db.session.commit()
     return new_hash.id
 
 
@@ -420,10 +426,16 @@ def _flush_import_batch(
             )
         )
 
+    new_hash_ids = list(new_hashes_by_digest[digest].id for digest in new_hashes_by_digest)
     if new_links:
         db.session.add_all(new_links)
 
     db.session.flush()
+    new_link_ids = [new_link.id for new_link in new_links]
+    if new_hash_ids:
+        sync_hash_search_tokens(new_hash_ids, commit=False)
+    if new_link_ids:
+        sync_hashfile_hash_search_tokens(new_link_ids, commit=False)
     db.session.expunge_all()
 
 

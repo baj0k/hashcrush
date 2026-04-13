@@ -26,8 +26,9 @@ from hashcrush.models import (
     Wordlists,
     db,
 )
-from hashcrush.executor.hashcat_command import build_hashcat_argv
+from hashcrush.executor.hashcat_command import build_hashcat_argv, format_hashcat_speed
 from hashcrush.jobs.status import update_job_task_status
+from hashcrush.searches.token_index import sync_hash_search_tokens
 from hashcrush.utils.file_ops import get_md5_hash
 from hashcrush.utils.secret_storage import (
     decode_ciphertext_from_storage,
@@ -52,6 +53,19 @@ def _ensure_runtime_dirs() -> tuple[str, str]:
 _EXECUTOR_LOCK_CLASS_ID = 0x48435253
 _EXECUTOR_LOCK_ID = 0x57524B52
 _WORKER_HEARTBEAT_FILENAME = "worker-heartbeat.json"
+_HASHCAT_SPEED_TOKEN_PATTERN = re.compile(
+    r"\b(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>[kmgtpe]?h/s)\b",
+    re.IGNORECASE,
+)
+_HASHCAT_SPEED_UNIT_MULTIPLIERS = {
+    "h/s": 1.0,
+    "kh/s": 1_000.0,
+    "mh/s": 1_000_000.0,
+    "gh/s": 1_000_000_000.0,
+    "th/s": 1_000_000_000_000.0,
+    "ph/s": 1_000_000_000_000_000.0,
+    "eh/s": 1_000_000_000_000_000_000.0,
+}
 
 
 class ExecutorOwnershipError(RuntimeError):
@@ -129,6 +143,7 @@ def _parse_hashcat_status(filepath: str) -> dict[str, str]:
     if not os.path.exists(filepath):
         return status
 
+    total_speed_hps = 0.0
     with open(filepath, encoding="utf-8", errors="ignore") as hashcat_output:
         for line in hashcat_output:
             if line.startswith("Time.Started."):
@@ -146,9 +161,18 @@ def _parse_hashcat_status(filepath: str) -> dict[str, str]:
             elif line.startswith("Progress"):
                 status["Progress"] = line.split(": ", 1)[-1].rstrip()
             elif line.startswith("Speed.#"):
-                match = re.search(r"\b\d+.?\d?\s.*/s\b", line)
+                match = _HASHCAT_SPEED_TOKEN_PATTERN.search(line)
                 if match:
-                    status["Speed #"] = match.group()
+                    try:
+                        numeric_value = float(match.group("value"))
+                    except (TypeError, ValueError):
+                        continue
+                    unit = match.group("unit").lower()
+                    total_speed_hps += numeric_value * _HASHCAT_SPEED_UNIT_MULTIPLIERS.get(
+                        unit, 1.0
+                    )
+    if total_speed_hps > 0:
+        status["Speed #"] = format_hashcat_speed(f"{total_speed_hps} H/s")
     return status
 
 
@@ -542,10 +566,10 @@ class LocalExecutorService:
                 stderr=subprocess.STDOUT,
                 shell=False,
             )
-        except Exception:
+        except Exception as exc:
             current_app.logger.exception("Failed to start local job_task id=%s", job_task.id)
             self._remove_files(hash_path, crack_path, output_path)
-            update_job_task_status(job_task.id, "Canceled")
+            self._record_start_failure(job_task.id, exc)
             return
 
         job_task.worker_pid = process.pid
@@ -589,6 +613,23 @@ class LocalExecutorService:
         crack_path = os.path.join(outfiles_dir, f"hc_cracked_{job.id}_{task.id}.txt")
         output_path = os.path.join(outfiles_dir, f"hcoutput_{job.id}_{job_task.id}.txt")
         return argv, hash_path, crack_path, output_path
+
+    def _record_start_failure(self, job_task_id: int, error: Exception) -> None:
+        """Persist task startup failures so configuration issues are visible and recoverable."""
+
+        job_task = db.session.get(JobTasks, job_task_id)
+        if job_task is not None:
+            job_task.progress = json.dumps(
+                {
+                    "Status": "Start Failed",
+                    "Error": str(error),
+                }
+            )
+            job_task.benchmark = None
+            db.session.commit()
+
+        final_status = "Paused" if isinstance(error, ValueError) else "Canceled"
+        update_job_task_status(job_task_id, final_status)
 
     def _write_hashfile(self, job_id: int, task_id: int, hashfile_id: int, hashes_dir: str) -> str:
         target = os.path.join(hashes_dir, f"hashfile_{job_id}_{task_id}.txt")
@@ -799,6 +840,7 @@ class LocalExecutorService:
             records_by_sub_ciphertext.setdefault(row.sub_ciphertext, row)
 
         imported_count = 0
+        updated_hash_ids: list[int] = []
         for digest_values, plaintext in parsed_entries:
             for digest in digest_values:
                 record = records_by_sub_ciphertext.get(digest)
@@ -809,8 +851,11 @@ class LocalExecutorService:
                     )
                     record.cracked = True
                     imported_count += 1
+                    updated_hash_ids.append(int(record.id))
                     break
         db.session.commit()
+        if updated_hash_ids:
+            sync_hash_search_tokens(updated_hash_ids)
         if imported_count > 0:
             update_all_dynamic_wordlists()
         return imported_count

@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import secrets
 import shutil
 import sqlite3
@@ -28,6 +27,11 @@ from hashcrush.models import (
     db,
     utc_now_naive,
 )
+from hashcrush.utils.mounted_file_cache import (
+    MountedFileCacheSnapshot,
+    load_mounted_file_cache,
+    rescan_mounted_files,
+)
 from hashcrush.utils.secret_storage import decode_ciphertext_from_storage
 from hashcrush.utils.storage_paths import get_storage_subdir
 
@@ -40,13 +44,6 @@ _PREFIX_WIDTH = 5
 _PREFIX_SPACE = 16**_PREFIX_WIDTH
 _PREFIX_OFFSET_VERSION = 1
 _LMDB_DATASET_VERSION = 1
-
-
-def _natural_sort_key(value: str) -> list[object]:
-    return [
-        int(chunk) if chunk.isdigit() else chunk.lower()
-        for chunk in re.split(r"(\d+)", str(value or ""))
-    ]
 
 
 def _normalize_path(value: str | None) -> str:
@@ -75,25 +72,30 @@ def get_hibp_ntlm_dataset_mount_root() -> str:
 
 
 def list_mounted_hibp_ntlm_dataset_files() -> list[str]:
-    """Return readable mounted HIBP dataset files under the configured root."""
+    """Return cached readable mounted HIBP dataset files under the configured root."""
+
+    return get_mounted_hibp_ntlm_dataset_cache_snapshot().files
+
+
+def get_mounted_hibp_ntlm_dataset_cache_snapshot() -> MountedFileCacheSnapshot:
+    """Return cached metadata for mounted HIBP dataset files."""
 
     root = get_hibp_ntlm_dataset_mount_root()
-    if not root or not os.path.isdir(root):
-        return []
+    return load_mounted_file_cache(
+        "hibp-datasets",
+        expected_root=root,
+        validator=_is_path_within_root,
+    )
 
-    results: list[str] = []
-    for current_root, dirnames, filenames in os.walk(root):
-        dirnames.sort(key=_natural_sort_key)
-        for filename in sorted(filenames, key=_natural_sort_key):
-            candidate = _normalize_path(os.path.join(current_root, filename))
-            if not _is_path_within_root(candidate, root):
-                continue
-            if not os.path.isfile(candidate):
-                continue
-            if not os.access(candidate, os.R_OK):
-                continue
-            results.append(candidate)
-    return results
+
+def rescan_mounted_hibp_ntlm_dataset_files() -> MountedFileCacheSnapshot:
+    """Rescan the configured HIBP dataset root and refresh the cache."""
+
+    return rescan_mounted_files(
+        "hibp-datasets",
+        root=get_hibp_ntlm_dataset_mount_root(),
+        validator=_is_path_within_root,
+    )
 
 
 def validate_mounted_hibp_ntlm_dataset_path(
@@ -430,18 +432,55 @@ def _existing_exposure_rows(hash_ids: list[int]) -> dict[int, HashPublicExposure
     return {int(row.hash_id): row for row in rows}
 
 
-def _iter_ntlm_hash_records(hashfile_id: int | None = None) -> list[tuple[int, str | None]]:
-    stmt = select(Hashes.id, Hashes.ciphertext).where(Hashes.hash_type == NTLM_HASH_TYPE)
-    if hashfile_id is not None:
-        stmt = (
-            stmt.join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
-            .where(HashfileHashes.hashfile_id == hashfile_id)
-            .distinct()
+def _count_ntlm_hash_records(hashfile_id: int | None = None) -> int:
+    if hashfile_id is None:
+        return int(
+            db.session.scalar(
+                select(func.count(Hashes.id)).where(Hashes.hash_type == NTLM_HASH_TYPE)
+            )
+            or 0
         )
-    return [
-        (int(hash_id), ciphertext)
-        for hash_id, ciphertext in db.session.execute(stmt).all()
-    ]
+
+    return int(
+        db.session.scalar(
+            select(func.count(func.distinct(Hashes.id)))
+            .select_from(Hashes)
+            .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+            .where(Hashes.hash_type == NTLM_HASH_TYPE)
+            .where(HashfileHashes.hashfile_id == hashfile_id)
+        )
+        or 0
+    )
+
+
+def _iter_ntlm_hash_record_batches(
+    hashfile_id: int | None = None,
+    *,
+    batch_size: int = _SCAN_BATCH_SIZE,
+):
+    last_hash_id = 0
+    while True:
+        stmt = (
+            select(Hashes.id, Hashes.ciphertext)
+            .where(Hashes.hash_type == NTLM_HASH_TYPE)
+            .where(Hashes.id > last_hash_id)
+        )
+        if hashfile_id is not None:
+            stmt = (
+                stmt.join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+                .where(HashfileHashes.hashfile_id == hashfile_id)
+                .distinct()
+            )
+        batch = [
+            (int(hash_id), ciphertext)
+            for hash_id, ciphertext in db.session.execute(
+                stmt.order_by(Hashes.id.asc()).limit(batch_size)
+            ).all()
+        ]
+        if not batch:
+            break
+        yield batch
+        last_hash_id = batch[-1][0]
 
 
 def _count_matched_accounts_for_scope(hashfile_id: int | None = None) -> int:
@@ -539,19 +578,13 @@ def _lookup_match_counts_lmdb(
     return matches
 
 
-def _batched(sequence: list[tuple[int, str | None]], size: int):
-    for index in range(0, len(sequence), size):
-        yield sequence[index : index + size]
-
-
 def _scan_hash_records(
-    hash_records: list[tuple[int, str | None]],
     *,
     dataset_path: str,
     progress_callback: Callable[[int, int], None] | None = None,
     hashfile_id: int | None = None,
 ) -> PublicExposureScanResult:
-    total = len(hash_records)
+    total = _count_ntlm_hash_records(hashfile_id)
     if total <= 0:
         return PublicExposureScanResult(
             scanned_hash_count=0,
@@ -591,7 +624,10 @@ def _scan_hash_records(
                 prefix_index_dataset = _load_prefix_index_dataset(dataset_path)
                 prefix_offsets = _read_prefix_offsets(prefix_index_dataset.offsets_path)
 
-        for batch in _batched(hash_records, _SCAN_BATCH_SIZE):
+        for batch in _iter_ntlm_hash_record_batches(
+            hashfile_id,
+            batch_size=_SCAN_BATCH_SIZE,
+        ):
             batch_ids = [int(hash_id) for hash_id, _ in batch]
             existing_rows = _existing_exposure_rows(batch_ids)
             normalized_by_hash_id: dict[int, str] = {}
@@ -667,9 +703,7 @@ def scan_hashfile_against_hibp_dataset(
     resolved_dataset_path = _dataset_lookup_path(dataset_path)
     if resolved_dataset_path is None:
         return PublicExposureScanResult(0, 0, 0)
-    hash_records = _iter_ntlm_hash_records(hashfile_id)
     return _scan_hash_records(
-        hash_records,
         dataset_path=resolved_dataset_path,
         progress_callback=progress_callback,
         hashfile_id=hashfile_id,
@@ -686,9 +720,7 @@ def scan_all_ntlm_hashes_against_hibp_dataset(
     resolved_dataset_path = _dataset_lookup_path(dataset_path)
     if resolved_dataset_path is None:
         return PublicExposureScanResult(0, 0, 0)
-    hash_records = _iter_ntlm_hash_records()
     return _scan_hash_records(
-        hash_records,
         dataset_path=resolved_dataset_path,
         progress_callback=progress_callback,
         hashfile_id=None,

@@ -2,7 +2,7 @@
 {% block header %}
 <div class="hc-page-header">
     <h1>Create Shared Hashfile</h1>
-    <p class="hc-page-intro">Register a shared hashfile outside the job flow so it can be reused by jobs. Domains are inferred from usernames like <code>domain\user</code>; use the fallback field only when the file has no domain prefix.</p>
+    <p class="hc-page-intro">Register a shared hashfile outside the job flow so it can be reused by jobs. Domains are inferred from usernames like <code>domain\user</code>; rows without a domain prefix are assigned to the fallback category below.</p>
 </div>
 {% endblock header %}
 {% block content %}
@@ -20,10 +20,10 @@
                         {% endfor %}
                     </div>
                 {% else %}
-                    {{ hashfilesForm.domain_name(class="form-control form-control-lg", placeholder="Optional fallback for rows without domain\\username") }}
+                    {{ hashfilesForm.domain_name(class="form-control form-control-lg") }}
                 {% endif %}
                 <small class="form-text text-muted">
-                    Leave blank when usernames already contain a prefix like <code>domain\username</code>. If provided, the fallback is only used for rows without an inferred domain.
+                    This category is only used for rows without an inferred prefix like <code>domain\username</code>. The default value <code>None</code> keeps those entries grouped together consistently.
                 </small>
             </div>
             <div class="form-group">

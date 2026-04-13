@@ -260,6 +260,15 @@ def test_settings_lists_mounted_hibp_dataset_files(tmp_path):
         client = app.test_client()
         _login_client_as_user(client, admin)
 
+        initial_response = client.get("/breach-intelligence")
+        assert initial_response.status_code == 200
+        assert b"No cached readable files were found under" in initial_response.data
+        assert b'href="/settings#nav-data"' in initial_response.data
+        assert b"<select id=\"mounted_dataset_path\"" not in initial_response.data
+
+        rescan_response = client.post("/settings/rescan-mounted-folders")
+        assert rescan_response.status_code == 302
+
         response = client.get("/breach-intelligence")
         assert response.status_code == 200
         body = response.data.decode("utf-8")
@@ -271,6 +280,7 @@ def test_settings_lists_mounted_hibp_dataset_files(tmp_path):
             + str((mounted_root / "hibp-ntlm.txt").resolve())
             + '" selected'
         ) in body
+        assert "Cached list refreshed at" in body
         assert "Choose a mounted HIBP dataset file" not in body
 
 

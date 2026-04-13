@@ -15,7 +15,7 @@ def test_shared_hashfile_add_flow(page, live_server, login, e2e_fixture_data):
     expect(page.get_by_role("heading", name="Create Shared Hashfile")).to_be_visible()
 
     hashfile_name = unique_name("E2E Shared Hashfile")
-    page.get_by_label("Fallback Domain (Optional)").fill(e2e_fixture_data["domain_name"])
+    page.get_by_label("Fallback category (domain) for no-domain entries").fill(e2e_fixture_data["domain_name"])
     page.locator("#file_type").select_option("hash_only")
     page.locator("#hash_type").select_option("0")
     page.locator("#name").fill(hashfile_name)

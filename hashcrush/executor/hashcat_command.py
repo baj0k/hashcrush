@@ -124,12 +124,16 @@ def build_hashcat_argv(job_id, task_id, hashcat_bin=None):
             raise ValueError("Task attack mode 'dictionary' requires a wordlist.")
         wordlist_path = resolve_stored_path(wordlist.path)
         if not os.path.exists(wordlist_path):
-            raise ValueError(f"Wordlist file is missing: {wordlist_path}")
+            raise ValueError(
+                f"Wordlist file is missing for task '{task.name}': {wordlist_path}"
+            )
         cmd = list(common)
         if rules_file:
             rules_path = resolve_stored_path(rules_file.path)
             if not os.path.exists(rules_path):
-                raise ValueError(f"Rule file is missing: {rules_path}")
+                raise ValueError(
+                    f"Rule file is missing for task '{task.name}': {rules_path}"
+                )
             cmd.extend(["-r", rules_path])
         cmd.extend([target_file, wordlist_path])
         return cmd

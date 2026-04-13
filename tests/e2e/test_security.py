@@ -23,7 +23,7 @@ def test_fallback_domain_xss_is_escaped(page, live_server, login):
 
     page.goto(f"{live_server}/hashfiles/add", wait_until="domcontentloaded")
     expect(page.get_by_role("heading", name="Create Shared Hashfile")).to_be_visible()
-    page.get_by_label("Fallback Domain (Optional)").fill(payload)
+    page.get_by_label("Fallback category (domain) for no-domain entries").fill(payload)
     page.locator("#file_type").select_option("hash_only")
     page.locator("#hash_type").select_option("0")
     page.get_by_label("Hashfile Name").fill(unique_name("Fallback Domain XSS"))

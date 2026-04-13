@@ -83,59 +83,72 @@ def _mask_for_plaintext(decoded_plaintext: str) -> str:
     return ''.join(mask_parts)
 
 
-def _build_cracked_password_metrics(cracked_rows: list[tuple[str | None, str | None]]) -> dict[str, object]:
-    complexity_fails = 0
-    complexity_meets = 0
-    composition_counts: Counter[str] = Counter()
-    length_counts: Counter[int] = Counter()
-    password_counts: Counter[str] = Counter()
-    mask_counts: Counter[str] = Counter()
-    username_match_counts: Counter[str] = Counter()
+def _empty_cracked_password_metrics() -> dict[str, object]:
     blank_label = 'Blank (unset)'
-
-    for plaintext_value, username_value in cracked_rows:
-        decoded_plaintext = _decoded_plaintext(plaintext_value)
-        length = len(decoded_plaintext)
-        has_lower = any(char.islower() for char in decoded_plaintext)
-        has_upper = any(char.isupper() for char in decoded_plaintext)
-        has_digit = any(char.isdigit() for char in decoded_plaintext)
-        has_special = any(not char.isalnum() for char in decoded_plaintext)
-        complexity_flags = int(has_lower) + int(has_upper) + int(has_digit) + int(has_special)
-
-        if length >= 8 and complexity_flags >= 3:
-            complexity_meets += 1
-        else:
-            complexity_fails += 1
-
-        if length == 0:
-            composition_counts[blank_label] += 1
-        else:
-            composition_counts[
-                CHARSET_CATEGORY_NAMES.get(
-                    (has_upper, has_lower, has_digit, has_special),
-                    'Other',
-                )
-            ] += 1
-
-        length_counts[length] += 1
-        password_counts[decoded_plaintext or blank_label] += 1
-        mask_counts[_mask_for_plaintext(decoded_plaintext)] += 1
-
-        decoded_username = _decode_username(username_value)
-        if plaintext_value and decoded_username is not None and decoded_plaintext == decoded_username:
-            username_match_counts[decoded_plaintext] += 1
-
     return {
-        'recovered_accounts': len(cracked_rows),
-        'complexity_fails': complexity_fails,
-        'complexity_meets': complexity_meets,
-        'composition_counts': composition_counts,
-        'length_counts': length_counts,
-        'password_counts': password_counts,
-        'mask_counts': mask_counts,
-        'username_match_counts': username_match_counts,
+        'recovered_accounts': 0,
+        'complexity_fails': 0,
+        'complexity_meets': 0,
+        'composition_counts': Counter(),
+        'length_counts': Counter(),
+        'password_counts': Counter(),
+        'mask_counts': Counter(),
+        'username_match_counts': Counter(),
         'blank_label': blank_label,
     }
+
+
+def _accumulate_cracked_password_metric(
+    metrics: dict[str, object],
+    plaintext_value: str | None,
+    username_value: str | None,
+) -> None:
+    blank_label = str(metrics['blank_label'])
+    composition_counts: Counter[str] = metrics['composition_counts']
+    length_counts: Counter[int] = metrics['length_counts']
+    password_counts: Counter[str] = metrics['password_counts']
+    mask_counts: Counter[str] = metrics['mask_counts']
+    username_match_counts: Counter[str] = metrics['username_match_counts']
+
+    decoded_plaintext = _decoded_plaintext(plaintext_value)
+    length = len(decoded_plaintext)
+    has_lower = any(char.islower() for char in decoded_plaintext)
+    has_upper = any(char.isupper() for char in decoded_plaintext)
+    has_digit = any(char.isdigit() for char in decoded_plaintext)
+    has_special = any(not char.isalnum() for char in decoded_plaintext)
+    complexity_flags = int(has_lower) + int(has_upper) + int(has_digit) + int(has_special)
+
+    metrics['recovered_accounts'] = int(metrics['recovered_accounts']) + 1
+
+    if length >= 8 and complexity_flags >= 3:
+        metrics['complexity_meets'] = int(metrics['complexity_meets']) + 1
+    else:
+        metrics['complexity_fails'] = int(metrics['complexity_fails']) + 1
+
+    if length == 0:
+        composition_counts[blank_label] += 1
+    else:
+        composition_counts[
+            CHARSET_CATEGORY_NAMES.get(
+                (has_upper, has_lower, has_digit, has_special),
+                'Other',
+            )
+        ] += 1
+
+    length_counts[length] += 1
+    password_counts[decoded_plaintext or blank_label] += 1
+    mask_counts[_mask_for_plaintext(decoded_plaintext)] += 1
+
+    decoded_username = _decode_username(username_value)
+    if plaintext_value and decoded_username is not None and decoded_plaintext == decoded_username:
+        username_match_counts[decoded_plaintext] += 1
+
+
+def _build_cracked_password_metrics(cracked_rows) -> dict[str, object]:
+    metrics = _empty_cracked_password_metrics()
+    for plaintext_value, username_value in cracked_rows:
+        _accumulate_cracked_password_metric(metrics, plaintext_value, username_value)
+    return metrics
 
 
 def _build_hash_reuse_summary(scoped_hashfile_ids: list[int]) -> dict[str, int | float]:
@@ -243,6 +256,15 @@ def _scoped_hash_rows_stmt(scoped_hashfile_ids: list[int]):
         .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
         .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
     )
+
+
+def _iter_scoped_hash_rows(scoped_hashfile_ids: list[int], *, cracked: bool | None = None):
+    stmt = _scoped_hash_rows_stmt(scoped_hashfile_ids)
+    if cracked is True:
+        stmt = stmt.where(Hashes.cracked.is_(True))
+    elif cracked is False:
+        stmt = stmt.where(Hashes.cracked.is_(False))
+    return db.session.execute(stmt.execution_options(yield_per=1000)).tuples()
 
 
 def _download_date_label() -> str:
@@ -511,7 +533,9 @@ def _build_domain_posture_rows(domain_rows: list[Domains], selected_domain_id: i
     for domain_id, cracked, count in status_rows:
         status_counts[int(domain_id)][bool(cracked)] = int(count)
 
-    cracked_rows_by_domain: dict[int, list[tuple[str | None, str | None]]] = defaultdict(list)
+    cracked_metrics_by_domain: dict[int, dict[str, object]] = defaultdict(
+        _empty_cracked_password_metrics
+    )
     cracked_rows = db.session.execute(
         select(effective_domain_id.label('domain_id'), Hashes.plaintext, HashfileHashes.username)
         .select_from(Hashes)
@@ -519,16 +543,21 @@ def _build_domain_posture_rows(domain_rows: list[Domains], selected_domain_id: i
         .join(Hashfiles, Hashfiles.id == HashfileHashes.hashfile_id)
         .where(effective_domain_id.in_(domain_ids))
         .where(Hashes.cracked.is_(True))
-    ).all()
+        .execution_options(yield_per=1000)
+    )
     for domain_id, plaintext, username in cracked_rows:
-        cracked_rows_by_domain[int(domain_id)].append((plaintext, username))
+        _accumulate_cracked_password_metric(
+            cracked_metrics_by_domain[int(domain_id)],
+            plaintext,
+            username,
+        )
 
     comparison_rows: list[dict[str, object]] = []
     for domain in domain_rows:
         counts = status_counts.get(domain.id, {True: 0, False: 0})
         total_accounts = int(counts.get(True, 0)) + int(counts.get(False, 0))
-        cracked_metrics = _build_cracked_password_metrics(
-            cracked_rows_by_domain.get(domain.id, [])
+        cracked_metrics = cracked_metrics_by_domain.get(
+            domain.id, _empty_cracked_password_metrics()
         )
         posture_summary = _build_posture_summary(total_accounts, cracked_metrics)
         comparison_rows.append(
@@ -690,7 +719,8 @@ def get_analytics():
         .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
         .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
         .where(Hashes.cracked.is_(True))
-    ).all()
+        .execution_options(yield_per=1000)
+    )
     cracked_metrics = _build_cracked_password_metrics(cracked_rows)
     fig2_fails_complexity_cnt = int(cracked_metrics['complexity_fails'])
     fig2_meets_complexity_cnt = int(cracked_metrics['complexity_meets'])
@@ -901,87 +931,83 @@ def analytics_download_hashes():
 
     filename = _export_filename(base_filename, domain_id, hashfile_id)
 
-    if not scoped_hashfile_ids:
-        cracked_hashes = []
-        uncracked_hashes = []
-        reused_hash_accounts = []
-        reused_password_accounts = []
-        public_exposure_accounts = []
-    else:
-        cracked_hashes = db.session.execute(
-            _scoped_hash_rows_stmt(scoped_hashfile_ids).where(Hashes.cracked.is_(True))
-        ).tuples().all()
-        uncracked_hashes = db.session.execute(
-            _scoped_hash_rows_stmt(scoped_hashfile_ids).where(Hashes.cracked.is_(False))
-        ).tuples().all()
-        reused_hash_subquery = (
-            select(Hashes.sub_ciphertext)
-            .select_from(Hashes)
-            .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
-            .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
-            .group_by(Hashes.sub_ciphertext)
-            .having(func.count(HashfileHashes.id) > 1)
-        )
-        plaintext_key = func.coalesce(Hashes.plaintext_digest, Hashes.plaintext)
-        reused_password_subquery = (
-            select(plaintext_key)
-            .select_from(Hashes)
-            .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
-            .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
-            .where(Hashes.cracked.is_(True))
-            .group_by(plaintext_key)
-            .having(func.count(HashfileHashes.id) > 1)
-        )
-        reused_hash_accounts = db.session.execute(
-            _scoped_hash_rows_stmt(scoped_hashfile_ids)
-            .where(Hashes.sub_ciphertext.in_(reused_hash_subquery))
-            .order_by(Hashes.sub_ciphertext.asc(), HashfileHashes.id.asc())
-        ).tuples().all()
-        reused_password_accounts = db.session.execute(
-            _scoped_hash_rows_stmt(scoped_hashfile_ids)
-            .where(Hashes.cracked.is_(True))
-            .where(plaintext_key.in_(reused_password_subquery))
-            .order_by(plaintext_key.asc(), HashfileHashes.id.asc())
-        ).tuples().all()
-        public_exposure_accounts = db.session.execute(
-            select(Hashes, HashfileHashes, HashPublicExposure.prevalence_count)
-            .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
-            .join(HashPublicExposure, HashPublicExposure.hash_id == Hashes.id)
-            .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
-            .where(Hashes.hash_type == 1000)
-            .where(HashPublicExposure.source_kind == HIBP_NTLM_KIND)
-            .where(HashPublicExposure.matched.is_(True))
-            .order_by(HashfileHashes.id.asc())
-        ).all()
-
     output = io.StringIO()
-    if export_type == 'found':
-        for entry in cracked_hashes:
-            _write_account_export_line(output, entry[0], entry[1], include_plaintext=True)
-    elif export_type == 'left':
-        for entry in uncracked_hashes:
-            _write_account_export_line(output, entry[0], entry[1], include_plaintext=False)
-    elif export_type == 'reused_hashes':
-        for entry in reused_hash_accounts:
-            _write_account_export_line(
-                output,
-                entry[0],
-                entry[1],
-                include_plaintext=bool(entry[0].cracked),
+    row_count = 0
+    if scoped_hashfile_ids:
+        if export_type == 'found':
+            for hash_row, link_row in _iter_scoped_hash_rows(scoped_hashfile_ids, cracked=True):
+                _write_account_export_line(output, hash_row, link_row, include_plaintext=True)
+                row_count += 1
+        elif export_type == 'left':
+            for hash_row, link_row in _iter_scoped_hash_rows(scoped_hashfile_ids, cracked=False):
+                _write_account_export_line(output, hash_row, link_row, include_plaintext=False)
+                row_count += 1
+        elif export_type == 'reused_hashes':
+            reused_hash_subquery = (
+                select(Hashes.sub_ciphertext)
+                .select_from(Hashes)
+                .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+                .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
+                .group_by(Hashes.sub_ciphertext)
+                .having(func.count(HashfileHashes.id) > 1)
             )
-    elif export_type == 'reused_passwords':
-        for entry in reused_password_accounts:
-            _write_account_export_line(output, entry[0], entry[1], include_plaintext=True)
-    elif export_type == 'public_exposures':
-        for entry in public_exposure_accounts:
-            trailing_fields = [str(int(entry[2]))] if int(entry[2] or 0) > 0 else []
-            _write_account_export_line(
-                output,
-                entry[0],
-                entry[1],
-                include_plaintext=bool(entry[0].cracked),
-                trailing_fields=trailing_fields,
+            reused_hash_accounts = db.session.execute(
+                _scoped_hash_rows_stmt(scoped_hashfile_ids)
+                .where(Hashes.sub_ciphertext.in_(reused_hash_subquery))
+                .order_by(Hashes.sub_ciphertext.asc(), HashfileHashes.id.asc())
+                .execution_options(yield_per=1000)
+            ).tuples()
+            for hash_row, link_row in reused_hash_accounts:
+                _write_account_export_line(
+                    output,
+                    hash_row,
+                    link_row,
+                    include_plaintext=bool(hash_row.cracked),
+                )
+                row_count += 1
+        elif export_type == 'reused_passwords':
+            plaintext_key = func.coalesce(Hashes.plaintext_digest, Hashes.plaintext)
+            reused_password_subquery = (
+                select(plaintext_key)
+                .select_from(Hashes)
+                .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+                .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
+                .where(Hashes.cracked.is_(True))
+                .group_by(plaintext_key)
+                .having(func.count(HashfileHashes.id) > 1)
             )
+            reused_password_accounts = db.session.execute(
+                _scoped_hash_rows_stmt(scoped_hashfile_ids)
+                .where(Hashes.cracked.is_(True))
+                .where(plaintext_key.in_(reused_password_subquery))
+                .order_by(plaintext_key.asc(), HashfileHashes.id.asc())
+                .execution_options(yield_per=1000)
+            ).tuples()
+            for hash_row, link_row in reused_password_accounts:
+                _write_account_export_line(output, hash_row, link_row, include_plaintext=True)
+                row_count += 1
+        elif export_type == 'public_exposures':
+            public_exposure_accounts = db.session.execute(
+                select(Hashes, HashfileHashes, HashPublicExposure.prevalence_count)
+                .join(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
+                .join(HashPublicExposure, HashPublicExposure.hash_id == Hashes.id)
+                .where(HashfileHashes.hashfile_id.in_(scoped_hashfile_ids))
+                .where(Hashes.hash_type == 1000)
+                .where(HashPublicExposure.source_kind == HIBP_NTLM_KIND)
+                .where(HashPublicExposure.matched.is_(True))
+                .order_by(HashfileHashes.id.asc())
+                .execution_options(yield_per=1000)
+            )
+            for hash_row, link_row, prevalence_count in public_exposure_accounts:
+                trailing_fields = [str(int(prevalence_count))] if int(prevalence_count or 0) > 0 else []
+                _write_account_export_line(
+                    output,
+                    hash_row,
+                    link_row,
+                    include_plaintext=bool(hash_row.cracked),
+                    trailing_fields=trailing_fields,
+                )
+                row_count += 1
 
     record_audit_event(
         'analytics.download',
@@ -992,17 +1018,7 @@ def analytics_download_hashes():
             'export_type': export_type,
             'domain_id': domain_id,
             'hashfile_id': hashfile_id,
-            'row_count': (
-                len(cracked_hashes)
-                if export_type == 'found'
-                else len(uncracked_hashes)
-                if export_type == 'left'
-                else len(reused_hash_accounts)
-                if export_type == 'reused_hashes'
-                else len(reused_password_accounts)
-                if export_type == 'reused_passwords'
-                else len(public_exposure_accounts)
-            ),
+            'row_count': row_count,
         },
     )
     buffer = io.BytesIO(output.getvalue().encode('utf-8'))

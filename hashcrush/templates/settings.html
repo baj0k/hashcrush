@@ -39,6 +39,44 @@
                                 </form>
                             </td>
                         </tr>
+                        <tr>
+                            <td>Mounted Wordlist Cache</td>
+                            <td>
+                                {{ external_wordlist_cache_count }} file(s)
+                                {% if external_wordlist_cache_refreshed_at %}
+                                <div class="text-muted small">Last refreshed: {{ external_wordlist_cache_refreshed_at }}</div>
+                                {% else %}
+                                <div class="text-muted small">Not scanned yet.</div>
+                                {% endif %}
+                                <div class="text-muted small">Root: <code>{{ external_wordlist_root }}</code></div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Mounted HIBP Cache</td>
+                            <td>
+                                {{ hibp_cache_count }} file(s)
+                                {% if hibp_cache_refreshed_at %}
+                                <div class="text-muted small">Last refreshed: {{ hibp_cache_refreshed_at }}</div>
+                                {% else %}
+                                <div class="text-muted small">Not scanned yet.</div>
+                                {% endif %}
+                                <div class="text-muted small">Root: <code>{{ hibp_dataset_mount_root }}</code></div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Rescan Mounted Folders</td>
+                            <td>
+                                <form action="{{ url_for('settings.rescan_mounted_folders') }}" method="POST" class="d-inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button class="btn btn-outline-primary" type="submit">
+                                        <i class="fa fa-refresh" aria-hidden="true"></i> Rescan Mounted Folders
+                                    </button>
+                                </form>
+                                <div class="text-muted small mt-2">
+                                    Mounted file lists are cached and are not rescanned during normal page loads.
+                                </div>
+                            </td>
+                        </tr>
                     </tbody>
                 </table>
             </div>

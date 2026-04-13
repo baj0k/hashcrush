@@ -36,6 +36,10 @@ from hashcrush.models import (
     Wordlists,
     db,
 )
+from hashcrush.searches.token_index import (
+    sync_hash_search_tokens,
+    sync_hashfile_hash_search_tokens,
+)
 from hashcrush.users.routes import bcrypt
 from hashcrush.utils.utils import (
     decode_ciphertext_from_storage,
@@ -222,6 +226,7 @@ def _seed_hash(
     )
     db.session.add(row)
     db.session.commit()
+    sync_hash_search_tokens([row.id])
     return row
 
 
@@ -256,6 +261,7 @@ def _seed_hashfile_hash(
     )
     db.session.add(row)
     db.session.commit()
+    sync_hashfile_hash_search_tokens([row.id])
     return row
 
 

@@ -958,7 +958,7 @@ def test_hashfiles_add_supports_async_processing_progress():
 
 
 @pytest.mark.security
-def test_hashfiles_add_supports_optional_fallback_domain_creation():
+def test_hashfiles_add_prefills_required_no_domain_fallback_category():
     app = _build_app()
     with app.app_context():
         db.create_all()
@@ -970,20 +970,35 @@ def test_hashfiles_add_supports_optional_fallback_domain_creation():
 
         form_response = client.get("/hashfiles/add")
         assert form_response.status_code == 200
-        assert b"Fallback Domain (Optional)" in form_response.data
-        assert b"Add New Domain" not in form_response.data
+        assert (
+            b"Fallback category (domain) for no-domain entries"
+            in form_response.data
+        )
+        assert b'value="None"' in form_response.data
         assert b'data-upload-progress-form="true"' in form_response.data
         assert b"Large file uploads continue processing" in form_response.data
+
+
+@pytest.mark.security
+def test_hashfiles_add_uses_default_none_category_for_rows_without_domain():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
 
         response = client.post(
             "/hashfiles/add",
             data={
-                "domain_name": "Inline Hashfile Domain",
+                "domain_name": "None",
                 "file_type": "hash_only",
                 "hash_type": "0",
                 "hashfile": (
                     io.BytesIO(b"5f4dcc3b5aa765d61d8327deb882cf99\n"),
-                    "inline-hashes.txt",
+                    "none-category-hashes.txt",
                 ),
             },
             content_type="multipart/form-data",
@@ -993,9 +1008,9 @@ def test_hashfiles_add_supports_optional_fallback_domain_creation():
         assert response.status_code == 200
         assert b"Hashfile created!" in response.data
 
-        domain = _first_row(Domains, name="inline hashfile domain")
+        domain = _first_row(Domains, name="none")
         assert domain is not None
-        hashfile = _first_row(Hashfiles, name="inline-hashes.txt")
+        hashfile = _first_row(Hashfiles, name="none-category-hashes.txt")
         assert hashfile is not None
         assert hashfile.domain_id == domain.id
 

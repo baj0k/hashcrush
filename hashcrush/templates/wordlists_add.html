@@ -69,7 +69,7 @@
                     {% else %}
                         {{ form.external_path(class="form-control form-control-lg", placeholder=(external_root ~ "/example.txt") if external_root else "/mnt/hashcrush-wordlists/example.txt") }}
                         <small class="text-muted d-block">
-                            No readable files were found under <code>{{ external_root }}</code>. You can still enter a mounted path manually.
+                            No cached readable files were found under <code>{{ external_root }}</code>. You can still enter a mounted path manually or use <a href="{{ url_for('settings.settings_list') }}#nav-data">Settings</a> to rescan mounted folders.
                         </small>
                     {% endif %}
                     <small class="text-muted d-block">
