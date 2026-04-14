@@ -398,6 +398,91 @@ def test_search_domain_browse_is_paginated_and_domain_filtered(monkeypatch):
         assert "legacy-gamma" in second_html
         assert "alpha" not in second_html
         assert f'/search?domain_id={primary_domain.id}&amp;page=1' in second_html
+        assert "Export This Domain" in first_html
+
+
+@pytest.mark.security
+def test_search_domain_export_runs_in_background_and_downloads_filtered_results():
+    app = _build_app({"ENABLE_INLINE_UPLOAD_WORKER": True})
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        primary_domain = Domains(name="Browse Export Domain")
+        secondary_domain = Domains(name="Unrelated Domain")
+        db.session.add_all([primary_domain, secondary_domain])
+        db.session.commit()
+
+        primary_hashfile = Hashfiles(name="browse-export-primary.txt", domain_id=primary_domain.id)
+        legacy_hashfile = Hashfiles(name="browse-export-legacy.txt", domain_id=primary_domain.id)
+        secondary_hashfile = Hashfiles(name="browse-export-secondary.txt", domain_id=secondary_domain.id)
+        db.session.add_all([primary_hashfile, legacy_hashfile, secondary_hashfile])
+        db.session.commit()
+
+        first_hash = _seed_hash("browse-export-hash-1", cracked=True, plaintext="AlphaPass123!")
+        second_hash = _seed_hash("browse-export-hash-2", cracked=False)
+        third_hash = _seed_hash("browse-export-hash-3", cracked=True, plaintext="GammaPass123!")
+        other_hash = _seed_hash("browse-export-hash-4", cracked=True, plaintext="DeltaPass123!")
+
+        _seed_hashfile_hash(
+            hash_id=first_hash.id,
+            hashfile_id=primary_hashfile.id,
+            username="Browse Export Domain\\alpha",
+            domain_id=primary_domain.id,
+        )
+        _seed_hashfile_hash(
+            hash_id=second_hash.id,
+            hashfile_id=primary_hashfile.id,
+            username="Browse Export Domain\\beta",
+            domain_id=primary_domain.id,
+        )
+        _seed_hashfile_hash(
+            hash_id=third_hash.id,
+            hashfile_id=legacy_hashfile.id,
+            username="legacy-gamma",
+            domain_id=None,
+        )
+        _seed_hashfile_hash(
+            hash_id=other_hash.id,
+            hashfile_id=secondary_hashfile.id,
+            username="Unrelated Domain\\delta",
+            domain_id=secondary_domain.id,
+        )
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/search/domain-export",
+            data={
+                "domain_id": str(primary_domain.id),
+                "export_type": "Colon",
+            },
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        assert response.status_code == 202
+        payload = response.get_json()
+        assert isinstance(payload, dict)
+        status_payload = _wait_for_upload_operation(client, payload["status_url"])
+        assert status_payload["success"] is True
+        assert status_payload["redirect_url"]
+        assert f"/search/domain-exports/" in status_payload["redirect_url"]
+
+        operation_id = payload["status_url"].rstrip("/").rsplit("/", 1)[-1]
+        operation = _first_row(UploadOperations, id=operation_id)
+        assert operation is not None
+        assert operation.operation_type == "search_domain_export"
+
+        download_response = client.get(status_payload["redirect_url"])
+        assert download_response.status_code == 200
+        body = download_response.get_data(as_text=True)
+        assert "Browse Export Domain\\alpha:browse-export-hash-1:AlphaPass123!" in body
+        assert "Browse Export Domain\\beta:browse-export-hash-2:unrecovered" in body
+        assert "Browse Export Domain:legacy-gamma:browse-export-hash-3:GammaPass123!" in body
+        assert "delta" not in body
+        content_disposition = download_response.headers.get("Content-Disposition", "")
+        assert "domain_entries_browse_export_domain_" in content_disposition
 
 
 @pytest.mark.security

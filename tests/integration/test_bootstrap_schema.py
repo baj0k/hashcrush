@@ -523,7 +523,7 @@ def test_upgrade_database_migrates_v1_schema_forward_to_current_version():
         result = upgrade_database()
 
         assert inspect(db.engine).has_table(AuditLog.__tablename__)
-        assert [step.version for step in result.applied_steps] == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+        assert [step.version for step in result.applied_steps] == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -550,7 +550,7 @@ def test_upgrade_database_migrates_v2_schema_forward_to_current_version():
         result = upgrade_database()
 
         assert not inspect(db.engine).has_table("settings")
-        assert [step.version for step in result.applied_steps] == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+        assert [step.version for step in result.applied_steps] == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -602,7 +602,7 @@ def test_upgrade_database_migrates_v3_schema_to_v4_job_task_positions():
         index_names = {
             index["name"] for index in inspect(db.engine).get_indexes("job_tasks")
         }
-        assert [step.version for step in result.applied_steps] == [4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+        assert [step.version for step in result.applied_steps] == [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
         assert [row.position for row in persisted] == [0, 1]
         assert "ix_job_tasks_job_id_position" in index_names
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
@@ -628,7 +628,7 @@ def test_upgrade_database_migrates_v5_schema_to_v6_audit_filter_indexes():
         result = upgrade_database()
 
         audit_indexes = {row["name"] for row in inspect(db.engine).get_indexes("audit_logs")}
-        assert [step.version for step in result.applied_steps] == [6, 7, 8, 9, 10, 11, 12, 13]
+        assert [step.version for step in result.applied_steps] == [6, 7, 8, 9, 10, 11, 12, 13, 14]
         assert "ix_audit_logs_actor_username_created_at" in audit_indexes
         assert "ix_audit_logs_target_type_created_at" in audit_indexes
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
@@ -665,13 +665,70 @@ def test_upgrade_database_migrates_v9_legacy_default_mask_names():
         renamed_tasks = _all_rows(Tasks, order_by=Tasks.id.asc())
         renamed_group = _first_row(TaskGroups, name=default_mask_task_group_name())
 
-        assert [step.version for step in result.applied_steps] == [10, 11, 12, 13]
+        assert [step.version for step in result.applied_steps] == [10, 11, 12, 13, 14]
         assert [task.name for task in renamed_tasks] == [
             default_mask_task_name(length) for length in range(1, 11)
         ]
         assert renamed_group is not None
         assert json.loads(renamed_group.tasks) == legacy_task_ids
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
+
+
+@pytest.mark.security
+def test_upgrade_database_migrates_v13_none_and_redundant_domain_categories():
+    app = _build_app()
+    with app.app_context():
+        from hashcrush.db_upgrade import CURRENT_SCHEMA_VERSION, upgrade_database
+
+        db.create_all()
+
+        none_domain = Domains(name="none")
+        redundant_domain = Domains(name="alice")
+        db.session.add_all([none_domain, redundant_domain])
+        db.session.commit()
+
+        none_hashfile = Hashfiles(name="legacy-none.txt", domain_id=none_domain.id)
+        redundant_hashfile = Hashfiles(
+            name="legacy-redundant.txt",
+            domain_id=redundant_domain.id,
+        )
+        db.session.add_all([none_hashfile, redundant_hashfile])
+        db.session.commit()
+
+        first_hash = _seed_hash("legacy-none-hash", cracked=False, hash_type=0)
+        second_hash = _seed_hash("legacy-redundant-hash", cracked=False)
+
+        _seed_hashfile_hash(
+            hash_id=first_hash.id,
+            hashfile_id=none_hashfile.id,
+            username="",
+            domain_id=none_domain.id,
+        )
+        _seed_hashfile_hash(
+            hash_id=second_hash.id,
+            hashfile_id=redundant_hashfile.id,
+            username="alice\\alice",
+            domain_id=redundant_domain.id,
+        )
+
+        db.session.add(SchemaVersion(id=1, version=13, app_version="1.0"))
+        db.session.commit()
+
+        result = upgrade_database()
+
+        assert [step.version for step in result.applied_steps] == [14]
+        assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
+
+        refreshed_none_hashfile = _first_row(Hashfiles, name="legacy-none.txt")
+        refreshed_redundant_hashfile = _first_row(Hashfiles, name="legacy-redundant.txt")
+        assert refreshed_none_hashfile is not None
+        assert refreshed_redundant_hashfile is not None
+        assert refreshed_none_hashfile.domain_id is None
+        assert refreshed_redundant_hashfile.domain_id is None
+
+        imported_rows = _all_rows(HashfileHashes, order_by=HashfileHashes.id.asc())
+        assert all(row.domain_id is None for row in imported_rows)
+        assert _first_row(Domains, name="none") is None
 
 @pytest.mark.security
 def test_sanitize_config_input_handles_delete_backspace_artifacts():

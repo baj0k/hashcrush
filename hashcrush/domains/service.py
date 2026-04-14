@@ -33,7 +33,30 @@ def normalize_domain_name(value: str | None) -> str | None:
     normalized = normalize_text_input(value)
     if not normalized:
         return None
+    if normalized.casefold() == "none":
+        return None
     return normalized.lower()
+
+
+def username_has_redundant_domain_prefix(username: str | None) -> bool:
+    """Return True when a username repeats the same value as both domain and user."""
+
+    normalized_username = normalize_text_input(username)
+    if not normalized_username:
+        return False
+    for separator in ("\\", "*"):
+        if separator not in normalized_username:
+            continue
+        candidate, remainder = normalized_username.split(separator, 1)
+        normalized_candidate = normalize_domain_name(candidate)
+        normalized_remainder = normalize_text_input(remainder)
+        if (
+            normalized_candidate
+            and normalized_remainder
+            and normalized_candidate == normalized_remainder.casefold()
+        ):
+            return True
+    return False
 
 
 def extract_domain_name_from_username(username: str | None) -> str | None:
@@ -41,6 +64,8 @@ def extract_domain_name_from_username(username: str | None) -> str | None:
 
     normalized_username = normalize_text_input(username)
     if not normalized_username:
+        return None
+    if username_has_redundant_domain_prefix(normalized_username):
         return None
     for separator in ("\\", "*"):
         if separator in normalized_username:

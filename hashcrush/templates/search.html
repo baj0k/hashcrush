@@ -37,6 +37,26 @@
                 on page {{ browsed_domain_page }}.
                 Results are paginated to keep large domains responsive.
                 <a href="{{ url_for('searches.searches_list') }}" class="alert-link">Clear domain browse</a>.
+                <div class="hc-inline-form hc-inline-form--wrap mt-3">
+                    <form
+                        action="{{ url_for('searches.queue_domain_export') }}"
+                        method="POST"
+                        class="hc-inline-form hc-inline-form--wrap"
+                        data-upload-progress-form="true"
+                        data-upload-progress-no-file="true"
+                        data-upload-start-title="Starting domain export..."
+                        data-upload-start-detail="The server is preparing a background export for this domain."
+                    >
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="domain_id" value="{{ browsed_domain.id }}">
+                        <label class="mb-0 small text-muted" for="domain_export_type">Export separator</label>
+                        <select id="domain_export_type" name="export_type" class="custom-select custom-select-sm w-auto">
+                            <option value="Colon" selected>Colon</option>
+                            <option value="Comma">Comma</option>
+                        </select>
+                        <button type="submit" class="btn btn-outline-primary btn-sm">Export This Domain</button>
+                    </form>
+                </div>
             </div>
         {% endif %}
         {% if results %}

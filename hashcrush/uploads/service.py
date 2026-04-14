@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from flask import Flask
-from sqlalchemy import delete, select
+from sqlalchemy import select
 
 from hashcrush.models import UploadOperations, db, utc_now_naive
 
@@ -61,6 +61,10 @@ class UploadOperationReporter:
     def __init__(self, service: "UploadOperationService", operation_id: str):
         self._service = service
         self._operation_id = operation_id
+
+    @property
+    def operation_id(self) -> str:
+        return self._operation_id
 
     def update(
         self,
@@ -186,13 +190,29 @@ class UploadOperationService:
             return
         self._last_cleanup_monotonic = now
         cutoff = utc_now_naive() - timedelta(seconds=self.retention_seconds)
-        db.session.execute(
-            delete(UploadOperations).where(
-                UploadOperations.updated_at < cutoff,
-                UploadOperations.state.in_(("succeeded", "failed")),
+        expired_records = (
+            db.session.execute(
+                select(UploadOperations).where(
+                    UploadOperations.updated_at < cutoff,
+                    UploadOperations.state.in_(("succeeded", "failed")),
+                )
             )
+            .scalars()
+            .all()
         )
+        if not expired_records:
+            return
+        for record in expired_records:
+            self._cleanup_operation_artifact(record)
+            db.session.delete(record)
         db.session.commit()
+
+    def _cleanup_operation_artifact(self, record: UploadOperations) -> None:
+        operation_type = str(record.operation_type or "").strip().lower()
+        if operation_type == "search_domain_export":
+            from hashcrush.searches.export_service import remove_domain_export_artifact
+
+            remove_domain_export_artifact(record.id)
 
     def _mark_stale_running_operations(self) -> int:
         now = utc_now_naive()

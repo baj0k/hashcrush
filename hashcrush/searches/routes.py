@@ -1,11 +1,16 @@
 """Flask routes to handle Searches."""
 import csv
 import io
+import json
+import os
+from datetime import UTC, datetime
 
 from flask import (
     abort,
     Blueprint,
+    current_app,
     flash,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -13,10 +18,9 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, select
 
-from hashcrush import jinja_ciphertext_decode, jinja_hex_decode
-from hashcrush.audit import record_audit_event
+from hashcrush.audit import capture_audit_actor, record_audit_event
 from hashcrush.domains.service import visible_domains_with_hashes
 from hashcrush.models import (
     HashSearchTokens,
@@ -24,7 +28,17 @@ from hashcrush.models import (
     HashfileHashSearchTokens,
     HashfileHashes,
     Hashfiles,
+    UploadOperations,
     db,
+)
+from hashcrush.searches.export_service import (
+    SEARCH_DOMAIN_EXPORT_OPERATION_TYPE,
+    build_domain_export_download_name,
+    domain_export_artifact_path,
+    domain_export_stmt,
+    export_separator_from_label,
+    remove_domain_export_artifact,
+    write_search_export_row,
 )
 from hashcrush.searches.forms import SearchForm
 from hashcrush.searches.token_index import (
@@ -74,27 +88,10 @@ def _parse_positive_int(raw_value) -> int | None:
     return parsed if parsed > 0 else None
 
 
-def _domain_browse_stmt(domain_id: int):
-    return (
-        _scoped_search_stmt()
-        .join(Hashfiles, Hashfiles.id == HashfileHashes.hashfile_id)
-        .where(
-            or_(
-                HashfileHashes.domain_id == domain_id,
-                and_(
-                    HashfileHashes.domain_id.is_(None),
-                    Hashfiles.domain_id == domain_id,
-                ),
-            )
-        )
-        .order_by(HashfileHashes.id.asc())
-    )
-
-
 def _execute_domain_browse(domain_id: int, page: int):
     offset = max(page - 1, 0) * SEARCH_DOMAIN_BROWSE_PAGE_SIZE
     rows = db.session.execute(
-        _domain_browse_stmt(domain_id)
+        domain_export_stmt(domain_id)
         .limit(SEARCH_DOMAIN_BROWSE_PAGE_SIZE + 1)
         .offset(offset)
     ).tuples().all()
@@ -265,6 +262,33 @@ def _execute_search(search_type: str, query_text: str):
     return _execute_partial_search(search_type, query_text)
 
 
+def _is_async_upload_request() -> bool:
+    return request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+
+def _async_operation_response(operation):
+    payload = operation.to_response_dict()
+    payload["status_url"] = url_for(
+        "uploads.upload_operation_status",
+        operation_id=operation.id,
+    )
+    return jsonify(payload), 202
+
+
+def _domain_browse_redirect_url(domain_id: int | None = None) -> str:
+    if domain_id:
+        return url_for("searches.searches_list", domain_id=domain_id)
+    return url_for("searches.searches_list")
+
+
+def _parse_operation_payload(record: UploadOperations) -> dict[str, object]:
+    try:
+        payload = json.loads(record.payload_json or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 @searches.route("/search", methods=['GET', 'POST'])
 @login_required
 def searches_list():
@@ -405,6 +429,127 @@ def searches_list():
         hashfiles=hashfiles,
     )
 
+
+@searches.route("/search/domain-export", methods=["POST"])
+@login_required
+def queue_domain_export():
+    """Queue a background export for the currently browsed domain."""
+
+    if not current_user.admin:
+        abort(403)
+
+    domain_id = _parse_positive_int(request.form.get("domain_id"))
+    if domain_id is None:
+        flash("Choose a valid domain before starting an export.", "warning")
+        return redirect(url_for("searches.searches_list"))
+
+    browsed_domain = next(
+        (domain for domain in visible_domains_with_hashes() if domain.id == domain_id),
+        None,
+    )
+    if browsed_domain is None:
+        flash("That domain is no longer available for export.", "warning")
+        return redirect(url_for("searches.searches_list"))
+
+    separator_label = str(request.form.get("export_type") or "Colon").strip() or "Colon"
+    operation = current_app.extensions["upload_operations"].start_operation(
+        owner_user_id=getattr(current_user, "id", None),
+        operation_type=SEARCH_DOMAIN_EXPORT_OPERATION_TYPE,
+        payload={
+            "domain_id": domain_id,
+            "domain_name": browsed_domain.name,
+            "export_type": separator_label,
+            "audit_actor": capture_audit_actor(),
+        },
+    )
+    record_audit_event(
+        "search.domain_export.queue",
+        "search_domain_export",
+        target_id=domain_id,
+        summary=f'Queued background domain export for "{browsed_domain.name}".',
+        details={
+            "domain_id": domain_id,
+            "domain_name": browsed_domain.name,
+            "separator": separator_label,
+            "operation_id": operation.id,
+        },
+    )
+
+    if _is_async_upload_request():
+        return _async_operation_response(operation)
+
+    flash(
+        f'Background export for "{browsed_domain.name}" queued. Processing will continue in the background.',
+        "info",
+    )
+    return redirect(_domain_browse_redirect_url(domain_id))
+
+
+@searches.route("/search/domain-exports/<string:operation_id>/download", methods=["GET"])
+@login_required
+def download_domain_export(operation_id: str):
+    """Download a completed background domain export artifact."""
+
+    if not current_user.admin:
+        abort(403)
+
+    operation = db.session.get(UploadOperations, operation_id, populate_existing=True)
+    if (
+        operation is None
+        or operation.operation_type != SEARCH_DOMAIN_EXPORT_OPERATION_TYPE
+    ):
+        flash("That domain export is no longer available.", "warning")
+        return redirect(url_for("searches.searches_list"))
+
+    payload = _parse_operation_payload(operation)
+    domain_id = _parse_positive_int(payload.get("domain_id"))
+    domain_name = str(payload.get("domain_name") or "").strip() or None
+    redirect_url = _domain_browse_redirect_url(domain_id)
+
+    if operation.state != "succeeded":
+        flash("That domain export is still processing. Please try again shortly.", "info")
+        return redirect(redirect_url)
+
+    artifact_path = domain_export_artifact_path(operation_id)
+    if not os.path.isfile(artifact_path):
+        flash(
+            "The generated domain export file is no longer available. Please rerun the export.",
+            "warning",
+        )
+        remove_domain_export_artifact(operation_id)
+        return redirect(redirect_url)
+
+    separator_label = str(payload.get("export_type") or "Colon").strip() or "Colon"
+    filename = build_domain_export_download_name(
+        domain_name,
+        separator_label=separator_label,
+        exported_at=datetime.now(UTC),
+    )
+    record_audit_event(
+        "search.domain_export.download",
+        "search_domain_export",
+        target_id=domain_id or operation_id,
+        summary=f'Downloaded background domain export "{filename}".',
+        details={
+            "operation_id": operation_id,
+            "domain_id": domain_id,
+            "domain_name": domain_name,
+            "separator": separator_label,
+            "artifact_path": artifact_path,
+        },
+    )
+    mimetype = (
+        "text/csv; charset=utf-8"
+        if export_separator_from_label(separator_label) == ","
+        else "text/plain; charset=utf-8"
+    )
+    return send_file(
+        artifact_path,
+        as_attachment=True,
+        download_name=filename,
+        mimetype=mimetype,
+    )
+
 # Creating this in memory instead of on disk to avoid extra cleanup.
 def export_results(domains, results, hashfiles, separator):
     """Function to export search results"""
@@ -427,19 +572,10 @@ def get_rows(str_io, domains, results, hashfiles, separator):
     hashfile_domain_ids = {hashfile.id: hashfile.domain_id for hashfile in hashfiles}
     for entry in results:
         row_domain_id = entry[1].domain_id or hashfile_domain_ids.get(entry[1].hashfile_id)
-        col = [domain_names_by_id.get(row_domain_id, "None")] # Domain
-
-        if entry[1].username: # Username
-            col.append(jinja_hex_decode(entry[1].username))
-        else:
-            col.append("None")
-
-        col.append(jinja_ciphertext_decode(entry[0].ciphertext)) # Hash
-
-        if entry[0].cracked: #Plaintext
-            col.append(jinja_hex_decode(entry[0].plaintext))
-        else:
-            col.append("unrecovered")
-
-        writer.writerow([col[0],col[1],col[2],col[3]])
+        write_search_export_row(
+            writer,
+            domain_name=domain_names_by_id.get(row_domain_id, "None"),
+            hash_row=entry[0],
+            link_row=entry[1],
+        )
     return str_io

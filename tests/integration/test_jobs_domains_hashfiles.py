@@ -1008,11 +1008,56 @@ def test_hashfiles_add_uses_default_none_category_for_rows_without_domain():
         assert response.status_code == 200
         assert b"Hashfile created!" in response.data
 
-        domain = _first_row(Domains, name="none")
-        assert domain is not None
         hashfile = _first_row(Hashfiles, name="none-category-hashes.txt")
         assert hashfile is not None
-        assert hashfile.domain_id == domain.id
+        assert hashfile.domain_id is None
+        imported_row = _first_row(HashfileHashes, hashfile_id=hashfile.id)
+        assert imported_row is not None
+        assert imported_row.domain_id is None
+
+
+@pytest.mark.security
+def test_hashfiles_add_treats_redundant_domain_username_prefix_as_none_category():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.post(
+            "/hashfiles/add",
+            data={
+                "domain_name": "None",
+                "file_type": "pwdump",
+                "pwdump_hash_type": "1000",
+                "hashfile": (
+                    io.BytesIO(
+                        (
+                            "alice\\alice:500:aad3b435b51404eeaad3b435b51404ee:"
+                            "31d6cfe0d16ae931b73c59d7e0c089c0:::\n"
+                        ).encode("utf-8")
+                    ),
+                    "redundant-domain-user.txt",
+                ),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+
+        assert response.status_code == 200
+        assert b"Hashfile created!" in response.data
+
+        hashfile = _first_row(Hashfiles, name="redundant-domain-user.txt")
+        assert hashfile is not None
+        assert hashfile.domain_id is None
+
+        imported_row = _first_row(HashfileHashes, hashfile_id=hashfile.id)
+        assert imported_row is not None
+        assert imported_row.domain_id is None
+        assert _first_row(Domains, name="alice") is None
 
 
 @pytest.mark.security

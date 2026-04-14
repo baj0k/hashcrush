@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import errno
 import os
 
@@ -18,7 +19,16 @@ from hashcrush.hibp.service import (
     scan_all_ntlm_hashes_against_hibp_dataset,
     scan_hashfile_against_hibp_dataset,
 )
-from hashcrush.models import Jobs, Rules, Wordlists, db
+from hashcrush.models import Domains, Jobs, Rules, Wordlists, db
+from hashcrush.searches.export_service import (
+    SEARCH_DOMAIN_EXPORT_OPERATION_TYPE,
+    count_domain_export_rows,
+    domain_export_artifact_path,
+    export_separator_from_label,
+    iter_domain_export_rows,
+    remove_domain_export_artifact,
+    write_search_export_row,
+)
 from hashcrush.utils.file_ops import analyze_text_file
 from hashcrush.utils.storage_paths import get_storage_subdir
 from hashcrush.view_utils import append_query_params
@@ -979,6 +989,119 @@ def _process_hibp_ntlm_dataset_backfill(payload: dict[str, object], reporter) ->
     )
 
 
+def _process_search_domain_export(payload: dict[str, object], reporter) -> None:
+    try:
+        domain_id = int(payload.get("domain_id") or 0)
+    except (TypeError, ValueError):
+        reporter.fail(
+            title="Domain export failed.",
+            detail="The selected domain is invalid or no longer available.",
+        )
+        return
+
+    separator_label = str(payload.get("export_type") or "Colon").strip() or "Colon"
+    separator = export_separator_from_label(separator_label)
+    audit_actor = payload.get("audit_actor")
+    artifact_path = domain_export_artifact_path(reporter.operation_id)
+    remove_domain_export_artifact(reporter.operation_id)
+
+    try:
+        reporter.update(
+            percent=4,
+            title="Preparing domain export...",
+            detail="Counting rows in the selected domain before writing the export.",
+        )
+        domain = db.session.get(Domains, domain_id)
+        if domain is None:
+            reporter.fail(
+                title="Domain export failed.",
+                detail="The selected domain no longer exists.",
+            )
+            return
+
+        domain_name = domain.name
+        total_rows = count_domain_export_rows(domain_id)
+        reporter.update(
+            percent=8,
+            title="Writing domain export...",
+            detail=(
+                f'Found {total_rows:,} row(s) in domain "{domain_name}". '
+                "Writing the background export now."
+            ),
+        )
+
+        written_rows = 0
+        with open(artifact_path, "w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle, delimiter=separator)
+            for hash_row, link_row in iter_domain_export_rows(domain_id):
+                write_search_export_row(
+                    writer,
+                    domain_name=domain_name,
+                    hash_row=hash_row,
+                    link_row=link_row,
+                )
+                written_rows += 1
+                if (
+                    written_rows == total_rows
+                    or written_rows == 1
+                    or written_rows % 500 == 0
+                ):
+                    fraction = (
+                        float(written_rows) / float(total_rows)
+                        if total_rows > 0
+                        else 1.0
+                    )
+                    reporter.update(
+                        percent=8 + (88 * max(0.0, min(1.0, fraction))),
+                        title="Writing domain export...",
+                        detail=(
+                            f'Exported {written_rows:,} of {total_rows:,} row(s) '
+                            f'from domain "{domain_name}".'
+                        ),
+                    )
+    except Exception:
+        remove_domain_export_artifact(reporter.operation_id)
+        current_app.logger.exception(
+            "Failed generating background domain export for domain %s",
+            domain_id,
+        )
+        reporter.fail(
+            title="Domain export failed.",
+            detail="The server hit an unexpected error while generating the domain export.",
+        )
+        return
+
+    record_audit_event(
+        "search.domain_export.generate",
+        "search_domain_export",
+        target_id=domain_id,
+        summary=f'Generated background domain export for "{domain_name}".',
+        details={
+            "operation_id": reporter.operation_id,
+            "domain_id": domain_id,
+            "domain_name": domain_name,
+            "row_count": written_rows,
+            "separator": separator_label,
+            "artifact_path": artifact_path,
+        },
+        actor=audit_actor if isinstance(audit_actor, dict) else None,
+    )
+    reporter.complete(
+        title="Domain export ready.",
+        detail=(
+            f'Finished exporting {written_rows:,} row(s) for domain "{domain_name}". '
+            "The download will start automatically."
+        ),
+        redirect_url=f"/search/domain-exports/{reporter.operation_id}/download",
+        completion_flashes=[
+            (
+                "success",
+                f'Domain export ready for "{domain_name}". The download will start automatically.',
+            )
+        ],
+    )
+
+
 def process_upload_operation(
     operation_type: str, payload: dict[str, object], reporter
 ) -> None:
@@ -1011,5 +1134,8 @@ def process_upload_operation(
         return
     if normalized_type == "hibp_ntlm_dataset_backfill":
         _process_hibp_ntlm_dataset_backfill(payload, reporter)
+        return
+    if normalized_type == SEARCH_DOMAIN_EXPORT_OPERATION_TYPE:
+        _process_search_domain_export(payload, reporter)
         return
     raise RuntimeError(f"Unsupported upload operation type: {operation_type!r}")

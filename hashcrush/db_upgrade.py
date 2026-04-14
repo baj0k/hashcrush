@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from sqlalchemy import delete, inspect, select, text
 
 import hashcrush
+from hashcrush.domains.service import (
+    username_has_redundant_domain_prefix,
+)
 from hashcrush.models import (
     AuditLog,
     Domains,
@@ -16,6 +19,7 @@ from hashcrush.models import (
     HashfileHashes,
     Hashfiles,
     HashPublicExposure,
+    Jobs,
     ReferenceDatasets,
     SchemaVersion,
     TaskGroups,
@@ -29,7 +33,7 @@ from hashcrush.utils.secret_storage import (
     get_account_identity_digest,
 )
 
-CURRENT_SCHEMA_VERSION = 13
+CURRENT_SCHEMA_VERSION = 14
 
 
 @dataclass(frozen=True)
@@ -542,6 +546,191 @@ def _migration_013_replace_duplicate_account_rows_with_latest_import() -> None:
         db.session.commit()
 
 
+def _migration_014_normalize_none_domain_bucket_and_redundant_prefixes() -> None:
+    """Treat literal None/self-domain usernames as uncategorized account rows."""
+
+    inspector = inspect(db.engine)
+    table_names = inspector.get_table_names()
+    if not {"domains", "hashfiles", "hashfile_hashes"}.issubset(table_names):
+        return
+
+    if "ix_hashfile_hashes_account_digest" in _index_names("hashfile_hashes"):
+        db.session.execute(
+            text("DROP INDEX IF EXISTS ix_hashfile_hashes_account_digest")
+        )
+        db.session.commit()
+
+    none_domain_ids = {
+        int(domain_id)
+        for domain_id, domain_name in db.session.execute(
+            select(Domains.id, Domains.name)
+        ).all()
+        if str(domain_name or "").strip().casefold() == "none"
+    }
+
+    hashfiles = db.session.execute(select(Hashfiles).order_by(Hashfiles.id.asc())).scalars().all()
+    for hashfile in hashfiles:
+        if hashfile.domain_id in none_domain_ids:
+            hashfile.domain_id = None
+    db.session.commit()
+
+    hashfile_domain_ids = {
+        int(hashfile.id): (int(hashfile.domain_id) if hashfile.domain_id is not None else None)
+        for hashfile in db.session.execute(select(Hashfiles)).scalars().all()
+    }
+    domain_names_by_id = {
+        int(domain_id): str(domain_name)
+        for domain_id, domain_name in db.session.execute(
+            select(Domains.id, Domains.name)
+        ).all()
+        if int(domain_id) not in none_domain_ids
+    }
+
+    association_rows = db.session.execute(
+        select(HashfileHashes).order_by(HashfileHashes.id.asc())
+    ).scalars().all()
+    for row in association_rows:
+        decoded_username = decode_username_from_storage(row.username)
+        if row.domain_id in none_domain_ids or username_has_redundant_domain_prefix(decoded_username):
+            row.domain_id = None
+
+        effective_domain_id = row.domain_id or hashfile_domain_ids.get(int(row.hashfile_id))
+        effective_domain_name = (
+            domain_names_by_id.get(int(effective_domain_id))
+            if effective_domain_id is not None
+            else None
+        )
+        row.account_digest = get_account_identity_digest(
+            effective_domain_name,
+            decoded_username,
+        ) if row.username_digest else None
+    db.session.commit()
+
+    for hashfile in db.session.execute(select(Hashfiles).order_by(Hashfiles.id.asc())).scalars().all():
+        distinct_domain_ids = [
+            int(domain_id)
+            for domain_id in db.session.scalars(
+                select(HashfileHashes.domain_id)
+                .where(
+                    HashfileHashes.hashfile_id == hashfile.id,
+                    HashfileHashes.domain_id.is_not(None),
+                )
+                .distinct()
+            ).all()
+        ]
+        hashfile.domain_id = distinct_domain_ids[0] if len(distinct_domain_ids) == 1 else None
+    db.session.commit()
+
+    refreshed_hashfiles_by_id = {
+        int(hashfile_id): {
+            "domain_id": domain_id,
+            "uploaded_at": uploaded_at,
+        }
+        for hashfile_id, domain_id, uploaded_at in db.session.execute(
+            select(Hashfiles.id, Hashfiles.domain_id, Hashfiles.uploaded_at)
+        ).all()
+    }
+    refreshed_domain_names_by_id = {
+        int(domain_id): str(domain_name)
+        for domain_id, domain_name in db.session.execute(
+            select(Domains.id, Domains.name)
+        ).all()
+        if int(domain_id) not in none_domain_ids
+    }
+
+    for row in db.session.execute(
+        select(HashfileHashes).order_by(HashfileHashes.id.asc())
+    ).scalars().all():
+        decoded_username = decode_username_from_storage(row.username)
+        effective_domain_id = row.domain_id or refreshed_hashfiles_by_id.get(
+            int(row.hashfile_id), {}
+        ).get("domain_id")
+        effective_domain_name = (
+            refreshed_domain_names_by_id.get(int(effective_domain_id))
+            if effective_domain_id is not None
+            else None
+        )
+        row.account_digest = get_account_identity_digest(
+            effective_domain_name,
+            decoded_username,
+        ) if row.username_digest else None
+    db.session.commit()
+
+    duplicate_rows = db.session.execute(
+        select(
+            HashfileHashes.id,
+            HashfileHashes.account_digest,
+            HashfileHashes.hashfile_id,
+        )
+        .where(HashfileHashes.account_digest.is_not(None))
+        .order_by(HashfileHashes.account_digest.asc(), HashfileHashes.id.desc())
+    ).all()
+
+    ranked_rows_by_digest: dict[str, list[tuple[int, object, int]]] = defaultdict(list)
+    for row_id, account_digest, hashfile_id in duplicate_rows:
+        hashfile_info = refreshed_hashfiles_by_id.get(int(hashfile_id), {})
+        ranked_rows_by_digest[str(account_digest)].append(
+            (
+                int(row_id),
+                hashfile_info.get("uploaded_at") or utc_now_naive(),
+                int(hashfile_id),
+            )
+        )
+
+    delete_ids: list[int] = []
+    for ranked_rows in ranked_rows_by_digest.values():
+        if len(ranked_rows) <= 1:
+            continue
+        ranked_rows.sort(key=lambda item: (item[1], item[0]), reverse=True)
+        delete_ids.extend(row_id for row_id, _, _ in ranked_rows[1:])
+
+    if delete_ids:
+        db.session.execute(
+            delete(HashfileHashes).where(HashfileHashes.id.in_(delete_ids))
+        )
+        db.session.commit()
+
+    for job_id, job_hashfile_id, job_domain_id in db.session.execute(
+        select(Jobs.id, Jobs.hashfile_id, Jobs.domain_id)
+    ).all():
+        job = db.session.get(Jobs, int(job_id))
+        if job is None:
+            continue
+        if job_hashfile_id is not None:
+            job.domain_id = refreshed_hashfiles_by_id.get(int(job_hashfile_id), {}).get("domain_id")
+        elif job_domain_id in none_domain_ids:
+            job.domain_id = None
+    db.session.commit()
+
+    if "ix_hashfile_hashes_account_digest" not in _index_names("hashfile_hashes"):
+        db.session.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_hashfile_hashes_account_digest "
+                "ON hashfile_hashes (account_digest)"
+            )
+        )
+        db.session.commit()
+
+    orphaned_none_ids: list[int] = []
+    for domain_id in none_domain_ids:
+        is_referenced = bool(
+            db.session.scalar(
+                select(HashfileHashes.id).where(HashfileHashes.domain_id == domain_id).limit(1)
+            )
+            or db.session.scalar(
+                select(Hashfiles.id).where(Hashfiles.domain_id == domain_id).limit(1)
+            )
+            or db.session.scalar(
+                select(Jobs.id).where(Jobs.domain_id == domain_id).limit(1)
+            )
+        )
+        if not is_referenced:
+            orphaned_none_ids.append(domain_id)
+    if orphaned_none_ids:
+        db.session.execute(delete(Domains).where(Domains.id.in_(orphaned_none_ids)))
+        db.session.commit()
+
+
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(
         version=1,
@@ -620,6 +809,12 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
         name="replace_duplicate_account_rows_with_latest_import",
         summary="Track imported account identity and keep only the latest row per domain and username.",
         upgrade=_migration_013_replace_duplicate_account_rows_with_latest_import,
+    ),
+    MigrationStep(
+        version=14,
+        name="normalize_none_domain_bucket_and_redundant_prefixes",
+        summary="Treat literal None and repeated domain\\username prefixes as uncategorized rows.",
+        upgrade=_migration_014_normalize_none_domain_bucket_and_redundant_prefixes,
     ),
 )
 
