@@ -17,7 +17,11 @@ from sqlalchemy import func, select
 
 from hashcrush.audit import record_audit_event
 from hashcrush.domains.service import hashfile_ids_for_domain, visible_domains_with_hashes
-from hashcrush.hibp.service import HIBP_NTLM_KIND, public_exposure_summary_for_hashfile_ids
+from hashcrush.hibp.service import (
+    HIBP_NTLM_KIND,
+    NTLM_HASH_TYPE,
+    public_exposure_summary_for_hashfile_ids,
+)
 from hashcrush.models import (
     Domains,
     HashPublicExposure,
@@ -316,6 +320,10 @@ def _format_percent(value: float | None) -> str:
     return formatted.replace(".0%", "%")
 
 
+def _format_count_with_percent(count: int, percent: float | None) -> str:
+    return f"{format_display(count)} ({_format_percent(percent)})"
+
+
 def _median_from_counts(length_counts: Counter[int]) -> float | None:
     total = sum(length_counts.values())
     if total <= 0:
@@ -490,7 +498,7 @@ def _build_scope_findings(
 
     if not public_exposure_summary.dataset_loaded:
         findings.append(
-            "Offline public exposure checks are unavailable until a HIBP NTLM dataset is loaded in Settings."
+            "Offline public exposure checks are unavailable until a HIBP NTLM dataset is loaded in Breach Intelligence."
         )
     elif public_exposure_summary.eligible_account_count <= 0:
         findings.append(
@@ -552,6 +560,36 @@ def _build_domain_posture_rows(domain_rows: list[Domains], selected_domain_id: i
             username,
         )
 
+    public_exposure_eligible_rows = db.session.execute(
+        select(effective_domain_id.label('domain_id'), func.count(HashfileHashes.id))
+        .select_from(HashfileHashes)
+        .join(Hashfiles, Hashfiles.id == HashfileHashes.hashfile_id)
+        .join(Hashes, Hashes.id == HashfileHashes.hash_id)
+        .where(effective_domain_id.in_(domain_ids))
+        .where(Hashes.hash_type == NTLM_HASH_TYPE)
+        .group_by(effective_domain_id)
+    ).all()
+    public_exposure_eligible_counts = {
+        int(domain_id): int(count)
+        for domain_id, count in public_exposure_eligible_rows
+    }
+    public_exposure_account_rows = db.session.execute(
+        select(effective_domain_id.label('domain_id'), func.count(HashfileHashes.id))
+        .select_from(HashfileHashes)
+        .join(Hashfiles, Hashfiles.id == HashfileHashes.hashfile_id)
+        .join(Hashes, Hashes.id == HashfileHashes.hash_id)
+        .join(HashPublicExposure, HashPublicExposure.hash_id == Hashes.id)
+        .where(effective_domain_id.in_(domain_ids))
+        .where(Hashes.hash_type == NTLM_HASH_TYPE)
+        .where(HashPublicExposure.source_kind == HIBP_NTLM_KIND)
+        .where(HashPublicExposure.matched.is_(True))
+        .group_by(effective_domain_id)
+    ).all()
+    public_exposure_account_counts = {
+        int(domain_id): int(count)
+        for domain_id, count in public_exposure_account_rows
+    }
+
     comparison_rows: list[dict[str, object]] = []
     for domain in domain_rows:
         counts = status_counts.get(domain.id, {True: 0, False: 0})
@@ -560,6 +598,12 @@ def _build_domain_posture_rows(domain_rows: list[Domains], selected_domain_id: i
             domain.id, _empty_cracked_password_metrics()
         )
         posture_summary = _build_posture_summary(total_accounts, cracked_metrics)
+        exposed_account_count = public_exposure_account_counts.get(domain.id, 0)
+        eligible_public_account_count = public_exposure_eligible_counts.get(domain.id, 0)
+        exposed_account_percent = _ratio(
+            exposed_account_count,
+            eligible_public_account_count,
+        )
         comparison_rows.append(
             {
                 'id': domain.id,
@@ -568,13 +612,28 @@ def _build_domain_posture_rows(domain_rows: list[Domains], selected_domain_id: i
                 'total_accounts': total_accounts,
                 'recovered_accounts': posture_summary['recovered_accounts'],
                 'recovered_percent': posture_summary['recovered_percent'],
-                'recovered_percent_display': _format_percent(posture_summary['recovered_percent']),
+                'recovered_display': _format_count_with_percent(
+                    int(posture_summary['recovered_accounts']),
+                    posture_summary['recovered_percent'],
+                ),
+                'weak_recovered_count': posture_summary['weak_recovered_count'],
                 'weak_recovered_percent': posture_summary['weak_recovered_percent'],
-                'weak_recovered_percent_display': _format_percent(posture_summary['weak_recovered_percent']),
+                'weak_recovered_display': _format_count_with_percent(
+                    int(posture_summary['weak_recovered_count']),
+                    posture_summary['weak_recovered_percent'],
+                ),
+                'reused_recovered_count': posture_summary['reused_recovered_count'],
                 'reused_recovered_percent': posture_summary['reused_recovered_percent'],
-                'reused_recovered_percent_display': _format_percent(posture_summary['reused_recovered_percent']),
-                'username_match_count': posture_summary['username_match_count'],
-                'median_length': _format_length_value(posture_summary['median_length']),
+                'reused_recovered_display': _format_count_with_percent(
+                    int(posture_summary['reused_recovered_count']),
+                    posture_summary['reused_recovered_percent'],
+                ),
+                'public_exposed_account_count': exposed_account_count,
+                'public_exposed_account_percent': exposed_account_percent,
+                'public_exposed_account_display': _format_count_with_percent(
+                    exposed_account_count,
+                    exposed_account_percent,
+                ),
                 'risk_band': posture_summary['risk_band'],
                 'risk_score': posture_summary['risk_score'],
             }
@@ -665,6 +724,7 @@ def get_analytics():
                 'reused_recovered_count': format_display(0),
                 'reused_recovered_percent': _format_percent(0.0),
                 'username_match_count': format_display(0),
+                'username_match_percent': _format_percent(0.0),
                 'median_length': "N/A",
                 'risk_band': "Unknown",
                 'public_exposed_hash_count': format_display(0),
@@ -822,6 +882,7 @@ def get_analytics():
         'reused_recovered_count': format_display(posture_summary['reused_recovered_count']),
         'reused_recovered_percent': _format_percent(posture_summary['reused_recovered_percent']),
         'username_match_count': format_display(posture_summary['username_match_count']),
+        'username_match_percent': _format_percent(posture_summary['username_match_percent']),
         'median_length': _format_length_value(posture_summary['median_length']),
         'risk_band': posture_summary['risk_band'],
         'public_exposed_hash_count': format_display(public_exposure_summary.exposed_hash_count),

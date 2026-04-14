@@ -523,7 +523,7 @@ def test_upgrade_database_migrates_v1_schema_forward_to_current_version():
         result = upgrade_database()
 
         assert inspect(db.engine).has_table(AuditLog.__tablename__)
-        assert [step.version for step in result.applied_steps] == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        assert [step.version for step in result.applied_steps] == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -550,7 +550,7 @@ def test_upgrade_database_migrates_v2_schema_forward_to_current_version():
         result = upgrade_database()
 
         assert not inspect(db.engine).has_table("settings")
-        assert [step.version for step in result.applied_steps] == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        assert [step.version for step in result.applied_steps] == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -602,7 +602,7 @@ def test_upgrade_database_migrates_v3_schema_to_v4_job_task_positions():
         index_names = {
             index["name"] for index in inspect(db.engine).get_indexes("job_tasks")
         }
-        assert [step.version for step in result.applied_steps] == [4, 5, 6, 7, 8, 9, 10, 11, 12]
+        assert [step.version for step in result.applied_steps] == [4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
         assert [row.position for row in persisted] == [0, 1]
         assert "ix_job_tasks_job_id_position" in index_names
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
@@ -628,7 +628,7 @@ def test_upgrade_database_migrates_v5_schema_to_v6_audit_filter_indexes():
         result = upgrade_database()
 
         audit_indexes = {row["name"] for row in inspect(db.engine).get_indexes("audit_logs")}
-        assert [step.version for step in result.applied_steps] == [6, 7, 8, 9, 10, 11, 12]
+        assert [step.version for step in result.applied_steps] == [6, 7, 8, 9, 10, 11, 12, 13]
         assert "ix_audit_logs_actor_username_created_at" in audit_indexes
         assert "ix_audit_logs_target_type_created_at" in audit_indexes
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
@@ -665,7 +665,7 @@ def test_upgrade_database_migrates_v9_legacy_default_mask_names():
         renamed_tasks = _all_rows(Tasks, order_by=Tasks.id.asc())
         renamed_group = _first_row(TaskGroups, name=default_mask_task_group_name())
 
-        assert [step.version for step in result.applied_steps] == [10, 11, 12]
+        assert [step.version for step in result.applied_steps] == [10, 11, 12, 13]
         assert [task.name for task in renamed_tasks] == [
             default_mask_task_name(length) for length in range(1, 11)
         ]
@@ -1518,6 +1518,68 @@ def test_import_hashfilehashes_deduplicates_duplicate_rows_in_single_batch(tmp_p
 
 
 @pytest.mark.security
+def test_import_hashfilehashes_replaces_existing_account_row_with_newer_hashfile(tmp_path):
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="ReplacementDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        first_hashfile = Hashfiles(name="first.txt", domain_id=domain.id)
+        second_hashfile = Hashfiles(name="second.txt", domain_id=domain.id)
+        db.session.add_all([first_hashfile, second_hashfile])
+        db.session.commit()
+        first_hashfile_id = first_hashfile.id
+        second_hashfile_id = second_hashfile.id
+
+        first_path = tmp_path / "first.txt"
+        first_path.write_text(
+            "alice:5f4dcc3b5aa765d61d8327deb882cf99\n",
+            encoding="utf-8",
+        )
+        second_path = tmp_path / "second.txt"
+        second_path.write_text(
+            "alice:e99a18c428cb38d5f260853678922e03\n",
+            encoding="utf-8",
+        )
+
+        assert import_hashfilehashes(
+            hashfile_id=first_hashfile_id,
+            hashfile_path=str(first_path),
+            file_type="user_hash",
+            hash_type="0",
+            default_domain_name=domain.name,
+        )
+        assert import_hashfilehashes(
+            hashfile_id=second_hashfile_id,
+            hashfile_path=str(second_path),
+            file_type="user_hash",
+            hash_type="0",
+            default_domain_name=domain.name,
+        )
+
+        assert _count_rows(HashfileHashes) == 1
+        association = _first_row(HashfileHashes)
+        assert association is not None
+        assert association.hashfile_id == second_hashfile_id
+        assert association.domain_id == domain.id
+
+        imported_hash = db.session.get(Hashes, association.hash_id)
+        assert imported_hash is not None
+        assert (
+            decode_ciphertext_from_storage(imported_hash.ciphertext)
+            == "e99a18c428cb38d5f260853678922e03"
+        )
+
+        assert _count_rows(HashfileHashes, hashfile_id=first_hashfile_id) == 0
+        assert _count_rows(HashfileHashes, hashfile_id=second_hashfile_id) == 1
+
+
+@pytest.mark.security
 def test_netntlm_validator_still_rejects_duplicate_user_host(tmp_path):
     app = _build_app()
     with app.app_context():
@@ -1576,6 +1638,7 @@ def test_database_constraints_and_indexes_exist_on_core_link_tables():
         }
         assert "ix_hashfile_hashes_hashfile_id" in hashfile_hashes_indexes
         assert "ix_hashfile_hashes_hash_id" in hashfile_hashes_indexes
+        assert "ix_hashfile_hashes_account_digest" in hashfile_hashes_indexes
 
         job_tasks_indexes = {
             entry["name"] for entry in inspector.get_indexes("job_tasks")

@@ -167,8 +167,8 @@ Behavior notes:
 ## Offline HIBP Dataset Mount
 
 For very large offline Have I Been Pwned NTLM datasets, prefer mounting the raw
-dataset into the containers and loading it by container path from `Settings ->
-Breach Intelligence` instead of uploading tens of gigabytes through the browser.
+dataset into the containers and loading it by container path from `Breach
+Intelligence` instead of uploading tens of gigabytes through the browser.
 
 Recommended pattern:
 
@@ -179,7 +179,7 @@ Recommended pattern:
    - `HASHCRUSH_HIBP_DATASETS_HOST_PATH=/srv/hashcrush-hibp`
 3. Start or redeploy normally:
    - `docker compose up -d --build`
-4. In the UI, open `Settings -> Breach Intelligence -> Load Mounted Dataset`.
+4. In the UI, open `Breach Intelligence -> Load Mounted Dataset`.
 5. Enter a container path such as:
    - `/mnt/hashcrush-hibp/hibp-ntlm.txt`
 6. After the dataset is loaded, use `Refresh Existing Hashes` if you want to
@@ -188,7 +188,7 @@ Recommended pattern:
 
 Behavior notes:
 - Docker Compose mounts `HASHCRUSH_HIBP_DATASETS_HOST_PATH` read-only into
-  `web`, `web-test`, and `upload-worker` at `/mnt/hashcrush-hibp`
+  `web`, `web-test`, `upload-worker`, and `worker` at `/mnt/hashcrush-hibp`
 - the mounted path inside the containers is always `/mnt/hashcrush-hibp`
 - HashCrush builds its own local LMDB lookup dataset under managed storage after
   loading the mounted raw dataset

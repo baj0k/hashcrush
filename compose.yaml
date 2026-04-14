@@ -276,6 +276,14 @@ services:
     volumes:
       - hashcrush-storage:/var/lib/hashcrush
       - hashcrush-runtime:/tmp/hashcrush-runtime
+      - type: bind
+        source: ${HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH:-./external-wordlists}
+        target: /mnt/hashcrush-wordlists
+        read_only: true
+      - type: bind
+        source: ${HASHCRUSH_HIBP_DATASETS_HOST_PATH:-./hibp-datasets}
+        target: /mnt/hashcrush-hibp
+        read_only: true
     deploy:
       resources:
         reservations:

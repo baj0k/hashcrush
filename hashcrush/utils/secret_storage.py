@@ -12,6 +12,7 @@ from hashcrush.crypto_utils import (
     encrypt_secret_value,
     is_encrypted_storage_value,
 )
+from hashcrush.forms_utils import normalize_text_input
 from hashcrush.models import Hashes, HashfileHashes, db
 
 _PLAINTEXT_HEX_PATTERN = re.compile(r"^[0-9a-f]+$")
@@ -79,6 +80,18 @@ def get_plaintext_search_digest(value: str | None) -> str | None:
 
 def get_username_search_digest(value: str | None) -> str | None:
     return blind_index(value or "", purpose="username", length=64)
+
+
+def get_account_identity_digest(
+    domain_name: str | None,
+    username: str | None,
+) -> str | None:
+    normalized_domain = normalize_text_input(domain_name)
+    normalized_username = normalize_text_input(username)
+    if not normalized_domain or not normalized_username:
+        return None
+    account_key = f"{normalized_domain.lower()}|{normalized_username.casefold()}"
+    return blind_index(account_key, purpose="account", length=64)
 
 
 def encode_ciphertext_for_storage(value: str | None) -> str | None:

@@ -116,8 +116,7 @@
                         <th scope="col">Recovered</th>
                         <th scope="col">Weak</th>
                         <th scope="col">Reuse</th>
-                        <th scope="col">User = Pass</th>
-                        <th scope="col">Median Len</th>
+                        <th scope="col">HIBP Cross-Referenced</th>
                         <th scope="col">Observed Risk</th>
                     </tr>
                 </thead>
@@ -125,14 +124,17 @@
                     {% for row in domain_posture_rows %}
                     <tr{% if row.selected %} class="hc-analytics-row-selected"{% endif %}>
                         <td>
+                            {% if current_user.admin %}
+                            <a href="{{ url_for('searches.searches_list', domain_id=row.id) }}">{{ row.name }}</a>
+                            {% else %}
                             <a href="{{ url_for('analytics.get_analytics', domain_id=row.id) }}">{{ row.name }}</a>
+                            {% endif %}
                         </td>
                         <td>{{ row.total_accounts }}</td>
-                        <td>{{ row.recovered_percent_display }}</td>
-                        <td>{{ row.weak_recovered_percent_display }}</td>
-                        <td>{{ row.reused_recovered_percent_display }}</td>
-                        <td>{{ row.username_match_count }}</td>
-                        <td>{{ row.median_length }}</td>
+                        <td>{{ row.recovered_display }}</td>
+                        <td>{{ row.weak_recovered_display }}</td>
+                        <td>{{ row.reused_recovered_display }}</td>
+                        <td>{{ row.public_exposed_account_display }}</td>
                         <td>
                             <span class="hc-risk-chip hc-risk-chip--{{ row.risk_band | lower }}">{{ row.risk_band }}</span>
                         </td>
@@ -256,7 +258,7 @@
                     </tr>
                     <tr>
                         <td>Password Equals Username</td>
-                        <td>{{ scope_posture.username_match_count }}</td>
+                        <td>{{ scope_posture.username_match_count }} ({{ scope_posture.username_match_percent }})</td>
                     </tr>
                     <tr>
                         <td>Median Recovered Length</td>

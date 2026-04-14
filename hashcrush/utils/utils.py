@@ -28,6 +28,7 @@ from hashcrush.utils.file_ops import (
     save_file,
 )
 from hashcrush.utils.secret_storage import (
+    get_account_identity_digest,
     decode_ciphertext_from_storage,
     decode_plaintext_from_storage,
     decode_username_from_storage,
@@ -59,6 +60,7 @@ __all__ = [
     "build_hashcat_argv",
     "build_hashcat_command",
     "analyze_text_file",
+    "get_account_identity_digest",
     "decode_ciphertext_from_storage",
     "decode_plaintext_from_storage",
     "decode_username_from_storage",

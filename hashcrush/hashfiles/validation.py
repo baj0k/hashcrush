@@ -22,6 +22,7 @@ from hashcrush.utils.file_ops import get_md5_hash
 from hashcrush.utils.secret_storage import (
     encode_ciphertext_for_storage,
     encode_username_for_storage,
+    get_account_identity_digest,
     get_ciphertext_search_digest,
     get_username_search_digest,
 )
@@ -42,6 +43,7 @@ class _PreparedImportRow:
     encoded_username: str
     username_digest: str
     domain_name: str | None
+    account_digest: str | None
 
 
 def _get_hashfile_validation_limit(
@@ -305,7 +307,31 @@ def _prepare_import_row(
         encoded_username=encoded_username,
         username_digest=username_digest,
         domain_name=inferred_domain_name or normalize_domain_name(default_domain_name),
+        account_digest=get_account_identity_digest(
+            inferred_domain_name or normalize_domain_name(default_domain_name),
+            username,
+        ),
     )
+
+
+def _dedupe_batch_rows(batch_rows: list[_PreparedImportRow]) -> list[_PreparedImportRow]:
+    """Keep only the latest occurrence for each account identity within a batch."""
+
+    deduped_by_account: dict[str, _PreparedImportRow] = {}
+    account_order: list[str] = []
+    passthrough_rows: list[_PreparedImportRow] = []
+
+    for row in batch_rows:
+        if row.account_digest:
+            if row.account_digest not in deduped_by_account:
+                account_order.append(row.account_digest)
+            deduped_by_account[row.account_digest] = row
+        else:
+            passthrough_rows.append(row)
+
+    return passthrough_rows + [
+        deduped_by_account[account_digest] for account_digest in account_order
+    ]
 
 
 def _flush_import_batch(
@@ -316,11 +342,14 @@ def _flush_import_batch(
     if not batch_rows:
         return
 
+    batch_rows = _dedupe_batch_rows(batch_rows)
+
     rows_by_hash_type: dict[int, list[_PreparedImportRow]] = {}
     for row in batch_rows:
         rows_by_hash_type.setdefault(row.normalized_hash_type, []).append(row)
 
     row_hash_ids: dict[_PreparedImportRow, int] = {}
+    created_hash_ids: set[int] = set()
     for normalized_hash_type, typed_rows in rows_by_hash_type.items():
         digest_values = sorted(
             {
@@ -367,6 +396,7 @@ def _flush_import_batch(
             db.session.flush()
             for digest, new_hash in new_hashes_by_digest.items():
                 existing_by_digest[digest] = new_hash.id
+                created_hash_ids.add(int(new_hash.id))
 
         for row in typed_rows:
             if row in row_hash_ids:
@@ -389,7 +419,27 @@ def _flush_import_batch(
             if domain is not None:
                 domain_ids_by_name[domain_name] = int(domain.id)
 
-    username_digests = sorted({row.username_digest for row in batch_rows})
+    account_digests = sorted(
+        {row.account_digest for row in batch_rows if row.account_digest}
+    )
+    existing_account_links_by_digest: dict[str, HashfileHashes] = {}
+    if account_digests:
+        existing_account_links = (
+            db.session.execute(
+                select(HashfileHashes)
+                .where(HashfileHashes.account_digest.in_(account_digests))
+                .order_by(HashfileHashes.id.desc())
+            )
+            .scalars()
+            .all()
+        )
+        for link in existing_account_links:
+            if link.account_digest and link.account_digest not in existing_account_links_by_digest:
+                existing_account_links_by_digest[link.account_digest] = link
+
+    username_digests = sorted(
+        {row.username_digest for row in batch_rows if not row.account_digest}
+    )
     existing_links = (
         db.session.execute(
             select(HashfileHashes.hash_id, HashfileHashes.username_digest).where(
@@ -408,8 +458,39 @@ def _flush_import_batch(
 
     pending_pairs: set[tuple[int, str]] = set()
     new_links: list[HashfileHashes] = []
+    updated_link_ids: set[int] = set()
+    pending_account_links_by_digest: dict[str, HashfileHashes] = {}
     for row in batch_rows:
         hash_id = row_hash_ids[row]
+        domain_id = domain_ids_by_name.get(row.domain_name) if row.domain_name else None
+        if row.account_digest:
+            existing_account_link = (
+                pending_account_links_by_digest.get(row.account_digest)
+                or existing_account_links_by_digest.get(row.account_digest)
+            )
+            if existing_account_link is None:
+                new_link = HashfileHashes(
+                    hash_id=hash_id,
+                    username=row.encoded_username,
+                    username_digest=row.username_digest,
+                    account_digest=row.account_digest,
+                    hashfile_id=hashfile_id,
+                    domain_id=domain_id,
+                )
+                db.session.add(new_link)
+                new_links.append(new_link)
+                pending_account_links_by_digest[row.account_digest] = new_link
+            else:
+                existing_account_link.hash_id = hash_id
+                existing_account_link.username = row.encoded_username
+                existing_account_link.username_digest = row.username_digest
+                existing_account_link.account_digest = row.account_digest
+                existing_account_link.hashfile_id = hashfile_id
+                existing_account_link.domain_id = domain_id
+                if existing_account_link.id is not None:
+                    updated_link_ids.add(int(existing_account_link.id))
+            continue
+
         pair = (hash_id, row.username_digest)
         if pair in existing_pairs or pair in pending_pairs:
             continue
@@ -419,23 +500,22 @@ def _flush_import_batch(
                 hash_id=hash_id,
                 username=row.encoded_username,
                 username_digest=row.username_digest,
+                account_digest=None,
                 hashfile_id=hashfile_id,
-                domain_id=domain_ids_by_name.get(row.domain_name)
-                if row.domain_name
-                else None,
+                domain_id=domain_id,
             )
         )
 
-    new_hash_ids = list(new_hashes_by_digest[digest].id for digest in new_hashes_by_digest)
     if new_links:
         db.session.add_all(new_links)
 
     db.session.flush()
     new_link_ids = [new_link.id for new_link in new_links]
-    if new_hash_ids:
-        sync_hash_search_tokens(new_hash_ids, commit=False)
-    if new_link_ids:
-        sync_hashfile_hash_search_tokens(new_link_ids, commit=False)
+    if created_hash_ids:
+        sync_hash_search_tokens(sorted(created_hash_ids), commit=False)
+    sync_link_ids = sorted({int(link_id) for link_id in new_link_ids if link_id} | updated_link_ids)
+    if sync_link_ids:
+        sync_hashfile_hash_search_tokens(sync_link_ids, commit=False)
     db.session.expunge_all()
 
 

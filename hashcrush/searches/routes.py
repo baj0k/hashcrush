@@ -13,7 +13,7 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 
 from hashcrush import jinja_ciphertext_decode, jinja_hex_decode
 from hashcrush.audit import record_audit_event
@@ -47,6 +47,7 @@ from hashcrush.utils.secret_storage import (
 searches = Blueprint('searches', __name__)
 SEARCH_MAX_RESULTS = 250
 SEARCH_MAX_CANDIDATES = 2000
+SEARCH_DOMAIN_BROWSE_PAGE_SIZE = 250
 
 
 def _scoped_search_stmt():
@@ -71,6 +72,42 @@ def _parse_positive_int(raw_value) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
+
+
+def _domain_browse_stmt(domain_id: int):
+    return (
+        _scoped_search_stmt()
+        .join(Hashfiles, Hashfiles.id == HashfileHashes.hashfile_id)
+        .where(
+            or_(
+                HashfileHashes.domain_id == domain_id,
+                and_(
+                    HashfileHashes.domain_id.is_(None),
+                    Hashfiles.domain_id == domain_id,
+                ),
+            )
+        )
+        .order_by(HashfileHashes.id.asc())
+    )
+
+
+def _execute_domain_browse(domain_id: int, page: int):
+    offset = max(page - 1, 0) * SEARCH_DOMAIN_BROWSE_PAGE_SIZE
+    rows = db.session.execute(
+        _domain_browse_stmt(domain_id)
+        .limit(SEARCH_DOMAIN_BROWSE_PAGE_SIZE + 1)
+        .offset(offset)
+    ).tuples().all()
+    has_next = len(rows) > SEARCH_DOMAIN_BROWSE_PAGE_SIZE
+    page_rows = rows[:SEARCH_DOMAIN_BROWSE_PAGE_SIZE]
+    return page_rows, {
+        "page": page,
+        "page_size": SEARCH_DOMAIN_BROWSE_PAGE_SIZE,
+        "has_previous": page > 1,
+        "has_next": has_next,
+        "page_first": (offset + 1) if page_rows else 0,
+        "page_last": offset + len(page_rows),
+    }
 
 
 def _search_candidate_stmt(search_type: str):
@@ -243,6 +280,13 @@ def searches_list():
     # Domain and hashfile labels are resolved at render/export time.
     truncated_results = False
     partial_search_too_short = False
+    show_export_actions = False
+    browsed_domain = None
+    browsed_domain_page = 1
+    browsed_domain_has_previous = False
+    browsed_domain_has_next = False
+    browsed_domain_first_result = 0
+    browsed_domain_last_result = 0
     if search_form.validate_on_submit():
         query_text = _normalized_query_text(search_form.query.data)
         search_form.query.data = query_text
@@ -255,13 +299,24 @@ def searches_list():
                 search_form.search_type.data,
                 query_text,
             )
+            show_export_actions = bool(results)
         else:
             flash('No results found', 'warning')
             return redirect(url_for('searches.searches_list'))
     else:
         raw_hash_id = request.args.get("hash_id")
         hash_id = _parse_positive_int(raw_hash_id)
+        raw_domain_id = request.args.get("domain_id")
+        domain_id = _parse_positive_int(raw_domain_id)
+        raw_page = request.args.get("page")
+        page = _parse_positive_int(raw_page)
         if raw_hash_id and hash_id is None:
+            return redirect(url_for('searches.searches_list'))
+        if raw_domain_id and domain_id is None:
+            return redirect(url_for('searches.searches_list'))
+        if raw_page and page is None:
+            if domain_id is not None:
+                return redirect(url_for('searches.searches_list', domain_id=domain_id))
             return redirect(url_for('searches.searches_list'))
         if hash_id is not None:
             results = db.session.execute(
@@ -271,8 +326,24 @@ def searches_list():
             if first_result: #Without a value in the search input the export button will not pass the form validation
                 search_form.query.data = decode_ciphertext_from_storage(first_result[0].ciphertext) #All hashes should be the same, so set the search input as the first rows hash value
                 search_form.search_type.data = 'hash' #Set the search type to hash
+                show_export_actions = True
+        elif domain_id is not None:
+            browsed_domain = next((domain for domain in domains if domain.id == domain_id), None)
+            if browsed_domain is None:
+                return redirect(url_for('searches.searches_list'))
+            results, pagination = _execute_domain_browse(domain_id, page or 1)
+            if not results and (page or 1) > 1:
+                flash(
+                    'That domain page is no longer available. Showing the first page instead.',
+                    'warning',
+                )
+                return redirect(url_for('searches.searches_list', domain_id=domain_id))
+            browsed_domain_page = pagination["page"]
+            browsed_domain_has_previous = pagination["has_previous"]
+            browsed_domain_has_next = pagination["has_next"]
+            browsed_domain_first_result = pagination["page_first"]
+            browsed_domain_last_result = pagination["page_last"]
         else:
-            domains = None
             results = None
     if request.method == 'POST' and not results:
         if partial_search_too_short:
@@ -324,6 +395,13 @@ def searches_list():
         domain_names_by_id=domain_names_by_id,
         hashfile_domain_ids=hashfile_domain_ids,
         results=results,
+        show_export_actions=show_export_actions,
+        browsed_domain=browsed_domain,
+        browsed_domain_page=browsed_domain_page,
+        browsed_domain_has_previous=browsed_domain_has_previous,
+        browsed_domain_has_next=browsed_domain_has_next,
+        browsed_domain_first_result=browsed_domain_first_result,
+        browsed_domain_last_result=browsed_domain_last_result,
         hashfiles=hashfiles,
     )
 

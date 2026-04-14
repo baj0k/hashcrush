@@ -327,6 +327,114 @@ def test_search_requires_three_characters_for_partial_match():
 
 
 @pytest.mark.security
+def test_search_domain_browse_is_paginated_and_domain_filtered(monkeypatch):
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        primary_domain = Domains(name="BrowseDomain")
+        secondary_domain = Domains(name="OtherDomain")
+        db.session.add_all([primary_domain, secondary_domain])
+        db.session.commit()
+
+        primary_hashfile = Hashfiles(name="browse-primary.txt", domain_id=primary_domain.id)
+        legacy_hashfile = Hashfiles(name="browse-legacy.txt", domain_id=primary_domain.id)
+        secondary_hashfile = Hashfiles(name="browse-other.txt", domain_id=secondary_domain.id)
+        db.session.add_all([primary_hashfile, legacy_hashfile, secondary_hashfile])
+        db.session.commit()
+
+        first_hash = _seed_hash("browse-hash-1", cracked=False)
+        second_hash = _seed_hash("browse-hash-2", cracked=False)
+        third_hash = _seed_hash("browse-hash-3", cracked=False)
+        other_hash = _seed_hash("browse-hash-4", cracked=False)
+
+        _seed_hashfile_hash(
+            hash_id=first_hash.id,
+            hashfile_id=primary_hashfile.id,
+            username="BrowseDomain\\alpha",
+            domain_id=primary_domain.id,
+        )
+        _seed_hashfile_hash(
+            hash_id=second_hash.id,
+            hashfile_id=primary_hashfile.id,
+            username="BrowseDomain\\beta",
+            domain_id=primary_domain.id,
+        )
+        _seed_hashfile_hash(
+            hash_id=third_hash.id,
+            hashfile_id=legacy_hashfile.id,
+            username="legacy-gamma",
+            domain_id=None,
+        )
+        _seed_hashfile_hash(
+            hash_id=other_hash.id,
+            hashfile_id=secondary_hashfile.id,
+            username="OtherDomain\\delta",
+            domain_id=secondary_domain.id,
+        )
+
+        monkeypatch.setattr(search_routes, "SEARCH_DOMAIN_BROWSE_PAGE_SIZE", 2)
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        first_page = client.get(f"/search?domain_id={primary_domain.id}")
+        assert first_page.status_code == 200
+        first_html = first_page.get_data(as_text=True)
+        assert "Browsing all entries for domain <strong>BrowseDomain</strong>" in first_html
+        assert "Showing 1-2" in first_html
+        assert "alpha" in first_html
+        assert "beta" in first_html
+        assert "legacy-gamma" not in first_html
+        assert "delta" not in first_html
+        assert f'/search?domain_id={primary_domain.id}&amp;page=2' in first_html
+
+        second_page = client.get(f"/search?domain_id={primary_domain.id}&page=2")
+        assert second_page.status_code == 200
+        second_html = second_page.get_data(as_text=True)
+        assert "Showing 3-3" in second_html
+        assert "legacy-gamma" in second_html
+        assert "alpha" not in second_html
+        assert f'/search?domain_id={primary_domain.id}&amp;page=1' in second_html
+
+
+@pytest.mark.security
+def test_analytics_domain_comparison_links_domains_to_search_scope():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="AnalyticsBrowseDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="analytics-browse.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        hash_row = _seed_hash("analytics-browse-hash", cracked=True, plaintext="BrowsePass123!")
+        _seed_hashfile_hash(
+            hash_id=hash_row.id,
+            hashfile_id=hashfile.id,
+            username="AnalyticsBrowseDomain\\alice",
+            domain_id=domain.id,
+        )
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get("/analytics")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert f'href="/search?domain_id={domain.id}"' in html
+        assert f">{domain.name}</a>" in html
+
+
+@pytest.mark.security
 def test_analytics_page_is_global_but_downloads_require_admin():
     app = _build_app()
     with app.app_context():
@@ -364,6 +472,7 @@ def test_analytics_page_is_global_but_downloads_require_admin():
         assert "Sensitive recovered-password detail is limited to admin accounts." in analytics_html
         assert "Most Reused Recovered Passwords" not in analytics_html
         assert "Download Charts" not in analytics_html
+        assert f'/search?domain_id={domain.id}' not in analytics_html
         assert "/analytics/download?type=found" not in analytics_html
         assert "/analytics/download?type=left" not in analytics_html
         assert "/analytics/download?type=reused_hashes" not in analytics_html
@@ -409,6 +518,59 @@ def test_analytics_admin_view_shows_reuse_table_and_password_quality_chart():
         assert "Most Reused Recovered Passwords" in html
         assert "SharedPass123!" in html
         assert "Accounts Where Password Matches Username" in html
+        assert "Password Equals Username" in html
+        assert "Median Recovered Length" in html
+        assert "2 (66.7%)" in html or "2 (66.6%)" in html
+
+
+@pytest.mark.security
+def test_analytics_domain_comparison_shows_hibp_cross_referenced_counts():
+    app = _build_app()
+    with app.app_context():
+        db.create_all()
+        admin = _seed_admin_user()
+        _seed_settings()
+
+        domain = Domains(name="AnalyticsHibpCompareDomain")
+        db.session.add(domain)
+        db.session.commit()
+
+        hashfile = Hashfiles(name="analytics-hibp-compare.txt", domain_id=domain.id)
+        db.session.add(hashfile)
+        db.session.commit()
+
+        first_hash = _seed_hash("hibp-compare-one", cracked=True, plaintext="SharedPass123!")
+        second_hash = _seed_hash("hibp-compare-two", cracked=False)
+        _seed_hashfile_hash(
+            hash_id=first_hash.id,
+            hashfile_id=hashfile.id,
+            username="AnalyticsHibpCompareDomain\\alice",
+            domain_id=domain.id,
+        )
+        _seed_hashfile_hash(
+            hash_id=second_hash.id,
+            hashfile_id=hashfile.id,
+            username="AnalyticsHibpCompareDomain\\bob",
+            domain_id=domain.id,
+        )
+        db.session.add(
+            HashPublicExposure(
+                hash_id=first_hash.id,
+                source_kind="hibp_ntlm",
+                matched=True,
+                prevalence_count=0,
+            )
+        )
+        db.session.commit()
+
+        client = app.test_client()
+        _login_client_as_user(client, admin)
+
+        response = client.get("/analytics")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "HIBP Cross-Referenced" in html
+        assert "1 (50%)" in html
 
 
 @pytest.mark.security

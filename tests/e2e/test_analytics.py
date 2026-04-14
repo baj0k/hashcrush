@@ -36,3 +36,27 @@ def test_external_analytics_charts_render_and_download(
 
     download = download_info.value
     assert download.suggested_filename == "recovered_accounts.svg"
+
+
+@pytest.mark.e2e
+def test_analytics_domain_link_opens_domain_browse_search(
+    page, live_server, login, e2e_fixture_data
+):
+    login()
+    page.goto(f"{live_server}/analytics", wait_until="domcontentloaded")
+
+    page.locator("[data-chart-slot='recovered_accounts'] svg").wait_for()
+    page.locator(
+        "table tbody tr td a", has_text=e2e_fixture_data["domain_name"]
+    ).first.click()
+
+    expect(page).to_have_url(
+        f"{live_server}/search?domain_id={e2e_fixture_data['domain_id']}"
+    )
+    expect(page.get_by_role("heading", name="Search", exact=True)).to_be_visible()
+    expect(
+        page.get_by_text(
+            f"Browsing all entries for domain {e2e_fixture_data['domain_name']}.",
+            exact=False,
+        )
+    ).to_be_visible()

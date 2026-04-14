@@ -299,6 +299,7 @@ class HashfileHashes(db.Model):
 
     __table_args__ = (
         db.Index("ix_hashfile_hashes_domain_id", "domain_id"),
+        db.Index("ix_hashfile_hashes_account_digest", "account_digest", unique=True),
         db.UniqueConstraint(
             "hashfile_id",
             "hash_id",
@@ -319,6 +320,9 @@ class HashfileHashes(db.Model):
     )
     username_digest: Mapped[str] = mapped_column(
         String(64), nullable=False, default="", index=True
+    )
+    account_digest: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
     )
     hashfile_id: Mapped[int] = mapped_column(
         Integer,

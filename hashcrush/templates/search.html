@@ -24,12 +24,21 @@
                     {{ searchForm.query(class="form-control hc-search-query", placeholder="Enter search text")}}
                 {% endif %}
                 {{ searchForm.submit(class="btn btn-primary")}}
-                {% if results %}
+                {% if show_export_actions %}
                     {{ searchForm.export(class="btn btn-secondary", title="Export results to a file")}}
                     {{ searchForm.export_type(class="custom-select") }}
                 {% endif %}
             </div>
         </form>
+        {% if browsed_domain %}
+            <div class="alert alert-info mt-3" role="alert">
+                Browsing all entries for domain <strong>{{ browsed_domain.name }}</strong>.
+                Showing {{ browsed_domain_first_result }}-{{ browsed_domain_last_result }}
+                on page {{ browsed_domain_page }}.
+                Results are paginated to keep large domains responsive.
+                <a href="{{ url_for('searches.searches_list') }}" class="alert-link">Clear domain browse</a>.
+            </div>
+        {% endif %}
         {% if results %}
             <div class="mt-3">
             <table class="table">
@@ -72,6 +81,21 @@
                 </tbody>
             </table>
             </div>
+            {% if browsed_domain %}
+            <div class="d-flex justify-content-between align-items-center mt-3">
+                <div>
+                    {% if browsed_domain_has_previous %}
+                    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('searches.searches_list', domain_id=browsed_domain.id, page=browsed_domain_page - 1) }}">Previous page</a>
+                    {% endif %}
+                </div>
+                <div class="text-muted small">Page {{ browsed_domain_page }}</div>
+                <div>
+                    {% if browsed_domain_has_next %}
+                    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('searches.searches_list', domain_id=browsed_domain.id, page=browsed_domain_page + 1) }}">Next page</a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
         {% endif %}
         {% if not results %}
             <div class="mt-3">

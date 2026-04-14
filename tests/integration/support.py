@@ -23,6 +23,7 @@ from hashcrush.models import (
     AuditLog,
     Domains,
     Hashes,
+    HashPublicExposure,
     HashfileHashes,
     Hashfiles,
     Jobs,
@@ -47,6 +48,7 @@ from hashcrush.utils.utils import (
     encode_ciphertext_for_storage,
     encode_plaintext_for_storage,
     encode_username_for_storage,
+    get_account_identity_digest,
     get_ciphertext_search_digest,
     get_linecount,
     get_plaintext_search_digest,
@@ -258,6 +260,14 @@ def _seed_hashfile_hash(
         domain_id=resolved_domain_id,
         username=encoded_username,
         username_digest=username_digest,
+        account_digest=get_account_identity_digest(
+            (
+                db.session.get(Domains, resolved_domain_id).name
+                if resolved_domain_id is not None
+                else None
+            ),
+            normalized_username if username is not None else None,
+        ),
     )
     db.session.add(row)
     db.session.commit()

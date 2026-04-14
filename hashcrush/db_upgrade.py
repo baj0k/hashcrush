@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 
-from sqlalchemy import inspect, select, text
+from sqlalchemy import delete, inspect, select, text
 
 import hashcrush
 from hashcrush.models import (
     AuditLog,
+    Domains,
     HashSearchTokens,
     HashfileHashSearchTokens,
+    HashfileHashes,
+    Hashfiles,
     HashPublicExposure,
     ReferenceDatasets,
     SchemaVersion,
@@ -20,8 +24,12 @@ from hashcrush.models import (
     db,
     utc_now_naive,
 )
+from hashcrush.utils.secret_storage import (
+    decode_username_from_storage,
+    get_account_identity_digest,
+)
 
-CURRENT_SCHEMA_VERSION = 12
+CURRENT_SCHEMA_VERSION = 13
 
 
 @dataclass(frozen=True)
@@ -431,6 +439,109 @@ def _migration_012_add_partial_search_token_indexes() -> None:
     migrate_search_token_rows()
 
 
+def _migration_013_replace_duplicate_account_rows_with_latest_import() -> None:
+    """Track per-account identity and collapse duplicate imported account rows."""
+
+    inspector = inspect(db.engine)
+    if "hashfile_hashes" not in inspector.get_table_names():
+        return
+
+    association_columns = {
+        column["name"] for column in inspector.get_columns("hashfile_hashes")
+    }
+    if "account_digest" not in association_columns:
+        db.session.execute(
+            text(
+                "ALTER TABLE hashfile_hashes "
+                "ADD COLUMN account_digest VARCHAR(64)"
+            )
+        )
+        db.session.commit()
+
+    domain_names_by_id = {
+        int(domain_id): str(domain_name)
+        for domain_id, domain_name in db.session.execute(
+            select(Domains.id, Domains.name)
+        ).all()
+    }
+    hashfiles_by_id = {
+        int(hashfile_id): {
+            "domain_id": domain_id,
+            "uploaded_at": uploaded_at,
+        }
+        for hashfile_id, domain_id, uploaded_at in db.session.execute(
+            select(Hashfiles.id, Hashfiles.domain_id, Hashfiles.uploaded_at)
+        ).all()
+    }
+
+    association_rows = db.session.execute(
+        select(HashfileHashes).order_by(HashfileHashes.id.asc())
+    ).scalars().all()
+    for row in association_rows:
+        if not row.username_digest:
+            row.account_digest = None
+            continue
+
+        hashfile_info = hashfiles_by_id.get(int(row.hashfile_id), {})
+        effective_domain_id = row.domain_id or hashfile_info.get("domain_id")
+        effective_domain_name = (
+            domain_names_by_id.get(int(effective_domain_id))
+            if effective_domain_id is not None
+            else None
+        )
+        decoded_username = decode_username_from_storage(row.username)
+        row.account_digest = get_account_identity_digest(
+            effective_domain_name,
+            decoded_username,
+        )
+        if row.domain_id is None and effective_domain_id is not None:
+            row.domain_id = int(effective_domain_id)
+    db.session.commit()
+
+    duplicate_rows = db.session.execute(
+        select(
+            HashfileHashes.id,
+            HashfileHashes.account_digest,
+            HashfileHashes.hashfile_id,
+        )
+        .where(HashfileHashes.account_digest.is_not(None))
+        .order_by(HashfileHashes.account_digest.asc(), HashfileHashes.id.desc())
+    ).all()
+
+    ranked_rows_by_digest: dict[str, list[tuple[int, object, int]]] = defaultdict(list)
+    for row_id, account_digest, hashfile_id in duplicate_rows:
+        hashfile_info = hashfiles_by_id.get(int(hashfile_id), {})
+        ranked_rows_by_digest[str(account_digest)].append(
+            (
+                int(row_id),
+                hashfile_info.get("uploaded_at") or utc_now_naive(),
+                int(hashfile_id),
+            )
+        )
+
+    delete_ids: list[int] = []
+    for ranked_rows in ranked_rows_by_digest.values():
+        if len(ranked_rows) <= 1:
+            continue
+        ranked_rows.sort(key=lambda item: (item[1], item[0]), reverse=True)
+        delete_ids.extend(row_id for row_id, _, _ in ranked_rows[1:])
+
+    if delete_ids:
+        db.session.execute(
+            delete(HashfileHashes).where(HashfileHashes.id.in_(delete_ids))
+        )
+        db.session.commit()
+
+    if "ix_hashfile_hashes_account_digest" not in _index_names("hashfile_hashes"):
+        db.session.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_hashfile_hashes_account_digest "
+                "ON hashfile_hashes (account_digest)"
+            )
+        )
+        db.session.commit()
+
+
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(
         version=1,
@@ -503,6 +614,12 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
         name="add_partial_search_token_indexes",
         summary="Add blind-indexed trigram token tables for scalable partial search.",
         upgrade=_migration_012_add_partial_search_token_indexes,
+    ),
+    MigrationStep(
+        version=13,
+        name="replace_duplicate_account_rows_with_latest_import",
+        summary="Track imported account identity and keep only the latest row per domain and username.",
+        upgrade=_migration_013_replace_duplicate_account_rows_with_latest_import,
     ),
 )
 
