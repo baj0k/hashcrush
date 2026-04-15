@@ -215,7 +215,7 @@ class JobTasks(db.Model):
     )
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
-    command: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    command: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         String(50), nullable=False
     )  # Running, Paused, Not Started, Completed, Queued, Canceled, Importing

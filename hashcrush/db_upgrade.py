@@ -33,7 +33,7 @@ from hashcrush.utils.secret_storage import (
     get_account_identity_digest,
 )
 
-CURRENT_SCHEMA_VERSION = 14
+CURRENT_SCHEMA_VERSION = 15
 
 
 @dataclass(frozen=True)
@@ -731,6 +731,26 @@ def _migration_014_normalize_none_domain_bucket_and_redundant_prefixes() -> None
         db.session.commit()
 
 
+def _migration_015_expand_job_tasks_command_column() -> None:
+    """Widen job_tasks.command to TEXT so long hashcat invocations fit."""
+    inspector = inspect(db.engine)
+    if "job_tasks" not in inspector.get_table_names():
+        return
+    column_types = {
+        column["name"]: column["type"]
+        for column in inspector.get_columns("job_tasks")
+    }
+    if "command" not in column_types:
+        return
+    current_type = str(column_types["command"]).upper()
+    if current_type.startswith("TEXT"):
+        return
+    db.session.execute(
+        text('ALTER TABLE "job_tasks" ALTER COLUMN "command" TYPE TEXT')
+    )
+    db.session.commit()
+
+
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(
         version=1,
@@ -815,6 +835,12 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
         name="normalize_none_domain_bucket_and_redundant_prefixes",
         summary="Treat literal None and repeated domain\\username prefixes as uncategorized rows.",
         upgrade=_migration_014_normalize_none_domain_bucket_and_redundant_prefixes,
+    ),
+    MigrationStep(
+        version=15,
+        name="expand_job_tasks_command_column",
+        summary="Widen job_tasks.command to TEXT to fit long hashcat invocations.",
+        upgrade=_migration_015_expand_job_tasks_command_column,
     ),
 )
 

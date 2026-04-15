@@ -523,7 +523,7 @@ def test_upgrade_database_migrates_v1_schema_forward_to_current_version():
         result = upgrade_database()
 
         assert inspect(db.engine).has_table(AuditLog.__tablename__)
-        assert [step.version for step in result.applied_steps] == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+        assert [step.version for step in result.applied_steps] == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -550,7 +550,7 @@ def test_upgrade_database_migrates_v2_schema_forward_to_current_version():
         result = upgrade_database()
 
         assert not inspect(db.engine).has_table("settings")
-        assert [step.version for step in result.applied_steps] == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+        assert [step.version for step in result.applied_steps] == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
 @pytest.mark.security
@@ -602,7 +602,7 @@ def test_upgrade_database_migrates_v3_schema_to_v4_job_task_positions():
         index_names = {
             index["name"] for index in inspect(db.engine).get_indexes("job_tasks")
         }
-        assert [step.version for step in result.applied_steps] == [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+        assert [step.version for step in result.applied_steps] == [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
         assert [row.position for row in persisted] == [0, 1]
         assert "ix_job_tasks_job_id_position" in index_names
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
@@ -628,7 +628,7 @@ def test_upgrade_database_migrates_v5_schema_to_v6_audit_filter_indexes():
         result = upgrade_database()
 
         audit_indexes = {row["name"] for row in inspect(db.engine).get_indexes("audit_logs")}
-        assert [step.version for step in result.applied_steps] == [6, 7, 8, 9, 10, 11, 12, 13, 14]
+        assert [step.version for step in result.applied_steps] == [6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
         assert "ix_audit_logs_actor_username_created_at" in audit_indexes
         assert "ix_audit_logs_target_type_created_at" in audit_indexes
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
@@ -665,7 +665,7 @@ def test_upgrade_database_migrates_v9_legacy_default_mask_names():
         renamed_tasks = _all_rows(Tasks, order_by=Tasks.id.asc())
         renamed_group = _first_row(TaskGroups, name=default_mask_task_group_name())
 
-        assert [step.version for step in result.applied_steps] == [10, 11, 12, 13, 14]
+        assert [step.version for step in result.applied_steps] == [10, 11, 12, 13, 14, 15]
         assert [task.name for task in renamed_tasks] == [
             default_mask_task_name(length) for length in range(1, 11)
         ]
@@ -716,7 +716,7 @@ def test_upgrade_database_migrates_v13_none_and_redundant_domain_categories():
 
         result = upgrade_database()
 
-        assert [step.version for step in result.applied_steps] == [14]
+        assert [step.version for step in result.applied_steps] == [14, 15]
         assert db.session.get(SchemaVersion, 1).version == CURRENT_SCHEMA_VERSION
 
         refreshed_none_hashfile = _first_row(Hashfiles, name="legacy-none.txt")

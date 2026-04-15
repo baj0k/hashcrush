@@ -27,6 +27,7 @@ from hashcrush.hibp.service import (
     validate_mounted_hibp_ntlm_dataset_path,
 )
 from hashcrush.utils.file_ops import save_file
+from hashcrush.utils.formatting import format_bytes as _format_bytes
 from hashcrush.utils.storage_paths import get_runtime_subdir
 from hashcrush.wordlists.service import (
     get_external_wordlist_cache_snapshot,
@@ -56,19 +57,6 @@ def _async_error_response(title: str, detail: str):
 
 def _temp_folder_path() -> str:
     return get_runtime_subdir("tmp")
-
-
-def _format_bytes(size_bytes: int) -> str:
-    """Render a byte count into a compact human-readable string."""
-    units = ["bytes", "KB", "MB", "GB", "TB"]
-    value = float(max(size_bytes, 0))
-    unit_index = 0
-    while value >= 1024 and unit_index < len(units) - 1:
-        value /= 1024
-        unit_index += 1
-    if unit_index == 0:
-        return f"{int(value)} {units[unit_index]}"
-    return f"{value:.2f} {units[unit_index]}"
 
 
 def _temp_folder_size_bytes() -> int:

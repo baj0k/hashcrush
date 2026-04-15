@@ -541,7 +541,7 @@ def import_hashfilehashes(
         with open(hashfile_path, "rb") as handle:
             for raw_line in handle:
                 processed_bytes += len(raw_line)
-                line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+                line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line:
                     if progress_callback is not None:
                         progress_callback(processed_bytes, total_bytes)
@@ -588,7 +588,7 @@ def validate_pwdump_hashfile(hashfile_path, hash_type, progress_callback=None):
             hashfile_path,
             progress_callback=progress_callback,
         ):
-            line = line.rstrip("\r\n")
+            line = line.strip()
             if len(line) == 0:
                 continue
             if ":" not in line:
@@ -631,7 +631,7 @@ def validate_netntlm_hashfile(hashfile_path, progress_callback=None):
             hashfile_path,
             progress_callback=progress_callback,
         ):
-            line = line.rstrip("\r\n")
+            line = line.strip()
             if len(line) == 0:
                 continue
             if ":" not in line:
@@ -669,7 +669,7 @@ def validate_kerberos_hashfile(hashfile_path, hash_type, progress_callback=None)
             hashfile_path,
             progress_callback=progress_callback,
         ):
-            line = line.rstrip("\r\n")
+            line = line.strip()
             if len(line) == 0:
                 continue
             if "$" not in line:
@@ -830,7 +830,7 @@ def validate_shadow_hashfile(hashfile_path, hash_type, progress_callback=None):
             hashfile_path,
             progress_callback=progress_callback,
         ):
-            line = line.rstrip("\r\n")
+            line = line.strip()
             if len(line) == 0:
                 continue
             if ":" not in line:
@@ -865,7 +865,7 @@ def validate_user_hash_hashfile(hashfile_path, progress_callback=None):
             hashfile_path,
             progress_callback=progress_callback,
         ):
-            line = line.rstrip("\r\n")
+            line = line.strip()
             if len(line) == 0:
                 continue
             if ":" not in line:
@@ -886,7 +886,7 @@ def validate_hash_only_hashfile(hashfile_path, hash_type, progress_callback=None
             hashfile_path,
             progress_callback=progress_callback,
         ):
-            line = line.rstrip("\r\n")
+            line = line.strip()
             if len(line) == 0:
                 continue
 

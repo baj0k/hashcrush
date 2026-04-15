@@ -9,7 +9,6 @@ import signal
 import sys
 import traceback
 from configparser import ConfigParser
-from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import select
@@ -247,8 +246,10 @@ def reset_admin_password_cli(db, bcrypt, admin_username: str | None = None) -> i
         new_password = getpass("Enter new admin password: ")
         confirm_password = getpass("Confirm new admin password: ")
 
+    from hashcrush.utils.storage_paths import utc_now_naive
+
     target_admin.password = bcrypt.generate_password_hash(new_password).decode("utf-8")
-    target_admin.last_login_utc = datetime.utcnow()
+    target_admin.last_login_utc = utc_now_naive()
     db.session.commit()
     print("Admin password reset complete.")
     return 0

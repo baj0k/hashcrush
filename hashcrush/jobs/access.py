@@ -4,9 +4,18 @@ from __future__ import annotations
 
 from flask import flash
 from flask_login import current_user
+from sqlalchemy import select
 
 from hashcrush.authz import PUBLIC_JOB_VIEW_STATUSES, visible_jobs_query
-from hashcrush.models import Jobs
+from hashcrush.models import Jobs, db
+from hashcrush.utils.formatting import parse_positive_int as _parse_positive_int
+
+
+def load_job_locked(job_id: int) -> Jobs | None:
+    """Load a Jobs row with a row-level lock for state transitions."""
+    return db.session.execute(
+        select(Jobs).where(Jobs.id == job_id).with_for_update()
+    ).scalar_one_or_none()
 
 ACTIVE_JOB_TASK_MUTATION_STATUSES = {"Running", "Queued", "Paused"}
 ACTIVE_JOB_TASK_EXECUTION_STATUSES = {"Running", "Importing", "Queued", "Paused"}
@@ -40,14 +49,6 @@ def _require_job_allows_task_mutation(job: Jobs) -> bool:
         "danger",
     )
     return False
-
-
-def _parse_positive_int(raw_value) -> int | None:
-    try:
-        parsed = int(raw_value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed > 0 else None
 
 
 def _normalize_task_id_list(raw_values) -> list[int]:

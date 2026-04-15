@@ -21,21 +21,20 @@ def update_job_task_status(jobtask_id, status):
     if status in ("Completed", "Canceled", "Paused"):
         jobtask.worker_pid = None
 
-    db.session.commit()
-
     job = db.session.get(Jobs, jobtask.job_id)
     if not job:
+        db.session.commit()
         return True
+
+    db.session.flush()
 
     if status in ("Running", "Importing") and job.status in ("Queued", "Paused"):
         job.status = "Running"
         if not job.started_at:
             job.started_at = utc_now_naive()
-        db.session.commit()
 
-    if status == "Paused" and job.status != "Paused":
+    elif status == "Paused" and job.status != "Paused":
         job.status = "Paused"
-        db.session.commit()
 
     active_statuses = {"Queued", "Running", "Importing", "Paused"}
     remaining_active = int(
@@ -48,6 +47,7 @@ def update_job_task_status(jobtask_id, status):
         or 0
     )
 
+    job_finished = False
     if remaining_active == 0 and job.status in ("Queued", "Running", "Paused"):
         any_canceled = bool(
             db.session.scalar(
@@ -60,13 +60,7 @@ def update_job_task_status(jobtask_id, status):
 
         job.status = "Canceled" if any_canceled else "Completed"
         job.ended_at = utc_now_naive()
-        db.session.commit()
-        current_app.logger.info(
-            'Job lifecycle update: job_id=%s name="%s" finished with status=%s',
-            job.id,
-            job.name,
-            job.status,
-        )
+        job_finished = True
 
         try:
             start_time = job.started_at
@@ -86,7 +80,6 @@ def update_job_task_status(jobtask_id, status):
             hashfile = db.session.get(Hashfiles, job.hashfile_id)
             if hashfile:
                 hashfile.runtime += duration
-                db.session.commit()
 
     elif remaining_active > 0:
         has_running = bool(
@@ -116,12 +109,19 @@ def update_job_task_status(jobtask_id, status):
 
         if has_running and job.status != "Running":
             job.status = "Running"
-            db.session.commit()
         elif not has_running and has_paused and job.status != "Paused":
             job.status = "Paused"
-            db.session.commit()
         elif not has_running and not has_paused and has_queued and job.status != "Queued":
             job.status = "Queued"
-            db.session.commit()
+
+    db.session.commit()
+
+    if job_finished:
+        current_app.logger.info(
+            'Job lifecycle update: job_id=%s name="%s" finished with status=%s',
+            job.id,
+            job.name,
+            job.status,
+        )
 
     return True

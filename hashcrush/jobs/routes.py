@@ -5,6 +5,7 @@ import os
 
 from flask import (
     Blueprint,
+    abort,
     current_app,
     flash,
     jsonify,
@@ -26,6 +27,7 @@ from hashcrush.jobs.access import (
     _can_view_job,
     _normalize_task_id_list,
     _require_job_allows_task_mutation,
+    load_job_locked,
 )
 from hashcrush.jobs.builder_service import (
     _build_jobs_form,
@@ -573,7 +575,9 @@ def jobs_remove_all_tasks(job_id):
 def jobs_delete(job_id):
     """Function to delete job"""
 
-    job = db.get_or_404(Jobs, job_id)
+    job = load_job_locked(job_id)
+    if job is None:
+        abort(404)
     next_url = safe_relative_url(request.form.get('next'))
     if _can_manage_job(job):
         if job.status in ('Running', 'Queued', 'Paused'):
@@ -664,7 +668,9 @@ def jobs_summary(job_id):
 def jobs_start(job_id):
     """Function to start job"""
 
-    job = db.get_or_404(Jobs, job_id)
+    job = load_job_locked(job_id)
+    if job is None:
+        abort(404)
     job_tasks = db.session.execute(
         select(JobTasks).filter_by(job_id=job_id).order_by(*_job_task_ordering())
     ).scalars().all()
@@ -704,7 +710,9 @@ def jobs_start(job_id):
 def jobs_stop(job_id):
     """Function to stop a job"""
 
-    job = db.get_or_404(Jobs, job_id)
+    job = load_job_locked(job_id)
+    if job is None:
+        abort(404)
     job_tasks = db.session.execute(
         select(JobTasks).filter_by(job_id=job_id).order_by(*_job_task_ordering())
     ).scalars().all()
@@ -739,7 +747,9 @@ def jobs_stop(job_id):
 def jobs_pause(job_id):
     """Pause a running or queued job."""
 
-    job = db.get_or_404(Jobs, job_id)
+    job = load_job_locked(job_id)
+    if job is None:
+        abort(404)
     job_tasks = db.session.execute(
         select(JobTasks).filter_by(job_id=job_id).order_by(*_job_task_ordering())
     ).scalars().all()
@@ -771,7 +781,9 @@ def jobs_pause(job_id):
 def jobs_resume(job_id):
     """Resume a paused job."""
 
-    job = db.get_or_404(Jobs, job_id)
+    job = load_job_locked(job_id)
+    if job is None:
+        abort(404)
     job_tasks = db.session.execute(
         select(JobTasks).filter_by(job_id=job_id).order_by(*_job_task_ordering())
     ).scalars().all()

@@ -11,17 +11,10 @@ from hashcrush.authz import admin_required_redirect, visible_jobs_query
 from hashcrush.models import JobTasks, Jobs, Rules, TaskGroups, Tasks, Wordlists, db
 from hashcrush.tasks.forms import TasksForm
 from hashcrush.tasks.sorting import sort_tasks_naturally
+from hashcrush.utils.formatting import parse_positive_int as _parse_positive_int
 from hashcrush.view_utils import append_query_params, safe_relative_url
 
 tasks = Blueprint('tasks', __name__)
-
-
-def _parse_positive_int(raw_value) -> int | None:
-    try:
-        parsed = int(raw_value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed > 0 else None
 
 
 def _parse_task_group_task_ids(payload: str | None) -> set[int]:

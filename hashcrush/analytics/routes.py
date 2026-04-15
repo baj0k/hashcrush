@@ -30,6 +30,7 @@ from hashcrush.models import (
     Hashfiles,
     db,
 )
+from hashcrush.utils.formatting import parse_positive_int as _parse_positive_int
 from hashcrush.utils.secret_storage import (
     decode_ciphertext_from_storage,
     decode_plaintext_from_storage,
@@ -190,16 +191,6 @@ def _build_hash_reuse_summary(scoped_hashfile_ids: list[int]) -> dict[str, int |
         'reused_hash_value_percent': _ratio(reused_hash_value_count, total_unique_hashes),
         'reused_hash_account_percent': _ratio(reused_hash_account_count, total_accounts),
     }
-
-
-def _parse_positive_int(value):
-    if value in (None, ''):
-        return None
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed > 0 else None
 
 
 def _format_runtime_display(total_runtime: int) -> str:

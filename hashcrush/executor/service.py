@@ -10,7 +10,6 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
 from typing import TextIO
 
 from flask import current_app
@@ -38,7 +37,7 @@ from hashcrush.utils.secret_storage import (
     get_plaintext_search_digest,
     normalize_recovered_plaintext,
 )
-from hashcrush.utils.storage_paths import get_runtime_subdir
+from hashcrush.utils.storage_paths import get_runtime_subdir, utc_now_naive
 from hashcrush.wordlists.dynamic import update_all_dynamic_wordlists, update_dynamic_wordlist
 
 
@@ -532,7 +531,7 @@ class LocalExecutorService:
         if not next_task:
             return
 
-        now_dt = datetime.now().replace(microsecond=0)
+        now_dt = utc_now_naive().replace(microsecond=0)
         claimed = db.session.execute(
             update(JobTasks)
             .where(JobTasks.id == next_task.id, JobTasks.status == "Queued")
@@ -546,10 +545,7 @@ class LocalExecutorService:
             return
         db.session.commit()
 
-        job_task = db.session.get(JobTasks, next_task.id)
-        if not job_task:
-            return
-        update_job_task_status(job_task.id, "Running")
+        update_job_task_status(next_task.id, "Running")
         job_task = db.session.get(JobTasks, next_task.id)
         if not job_task:
             return
@@ -639,11 +635,17 @@ class LocalExecutorService:
             .where(Hashes.cracked.is_(False))
             .where(HashfileHashes.hashfile_id == hashfile_id)
         )
+        written = 0
         with open(target, "w", encoding="utf-8", errors="ignore") as file_object:
             for ciphertext in rows.scalars():
                 decoded_ciphertext = decode_ciphertext_from_storage(ciphertext)
                 if decoded_ciphertext is not None:
                     file_object.write(f"{decoded_ciphertext}\n")
+                    written += 1
+        if written == 0:
+            raise ValueError(
+                f"Hashfile {hashfile_id} has no uncracked hashes to process."
+            )
         return target
 
     def _monitor_active_task(self) -> None:

@@ -11,6 +11,8 @@ from flask_wtf.csrf import CSRFProtect, generate_csrf
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from hashcrush.utils.formatting import format_bytes as _format_bytes
+
 __version__ = "2.0"
 
 
@@ -91,19 +93,6 @@ def _validate_storage_directories(storage_root: str | None) -> None:
                 raise RuntimeError(
                     f"Persistent storage directory is not writable by the current process: {storage_dir}"
                 )
-
-
-def _format_bytes(size_bytes: int) -> str:
-    """Render a byte count into a compact human-readable string."""
-    units = ["bytes", "KB", "MB", "GB", "TB"]
-    value = float(max(size_bytes, 0))
-    unit_index = 0
-    while value >= 1024 and unit_index < len(units) - 1:
-        value /= 1024
-        unit_index += 1
-    if unit_index == 0:
-        return f"{int(value)} {units[unit_index]}"
-    return f"{value:.2f} {units[unit_index]}"
 
 
 def _ensure_database_schema(app: Flask) -> None:

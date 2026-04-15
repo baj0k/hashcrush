@@ -49,6 +49,7 @@ from hashcrush.searches.token_index import (
     partial_search_token_digests,
 )
 from hashcrush.utils.file_ops import get_md5_hash
+from hashcrush.utils.formatting import parse_positive_int as _parse_positive_int
 from hashcrush.utils.secret_storage import (
     decode_ciphertext_from_storage,
     decode_plaintext_from_storage,
@@ -76,16 +77,6 @@ def _normalized_query_text(raw_value: str | None) -> str:
 
 def _normalized_query_key(raw_value: str | None) -> str:
     return _normalized_query_text(raw_value).casefold()
-
-
-def _parse_positive_int(raw_value) -> int | None:
-    if raw_value in (None, ''):
-        return None
-    try:
-        parsed = int(str(raw_value).strip())
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed > 0 else None
 
 
 def _execute_domain_browse(domain_id: int, page: int):

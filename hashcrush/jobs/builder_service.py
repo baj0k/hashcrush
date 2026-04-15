@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from flask import redirect, render_template, request, url_for
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from hashcrush.domains.service import job_domain_summaries
 from hashcrush.jobs.access import _can_manage_job, _job_allows_task_mutation
@@ -17,8 +17,6 @@ from hashcrush.jobs.queries import (
 )
 from hashcrush.models import (
     Domains,
-    Hashes,
-    HashfileHashes,
     Hashfiles,
     Jobs,
     JobTasks,
@@ -128,26 +126,9 @@ def _job_builder_context(job: Jobs | None):
 
     cracked_rate = "0/0"
     if selected_hashfile:
-        cracked_cnt = int(
-            db.session.scalar(
-                select(func.count())
-                .select_from(Hashes)
-                .outerjoin(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
-                .where(Hashes.cracked.is_(True))
-                .where(HashfileHashes.hashfile_id == selected_hashfile.id)
-            )
-            or 0
-        )
-        hash_total = int(
-            db.session.scalar(
-                select(func.count())
-                .select_from(Hashes)
-                .outerjoin(HashfileHashes, Hashes.id == HashfileHashes.hash_id)
-                .where(HashfileHashes.hashfile_id == selected_hashfile.id)
-            )
-            or 0
-        )
-        cracked_rate = f"{cracked_cnt}/{hash_total}"
+        cracked_rate = hashfile_cracked_rate.get(
+            selected_hashfile.id, "(0/0)"
+        ).strip("()")
 
     context.update(
         {
