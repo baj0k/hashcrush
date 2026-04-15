@@ -10,7 +10,7 @@ from urllib.request import urlopen
 import pytest
 from werkzeug.serving import make_server
 
-from hashcrush.paths import iter_test_env_paths
+from hashcrush.utils.paths import iter_test_env_paths
 from tests.db_runtime import (
     create_managed_postgres_database,
     sqlalchemy_engine_options,
@@ -95,7 +95,7 @@ def _seed_local_e2e_data(app, storage_path: Path) -> dict[str, str]:
         db,
     )
     from hashcrush.users.routes import bcrypt
-    from hashcrush.utils.utils import (
+    from hashcrush.utils.secret_storage import (
         encode_ciphertext_for_storage,
         encode_username_for_storage,
         get_ciphertext_search_digest,

@@ -10,7 +10,7 @@ from wtforms import (
 )
 from wtforms.validators import DataRequired, EqualTo, Length, Optional
 
-from hashcrush.forms_utils import normalize_text_input
+from hashcrush.utils.forms import normalize_text_input
 from hashcrush.models import Users, db
 
 

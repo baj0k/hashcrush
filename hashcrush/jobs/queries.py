@@ -18,7 +18,7 @@ from hashcrush.models import (
     Users,
     db,
 )
-from hashcrush.view_utils import paginate_scalars, parse_jobtask_progress
+from hashcrush.utils.views import paginate_scalars, parse_jobtask_progress
 
 
 def _visible_hashfiles_for_job(job: Jobs) -> list[Hashfiles]:

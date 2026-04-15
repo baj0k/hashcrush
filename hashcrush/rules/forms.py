@@ -2,7 +2,7 @@
 from flask_wtf import FlaskForm
 from wtforms import FileField, StringField, SubmitField
 
-from hashcrush.forms_utils import normalize_text_input
+from hashcrush.utils.forms import normalize_text_input
 
 
 class RulesForm(FlaskForm):

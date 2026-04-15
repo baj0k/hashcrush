@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.pool import NullPool
 
-from hashcrush.paths import get_default_config_path
+from hashcrush.utils.paths import get_default_config_path
 
 TEST_POSTGRES_URI_ENV = "HASHCRUSH_TEST_POSTGRES_URI"
 TEST_POSTGRES_ADMIN_URI_ENV = "HASHCRUSH_TEST_POSTGRES_ADMIN_URI"

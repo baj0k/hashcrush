@@ -11,7 +11,7 @@ from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Tasks, Wordlists, db
 from hashcrush.tasks.sorting import sort_tasks_naturally
 from hashcrush.utils.file_ops import save_file
-from hashcrush.view_utils import append_query_params, safe_relative_url
+from hashcrush.utils.views import append_query_params, safe_relative_url
 from hashcrush.wordlists.forms import WordlistsForm
 from hashcrush.wordlists.service import (
     create_static_wordlist_from_path,

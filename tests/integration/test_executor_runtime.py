@@ -7,7 +7,7 @@ from tests.integration.support import *
 
 @pytest.mark.security
 def test_plaintext_storage_migration_encrypts_legacy_rows():
-    from hashcrush.utils.utils import (
+    from hashcrush.utils.secret_storage import (
         decode_plaintext_from_storage,
         encode_plaintext_for_storage,
         migrate_plaintext_storage_rows,
@@ -49,7 +49,8 @@ def test_plaintext_storage_migration_encrypts_legacy_rows():
 @pytest.mark.security
 def test_executor_import_stores_plaintext_encrypted_at_rest(tmp_path):
     from hashcrush.executor.service import LocalExecutorService
-    from hashcrush.utils.utils import decode_plaintext_from_storage, get_md5_hash
+    from hashcrush.utils.file_ops import get_md5_hash
+    from hashcrush.utils.secret_storage import decode_plaintext_from_storage
 
     app = _build_app()
     with app.app_context():
@@ -118,7 +119,8 @@ def test_executor_import_stores_plaintext_encrypted_at_rest(tmp_path):
 @pytest.mark.security
 def test_executor_import_decodes_hashcat_autohex_plaintext(tmp_path):
     from hashcrush.executor.service import LocalExecutorService
-    from hashcrush.utils.utils import decode_plaintext_from_storage, get_md5_hash
+    from hashcrush.utils.file_ops import get_md5_hash
+    from hashcrush.utils.secret_storage import decode_plaintext_from_storage
 
     app = _build_app()
     with app.app_context():
@@ -189,7 +191,8 @@ def test_executor_import_decodes_hashcat_autohex_plaintext(tmp_path):
 @pytest.mark.security
 def test_executor_import_decodes_plain_hex_plaintext(tmp_path):
     from hashcrush.executor.service import LocalExecutorService
-    from hashcrush.utils.utils import decode_plaintext_from_storage, get_md5_hash
+    from hashcrush.utils.file_ops import get_md5_hash
+    from hashcrush.utils.secret_storage import decode_plaintext_from_storage
 
     app = _build_app()
     with app.app_context():
@@ -260,7 +263,7 @@ def test_executor_import_decodes_plain_hex_plaintext(tmp_path):
 @pytest.mark.security
 def test_build_hashcat_argv_disables_outfile_autohex(tmp_path):
     from hashcrush.executor.hashcat_command import build_hashcat_argv
-    from hashcrush.utils.utils import get_md5_hash
+    from hashcrush.utils.file_ops import get_md5_hash
 
     app = _build_app({"RUNTIME_PATH": str(tmp_path)})
     with app.app_context():
@@ -316,7 +319,7 @@ def test_build_hashcat_argv_disables_outfile_autohex(tmp_path):
 @pytest.mark.security
 def test_executor_pauses_job_task_when_wordlist_file_is_missing(tmp_path):
     from hashcrush.executor.service import LocalExecutorService
-    from hashcrush.utils.utils import get_md5_hash
+    from hashcrush.utils.file_ops import get_md5_hash
 
     app = _build_app({"RUNTIME_PATH": str(tmp_path / "runtime")})
     with app.app_context():
@@ -464,7 +467,7 @@ def test_executor_ownership_lock_allows_only_one_active_owner(monkeypatch):
 @pytest.mark.security
 def test_executor_import_refreshes_dynamic_wordlists_when_new_plaintexts_are_found(tmp_path):
     from hashcrush.executor.service import LocalExecutorService
-    from hashcrush.utils.utils import get_md5_hash
+    from hashcrush.utils.file_ops import get_md5_hash
 
     app = _build_app(
         {
@@ -547,7 +550,8 @@ def test_executor_import_refreshes_dynamic_wordlists_when_new_plaintexts_are_fou
 @pytest.mark.security
 def test_executor_canceled_flow_imports_recovered_hashes(tmp_path, monkeypatch):
     from hashcrush.executor.service import ActiveTask, LocalExecutorService
-    from hashcrush.utils.utils import decode_plaintext_from_storage, get_md5_hash
+    from hashcrush.utils.file_ops import get_md5_hash
+    from hashcrush.utils.secret_storage import decode_plaintext_from_storage
 
     class _DoneProcess:
         def __init__(self):
@@ -641,7 +645,8 @@ def test_executor_canceled_flow_imports_recovered_hashes(tmp_path, monkeypatch):
 @pytest.mark.security
 def test_recover_orphaned_tasks_imports_crackfile_before_requeue(tmp_path):
     from hashcrush.executor.service import LocalExecutorService
-    from hashcrush.utils.utils import decode_plaintext_from_storage, get_md5_hash
+    from hashcrush.utils.file_ops import get_md5_hash
+    from hashcrush.utils.secret_storage import decode_plaintext_from_storage
 
     app = _build_app({"RUNTIME_PATH": str(tmp_path)})
     with app.app_context():
@@ -712,7 +717,8 @@ def test_recover_orphaned_tasks_imports_crackfile_before_requeue(tmp_path):
 @pytest.mark.security
 def test_executor_running_checkpoint_imports_cracks(tmp_path):
     from hashcrush.executor.service import ActiveTask, LocalExecutorService
-    from hashcrush.utils.utils import decode_plaintext_from_storage, get_md5_hash
+    from hashcrush.utils.file_ops import get_md5_hash
+    from hashcrush.utils.secret_storage import decode_plaintext_from_storage
 
     class _RunningProcess:
         returncode = None
@@ -857,7 +863,8 @@ def test_hashcat_exit_code_one_without_completion_signal_is_failure():
 @pytest.mark.security
 def test_recover_orphaned_paused_task_cleans_stale_pid_and_keeps_status(tmp_path):
     from hashcrush.executor.service import LocalExecutorService
-    from hashcrush.utils.utils import decode_plaintext_from_storage, get_md5_hash
+    from hashcrush.utils.file_ops import get_md5_hash
+    from hashcrush.utils.secret_storage import decode_plaintext_from_storage
 
     app = _build_app({"RUNTIME_PATH": str(tmp_path)})
     with app.app_context():

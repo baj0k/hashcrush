@@ -654,7 +654,7 @@ def test_domains_delete_blocks_when_active_jobs_exist():
 
 @pytest.mark.security
 def test_domains_delete_blocks_when_hashfiles_or_inactive_jobs_still_reference_domain():
-    from hashcrush.utils.utils import get_md5_hash
+    from hashcrush.utils.file_ops import get_md5_hash
 
     app = _build_app()
     with app.app_context():

@@ -6,7 +6,7 @@ from collections.abc import Iterable, Sequence
 
 from sqlalchemy import delete, select
 
-from hashcrush.crypto_utils import blind_index
+from hashcrush.utils.crypto import blind_index
 from hashcrush.models import HashSearchTokens, Hashes, HashfileHashSearchTokens, HashfileHashes, db
 from hashcrush.utils.secret_storage import (
     decode_ciphertext_from_storage,

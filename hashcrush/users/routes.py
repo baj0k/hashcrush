@@ -27,7 +27,7 @@ from sqlalchemy.exc import IntegrityError
 from hashcrush.audit import record_audit_event
 from hashcrush.models import AuthThrottle, Jobs, Users, db
 from hashcrush.users.forms import LoginForm, ProfileForm, UsersForm
-from hashcrush.view_utils import safe_relative_url
+from hashcrush.utils.views import safe_relative_url
 
 bcrypt = Bcrypt()
 

@@ -22,7 +22,7 @@ from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Rules, TaskGroups, Tasks, Wordlists, db
 from hashcrush.task_groups.forms import TaskGroupsForm
 from hashcrush.tasks.sorting import sort_tasks_naturally
-from hashcrush.view_utils import safe_relative_url
+from hashcrush.utils.views import safe_relative_url
 
 task_groups = Blueprint("task_groups", __name__)
 

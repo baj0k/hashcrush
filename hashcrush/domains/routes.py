@@ -25,7 +25,7 @@ from hashcrush.models import (
     JobTasks,
     db,
 )
-from hashcrush.view_utils import (
+from hashcrush.utils.views import (
     LIST_PAGE_SIZE,
     paginate_scalars,
     parse_page_arg,

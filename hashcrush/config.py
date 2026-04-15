@@ -8,7 +8,7 @@ from configparser import ConfigParser
 
 from sqlalchemy.engine import URL
 
-from hashcrush.paths import get_config_template_path, get_default_config_path
+from hashcrush.utils.paths import get_config_template_path, get_default_config_path
 
 
 def sanitize_config_input(value: str | None) -> str:

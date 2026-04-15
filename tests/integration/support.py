@@ -18,7 +18,7 @@ from hashcrush.domains.service import (
     extract_domain_name_from_username,
     get_or_create_domain_by_name,
 )
-from hashcrush.forms_utils import normalize_text_input
+from hashcrush.utils.forms import normalize_text_input
 from hashcrush.models import (
     AuditLog,
     Domains,
@@ -42,7 +42,14 @@ from hashcrush.searches.token_index import (
     sync_hashfile_hash_search_tokens,
 )
 from hashcrush.users.routes import bcrypt
-from hashcrush.utils.utils import (
+from hashcrush.hashfiles.validation import (
+    import_hashfilehashes,
+    validate_hash_only_hashfile,
+    validate_netntlm_hashfile,
+    validate_user_hash_hashfile,
+)
+from hashcrush.utils.file_ops import get_linecount
+from hashcrush.utils.secret_storage import (
     decode_ciphertext_from_storage,
     decode_username_from_storage,
     encode_ciphertext_for_storage,
@@ -50,13 +57,8 @@ from hashcrush.utils.utils import (
     encode_username_for_storage,
     get_account_identity_digest,
     get_ciphertext_search_digest,
-    get_linecount,
     get_plaintext_search_digest,
     get_username_search_digest,
-    import_hashfilehashes,
-    validate_hash_only_hashfile,
-    validate_netntlm_hashfile,
-    validate_user_hash_hashfile,
 )
 from tests.db_runtime import (
     create_managed_postgres_database,

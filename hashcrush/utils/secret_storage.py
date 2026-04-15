@@ -6,13 +6,13 @@ import re
 
 from sqlalchemy import select
 
-from hashcrush.crypto_utils import (
+from hashcrush.utils.crypto import (
     blind_index,
     decrypt_secret_value,
     encrypt_secret_value,
     is_encrypted_storage_value,
 )
-from hashcrush.forms_utils import normalize_text_input
+from hashcrush.utils.forms import normalize_text_input
 from hashcrush.models import Hashes, HashfileHashes, db
 
 _PLAINTEXT_HEX_PATTERN = re.compile(r"^[0-9a-f]+$")

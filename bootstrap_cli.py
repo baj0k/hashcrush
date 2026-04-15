@@ -10,8 +10,8 @@ from getpass import getpass
 
 from sqlalchemy import select
 
-from hashcrush.crypto_utils import generate_data_encryption_key
-from hashcrush.paths import (
+from hashcrush.utils.crypto import generate_data_encryption_key
+from hashcrush.utils.paths import (
     get_default_config_path,
     get_default_test_env_path,
 )
@@ -655,7 +655,8 @@ def _seed_test_environment(
     )
     from hashcrush.setup import add_default_tasks, default_tasks_need_added
     from hashcrush.users.routes import bcrypt
-    from hashcrush.utils.utils import get_filehash, get_linecount, import_hashfilehashes
+    from hashcrush.hashfiles.validation import import_hashfilehashes
+    from hashcrush.utils.file_ops import get_filehash, get_linecount
 
     seed_app = _build_seed_app()
     fixture_root = os.path.join(runtime_path, "e2e-fixtures")

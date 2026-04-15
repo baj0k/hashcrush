@@ -238,7 +238,7 @@ def test_postgres_backup_restore_roundtrip(tmp_path):
 
     with restored_app.app_context():
         from hashcrush.db_upgrade import CURRENT_SCHEMA_VERSION
-        from hashcrush.utils.utils import (
+        from hashcrush.utils.secret_storage import (
             decode_ciphertext_from_storage,
             decode_plaintext_from_storage,
             decode_username_from_storage,

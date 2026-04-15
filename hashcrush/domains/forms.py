@@ -5,7 +5,7 @@ from sqlalchemy import select
 from wtforms import StringField, SubmitField
 from wtforms.validators import DataRequired, Length, ValidationError
 
-from hashcrush.forms_utils import normalize_text_input
+from hashcrush.utils.forms import normalize_text_input
 from hashcrush.models import Domains, db
 
 

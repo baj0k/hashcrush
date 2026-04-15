@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from hashcrush import paths
+from hashcrush.utils import paths
 
 
 def test_get_default_config_path_prefers_explicit_env(monkeypatch):

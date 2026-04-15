@@ -3,7 +3,7 @@
 from wtforms import StringField, SubmitField
 from wtforms.validators import DataRequired
 
-from hashcrush.forms_utils import normalize_text_input
+from hashcrush.utils.forms import normalize_text_input
 from hashcrush.jobs.forms import JobsNewHashFileForm
 
 

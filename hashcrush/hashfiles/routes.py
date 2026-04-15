@@ -30,7 +30,7 @@ from hashcrush.hashfiles.service import create_hashfile_from_form
 from hashcrush.models import Domains, Hashes, HashfileHashes, Hashfiles, Jobs, db
 from hashcrush.utils.file_ops import save_file
 from hashcrush.utils.storage_paths import get_runtime_subdir
-from hashcrush.view_utils import LIST_PAGE_SIZE, paginate_scalars, parse_page_arg, safe_relative_url
+from hashcrush.utils.views import LIST_PAGE_SIZE, paginate_scalars, parse_page_arg, safe_relative_url
 
 hashfiles = Blueprint('hashfiles', __name__)
 

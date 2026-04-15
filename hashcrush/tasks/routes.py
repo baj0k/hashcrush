@@ -12,7 +12,7 @@ from hashcrush.models import JobTasks, Jobs, Rules, TaskGroups, Tasks, Wordlists
 from hashcrush.tasks.forms import TasksForm
 from hashcrush.tasks.sorting import sort_tasks_naturally
 from hashcrush.utils.formatting import parse_positive_int as _parse_positive_int
-from hashcrush.view_utils import append_query_params, safe_relative_url
+from hashcrush.utils.views import append_query_params, safe_relative_url
 
 tasks = Blueprint('tasks', __name__)
 

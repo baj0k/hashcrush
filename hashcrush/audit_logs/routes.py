@@ -13,7 +13,7 @@ from flask_login import current_user, login_required
 from sqlalchemy import select
 
 from hashcrush.models import AuditLog, db
-from hashcrush.view_utils import paginate_scalars, parse_page_arg
+from hashcrush.utils.views import paginate_scalars, parse_page_arg
 
 audit_logs = Blueprint("audit_logs", __name__)
 AUDIT_PAGE_SIZE = 50

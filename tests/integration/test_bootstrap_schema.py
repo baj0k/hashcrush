@@ -410,7 +410,7 @@ def test_hashcrush_cli_worker_refuses_missing_runtime_bootstrap_state(
 
 @pytest.mark.security
 def test_import_hash_only_normalizes_string_hash_type_before_db_lookup():
-    from hashcrush.utils.utils import import_hash_only
+    from hashcrush.hashfiles.validation import import_hash_only
 
     app = _build_app()
     with app.app_context():
@@ -1441,7 +1441,7 @@ def test_hashfile_validator_rejects_too_many_lines(tmp_path):
 
 @pytest.mark.security
 def test_pwdump_validator_accepts_impacket_secretsdump_sample(tmp_path):
-    from hashcrush.utils.utils import validate_pwdump_hashfile
+    from hashcrush.hashfiles.validation import validate_pwdump_hashfile
 
     app = _build_app()
     with app.app_context():

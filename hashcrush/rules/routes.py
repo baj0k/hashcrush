@@ -16,7 +16,7 @@ from hashcrush.utils.file_ops import (
     save_file,
 )
 from hashcrush.utils.storage_paths import get_storage_subdir
-from hashcrush.view_utils import append_query_params, safe_relative_url
+from hashcrush.utils.views import append_query_params, safe_relative_url
 
 rules = Blueprint('rules', __name__)
 

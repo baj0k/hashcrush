@@ -31,7 +31,7 @@ from hashcrush.searches.export_service import (
 )
 from hashcrush.utils.file_ops import analyze_text_file
 from hashcrush.utils.storage_paths import get_storage_subdir
-from hashcrush.view_utils import append_query_params
+from hashcrush.utils.views import append_query_params
 from hashcrush.wordlists.service import (
     create_static_wordlist_from_path,
     remove_managed_wordlist_file,

@@ -55,7 +55,7 @@ def _load_bootstrap_cli():
 
 
 def _config_path() -> Path:
-    from hashcrush.paths import get_default_config_path
+    from hashcrush.utils.paths import get_default_config_path
 
     return get_default_config_path()
 
@@ -97,7 +97,7 @@ def _ensure_upgrade_data_encryption_key() -> bool:
     if configured_key:
         return False
 
-    from hashcrush.crypto_utils import generate_data_encryption_key
+    from hashcrush.utils.crypto import generate_data_encryption_key
 
     if not parser.has_section("app"):
         parser.add_section("app")
@@ -509,7 +509,7 @@ def _run_upgrade(parsed_args: argparse.Namespace) -> int:
     )
     with app.app_context():
         from hashcrush.db_upgrade import upgrade_database
-        from hashcrush.utils.utils import migrate_sensitive_storage_rows
+        from hashcrush.utils.secret_storage import migrate_sensitive_storage_rows
 
         result = upgrade_database(dry_run=parsed_args.dry_run)
         migrated_rows = 0

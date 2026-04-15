@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import exists, func, or_, select
 
-from hashcrush.forms_utils import normalize_text_input
+from hashcrush.utils.forms import normalize_text_input
 from hashcrush.models import Domains, HashfileHashes, Hashfiles, Jobs, db
 
 
