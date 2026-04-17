@@ -1,5 +1,4 @@
 """Flask routes to handle Rules."""
-import os
 
 from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
@@ -10,12 +9,14 @@ from hashcrush.audit import capture_audit_actor, record_audit_event
 from hashcrush.authz import admin_required_redirect
 from hashcrush.models import Rules, Tasks, db
 from hashcrush.rules.forms import RulesForm
-from hashcrush.tasks.sorting import sort_tasks_naturally
-from hashcrush.utils.file_ops import (
-    analyze_text_file,
-    save_file,
+from hashcrush.rules.service import (
+    create_rule_from_path,
+    derive_rule_name,
+    get_external_rule_root,
+    list_external_rule_files,
+    validate_external_rule_path,
 )
-from hashcrush.utils.storage_paths import get_storage_subdir
+from hashcrush.tasks.sorting import sort_tasks_naturally
 from hashcrush.utils.views import append_query_params, safe_relative_url
 
 rules = Blueprint('rules', __name__)
@@ -35,11 +36,19 @@ def _async_operation_response(operation):
 
 
 def _render_rules_add_form(form, next_url: str | None = None):
+    external_rule_files = list_external_rule_files()
+    selected_external_path = (form.external_path.data or "").strip()
+    if not selected_external_path and len(external_rule_files) == 1:
+        selected_external_path = external_rule_files[0]
+        form.external_path.data = selected_external_path
     return render_template(
         'rules_add.html',
-        title='Rules Add',
+        title='Add Rule',
         form=form,
         next_url=next_url or url_for('rules.rules_list'),
+        external_root=get_external_rule_root(),
+        external_rule_files=external_rule_files,
+        selected_external_path=selected_external_path,
     )
 
 
@@ -52,37 +61,6 @@ def _rule_redirect_target(
     if not next_url:
         return fallback_url
     return append_query_params(next_url, selected_rule_id=rule_id)
-
-
-def _managed_rules_dir() -> str:
-    path = get_storage_subdir('rules')
-    os.makedirs(path, exist_ok=True)
-    return path
-
-
-def _remove_managed_rule_file(stored_path: str) -> None:
-    resolved_path = os.path.abspath(stored_path)
-    managed_root = os.path.abspath(_managed_rules_dir())
-    try:
-        if os.path.commonpath([resolved_path, managed_root]) != managed_root:
-            return
-    except ValueError:
-        return
-    if os.path.isfile(resolved_path):
-        try:
-            os.remove(resolved_path)
-        except OSError:
-            pass
-
-
-def _derive_rule_name(form_name: str | None, uploaded_filename: str | None) -> str:
-    preferred = (form_name or '').strip()
-    if preferred:
-        return preferred
-    filename = os.path.basename(uploaded_filename or '').strip()
-    if not filename:
-        return ''
-    return os.path.splitext(filename)[0]
 
 
 def _rule_detail_context(rule: Rules) -> dict[str, object]:
@@ -98,11 +76,6 @@ def _rule_detail_context(rule: Rules) -> dict[str, object]:
             'tasks': len(associated_tasks),
         },
     }
-
-
-#############################################
-# Rules
-#############################################
 
 
 @rules.route("/rules", methods=['GET'])
@@ -135,7 +108,7 @@ def rules_detail(rule_id):
 @login_required
 @admin_required_redirect('rules.rules_list')
 def rules_add():
-    """Upload a shared rule file."""
+    """Register a mounted rule file."""
     form = RulesForm()
     fallback_url = url_for('rules.rules_list')
     next_url = safe_relative_url(
@@ -145,21 +118,18 @@ def rules_add():
     )
 
     if form.validate_on_submit():
-        uploaded_file = form.upload.data
-        if not uploaded_file or not getattr(uploaded_file, 'filename', ''):
-            flash('Select a rule file to upload.', 'danger')
+        rule_path, error_message = validate_external_rule_path(form.external_path.data)
+        if error_message:
+            flash(error_message, 'danger')
             return _render_rules_add_form(form, next_url)
-        if not uploaded_file.filename.lower().endswith('.rule'):
-            flash('Rule uploads must use the .rule extension.', 'danger')
-            return _render_rules_add_form(form, next_url)
+        rule_name = derive_rule_name(form.name.data, rule_path)
 
-        rule_name = _derive_rule_name(form.name.data, uploaded_file.filename)
         if not rule_name:
             flash('Rule name is required.', 'danger')
             return _render_rules_add_form(form, next_url)
         existing_rule = db.session.scalar(select(Rules).filter_by(name=rule_name))
         if existing_rule:
-            flash('Rules name is already registered.', 'warning')
+            flash('Rule name is already registered.', 'warning')
             return redirect(
                 _rule_redirect_target(
                     next_url,
@@ -168,12 +138,9 @@ def rules_add():
                 )
             )
 
-        rules_path = save_file(_managed_rules_dir(), uploaded_file)
-        rules_path = os.path.abspath(rules_path)
-        existing_rule = db.session.scalar(select(Rules).filter_by(path=rules_path))
+        existing_rule = db.session.scalar(select(Rules).filter_by(path=rule_path))
         if existing_rule:
-            _remove_managed_rule_file(rules_path)
-            flash('Rules file is already registered.', 'warning')
+            flash('Rule file is already registered.', 'warning')
             return redirect(
                 _rule_redirect_target(
                     next_url,
@@ -185,14 +152,14 @@ def rules_add():
         if _is_async_upload_request():
             operation = current_app.extensions['upload_operations'].start_operation(
                 owner_user_id=getattr(current_user, 'id', None),
-                operation_type='rule_upload',
+                operation_type='rule_external_register',
                 redirect_url=_rule_redirect_target(
                     next_url,
                     fallback_url=fallback_url,
                 ),
                 payload={
                     'rule_name': rule_name,
-                    'rules_path': rules_path,
+                    'rule_path': rule_path,
                     'audit_actor': capture_audit_actor(),
                     'redirect_url': next_url,
                     'fallback_url': fallback_url,
@@ -200,33 +167,34 @@ def rules_add():
             )
             return _async_operation_response(operation)
 
-        file_analysis = analyze_text_file(rules_path)
-        rule = Rules(
-            name=rule_name,
-            path=rules_path,
-            size=file_analysis.line_count,
-            checksum=file_analysis.checksum,
-        )
-        db.session.add(rule)
         try:
-            db.session.commit()
+            rule = create_rule_from_path(rule_name, rule_path)
         except IntegrityError:
             db.session.rollback()
-            _remove_managed_rule_file(rules_path)
-            flash('Rule file could not be uploaded because that name or file already exists. Refresh and retry.', 'danger')
+            flash('Rule could not be saved because that name or file already exists. Refresh and retry.', 'danger')
+            return _render_rules_add_form(form, next_url)
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception(
+                'Failed creating shared rule %s from %s',
+                rule_name,
+                rule_path,
+            )
+            flash('The server hit an unexpected error while processing the rule.', 'danger')
             return _render_rules_add_form(form, next_url)
         record_audit_event(
             'rule.create',
             'rule',
             target_id=rule.id,
-            summary=f'Uploaded shared rule "{rule.name}".',
+            summary=f'Registered external shared rule "{rule.name}".',
             details={
                 'rule_name': rule.name,
                 'path': rule.path,
+                'source': 'external',
                 'size': rule.size,
             },
         )
-        flash('Rule file uploaded!', 'success')
+        flash('Rule registered!', 'success')
         return redirect(
             _rule_redirect_target(
                 next_url,
@@ -259,7 +227,6 @@ def rules_delete(rule_id):
             db.session.rollback()
             flash('Rule file is currently used in a task or changed concurrently and cannot be deleted.', 'danger')
             return redirect(next_url or url_for('rules.rules_list'))
-        _remove_managed_rule_file(deleted_rule_path)
         record_audit_event(
             'rule.delete',
             'rule',

@@ -1,13 +1,13 @@
 {% extends "layout.html" %}
 {% block header %}
 <div class="hc-page-header">
-    <h1>Upload Rule</h1>
-    <p class="text-muted">Upload a shared Hashcat rule file. Supported format: <code>.rule</code>.</p>
+    <h1>Add Rule</h1>
+    <p class="text-muted">Register a mounted read-only Hashcat rule file.</p>
 </div>
 {% endblock header %}
 {% block content %}
 <div class="content-section">
-    <form method="POST" action="" enctype="multipart/form-data" data-upload-progress-form="true">
+    <form method="POST" action="" data-upload-progress-form="true" data-upload-progress-no-file="true">
         {{ form.hidden_tag() }}
         <input type="hidden" name="next" value="{{ next_url }}">
         <fieldset class="form-group">
@@ -23,28 +23,52 @@
                 {% else %}
                     {{ form.name(class="form-control form-control-lg") }}
                 {% endif %}
-                <small class="text-muted d-block">Optional. If left blank, the uploaded filename will be used.</small>
+                <small class="text-muted d-block">Optional. If left blank, the selected filename will be used.</small>
             </div>
             <div class="form-group">
-                {{ form.upload.label(class="form-control-label") }}
-                {{ form.upload(class="hc-file-input hc-file-input--wide") }}
-                <small class="text-muted d-block">Upload a <code>.rule</code> file.</small>
-                {% if form.upload.errors %}
-                    {% for error in form.upload.errors %}
-                        <span class="text-danger d-block">{{ error }}</span>
-                    {% endfor %}
+                {{ form.external_path.label(class="form-control-label") }}
+                {% if external_rule_files %}
+                    <select id="{{ form.external_path.id }}" name="{{ form.external_path.name }}" class="form-control form-control-lg{% if form.external_path.errors %} is-invalid{% endif %}">
+                        {% if external_rule_files|length != 1 %}
+                        <option value="">Choose a mounted rule file</option>
+                        {% endif %}
+                        {% for mounted_path in external_rule_files %}
+                        <option value="{{ mounted_path }}" {% if mounted_path == selected_external_path %}selected{% endif %}>{{ mounted_path }}</option>
+                        {% endfor %}
+                    </select>
+                    {% if form.external_path.errors %}
+                        <div class="invalid-feedback">
+                            {% for error in form.external_path.errors %}
+                                <span>{{ error }}</span>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                {% else %}
+                    {{ form.external_path(class="form-control form-control-lg", placeholder=(external_root ~ "/example.rule") if external_root else "/mnt/hashcrush-rules/example.rule") }}
+                    <small class="text-muted d-block">
+                        No cached readable files were found under <code>{{ external_root }}</code>. You can still enter a mounted path manually or use <a href="{{ url_for('settings.settings_list') }}#nav-data">Settings</a> to rescan mounted folders.
+                    </small>
                 {% endif %}
+                <small class="text-muted d-block">
+                    {% if external_root %}
+                    Allowed path prefix: <code>{{ external_root }}</code>
+                    {% endif %}
+                </small>
+            </div>
+            <div class="alert alert-light border">
+                <strong>Mounted-file mode</strong>
+                <div class="mt-2">HashCrush stores the container path and reads the file in place. Deleting the rule here only unregisters it from the app; it does not remove the mounted file from disk.</div>
             </div>
         </fieldset>
         <div class="hc-upload-status hc-hidden" data-upload-status aria-live="polite">
             <div class="hc-upload-status-header">
-                <span class="hc-upload-status-title" data-upload-status-title>Uploading file...</span>
+                <span class="hc-upload-status-title" data-upload-status-title>Processing rule...</span>
                 <span class="hc-upload-status-detail" data-upload-status-detail>Waiting to start.</span>
             </div>
             <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
                 <div class="progress-bar" data-upload-progress-bar style="width: 0%" aria-valuenow="0">0%</div>
             </div>
-            <small class="text-muted d-block mt-2">Large file uploads continue processing after the browser finishes sending the file.</small>
+            <small class="text-muted d-block mt-2">Large mounted-file scans continue processing after you move to another page.</small>
         </div>
         <div class="hc-form-actions">
             <a class="btn btn-secondary" href="{{ next_url }}">Back</a>

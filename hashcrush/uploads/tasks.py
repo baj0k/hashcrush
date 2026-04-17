@@ -8,7 +8,6 @@ import os
 
 from flask import current_app
 import lmdb
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from hashcrush.audit import record_audit_event
@@ -19,7 +18,7 @@ from hashcrush.hibp.service import (
     scan_all_ntlm_hashes_against_hibp_dataset,
     scan_hashfile_against_hibp_dataset,
 )
-from hashcrush.models import Domains, Jobs, Rules, Wordlists, db
+from hashcrush.models import Domains, Jobs, db
 from hashcrush.searches.export_service import (
     SEARCH_DOMAIN_EXPORT_OPERATION_TYPE,
     count_domain_export_rows,
@@ -29,13 +28,9 @@ from hashcrush.searches.export_service import (
     remove_domain_export_artifact,
     write_search_export_row,
 )
-from hashcrush.utils.file_ops import analyze_text_file
-from hashcrush.utils.storage_paths import get_storage_subdir
+from hashcrush.rules.service import create_rule_from_path
 from hashcrush.utils.views import append_query_params
-from hashcrush.wordlists.service import (
-    create_static_wordlist_from_path,
-    remove_managed_wordlist_file,
-)
+from hashcrush.wordlists.service import create_static_wordlist_from_path
 
 
 def _format_progress_bytes(size_bytes: int) -> str:
@@ -272,26 +267,6 @@ def _maybe_scan_hashfile_public_exposure(
     return []
 
 
-def _managed_rules_dir() -> str:
-    path = get_storage_subdir("rules")
-    os.makedirs(path, exist_ok=True)
-    return path
-
-
-def _remove_managed_file(stored_path: str, managed_root: str) -> None:
-    resolved_path = os.path.abspath(stored_path)
-    normalized_root = os.path.abspath(managed_root)
-    try:
-        if os.path.commonpath([resolved_path, normalized_root]) != normalized_root:
-            return
-    except ValueError:
-        return
-    if os.path.isfile(resolved_path):
-        try:
-            os.remove(resolved_path)
-        except OSError:
-            pass
-
 
 def _remove_staged_hashfile_file(staged_path: str) -> None:
     if staged_path and os.path.isfile(staged_path):
@@ -324,80 +299,6 @@ def _rule_redirect_target(
         return fallback_url
     return append_query_params(next_url, selected_rule_id=rule_id)
 
-
-def _process_wordlist_upload(payload: dict[str, object], reporter) -> None:
-    wordlist_name = str(payload.get("wordlist_name") or "").strip()
-    wordlist_path = os.path.abspath(str(payload.get("wordlist_path") or "").strip())
-    redirect_url = str(payload.get("redirect_url") or "").strip() or None
-    fallback_url = str(payload.get("fallback_url") or "/wordlists").strip()
-    audit_actor = payload.get("audit_actor")
-
-    try:
-        reporter.update(
-            percent=5,
-            title="Processing wordlist...",
-            detail="Analyzing the uploaded wordlist.",
-        )
-        wordlist = create_static_wordlist_from_path(
-            wordlist_name,
-            wordlist_path,
-            progress_callback=_make_stage_progress_callback(
-                reporter,
-                title="Processing wordlist...",
-                detail="Reading the uploaded wordlist and counting entries.",
-                start_percent=5,
-                end_percent=92,
-            ),
-        )
-    except IntegrityError:
-        db.session.rollback()
-        remove_managed_wordlist_file(wordlist_path)
-        reporter.fail(
-            title="Wordlist upload failed.",
-            detail=(
-                "Wordlist could not be uploaded because that name or file already "
-                "exists. Refresh and retry."
-            ),
-        )
-        return
-    except Exception:
-        db.session.rollback()
-        remove_managed_wordlist_file(wordlist_path)
-        current_app.logger.exception(
-            "Failed processing queued wordlist upload for %s", wordlist_name
-        )
-        reporter.fail(
-            title="Wordlist upload failed.",
-            detail=(
-                "The server hit an unexpected error while processing the wordlist."
-            ),
-        )
-        return
-
-    record_audit_event(
-        "wordlist.create",
-        "wordlist",
-        target_id=wordlist.id,
-        summary=f'Uploaded shared wordlist "{wordlist.name}".',
-        details={
-            "wordlist_name": wordlist.name,
-            "path": wordlist.path,
-            "type": wordlist.type,
-            "source": "managed",
-            "size": wordlist.size,
-        },
-        actor=audit_actor if isinstance(audit_actor, dict) else None,
-    )
-    reporter.complete(
-        title="Wordlist ready.",
-        detail=f'Shared wordlist "{wordlist.name}" is available.',
-        redirect_url=_wordlist_redirect_target(
-            redirect_url,
-            fallback_url=fallback_url,
-            wordlist_id=wordlist.id,
-        ),
-        completion_flashes=[("success", "Wordlist uploaded!")],
-    )
 
 
 def _process_wordlist_external_register(payload: dict[str, object], reporter) -> None:
@@ -479,26 +380,26 @@ def _process_wordlist_external_register(payload: dict[str, object], reporter) ->
     )
 
 
-def _process_rule_upload(payload: dict[str, object], reporter) -> None:
+def _process_rule_external_register(payload: dict[str, object], reporter) -> None:
     rule_name = str(payload.get("rule_name") or "").strip()
-    rules_path = os.path.abspath(str(payload.get("rules_path") or "").strip())
+    rule_path = os.path.abspath(str(payload.get("rule_path") or "").strip())
     redirect_url = str(payload.get("redirect_url") or "").strip() or None
     fallback_url = str(payload.get("fallback_url") or "/rules").strip()
     audit_actor = payload.get("audit_actor")
-    managed_root = _managed_rules_dir()
 
     try:
         reporter.update(
             percent=5,
-            title="Processing rule...",
-            detail="Analyzing the uploaded rule file.",
+            title="Scanning mounted rule...",
+            detail="Reading the mounted rule file and collecting metadata.",
         )
-        file_analysis = analyze_text_file(
-            rules_path,
+        rule = create_rule_from_path(
+            rule_name,
+            rule_path,
             progress_callback=_make_stage_progress_callback(
                 reporter,
-                title="Processing rule...",
-                detail="Reading the uploaded rule file and counting entries.",
+                title="Scanning mounted rule...",
+                detail="Reading the mounted rule file and collecting metadata.",
                 start_percent=5,
                 end_percent=92,
             ),
@@ -506,37 +407,28 @@ def _process_rule_upload(payload: dict[str, object], reporter) -> None:
         reporter.update(
             percent=95,
             title="Saving rule...",
-            detail="Registering the rule file in the database.",
+            detail="Registering the mounted rule in the database.",
         )
-        rule = Rules(
-            name=rule_name,
-            path=rules_path,
-            size=file_analysis.line_count,
-            checksum=file_analysis.checksum,
-        )
-        db.session.add(rule)
-        db.session.commit()
     except IntegrityError:
         db.session.rollback()
-        _remove_managed_file(rules_path, managed_root)
         reporter.fail(
-            title="Rule upload failed.",
+            title="Mounted rule registration failed.",
             detail=(
-                "Rule file could not be uploaded because that name or file already "
-                "exists. Refresh and retry."
+                "Rule could not be registered because that name or path "
+                "already exists. Refresh and retry."
             ),
         )
         return
     except Exception:
         db.session.rollback()
-        _remove_managed_file(rules_path, managed_root)
         current_app.logger.exception(
-            "Failed processing queued rule upload for %s", rule_name
+            "Failed registering mounted rule %s", rule_name
         )
         reporter.fail(
-            title="Rule upload failed.",
+            title="Mounted rule registration failed.",
             detail=(
-                "The server hit an unexpected error while processing the rule file."
+                "The server hit an unexpected error while processing the mounted "
+                "rule."
             ),
         )
         return
@@ -545,23 +437,24 @@ def _process_rule_upload(payload: dict[str, object], reporter) -> None:
         "rule.create",
         "rule",
         target_id=rule.id,
-        summary=f'Uploaded shared rule "{rule.name}".',
+        summary=f'Registered external shared rule "{rule.name}".',
         details={
             "rule_name": rule.name,
             "path": rule.path,
+            "source": "external",
             "size": rule.size,
         },
         actor=audit_actor if isinstance(audit_actor, dict) else None,
     )
     reporter.complete(
-        title="Rule ready.",
+        title="Mounted rule ready.",
         detail=f'Shared rule "{rule.name}" is available.',
         redirect_url=_rule_redirect_target(
             redirect_url,
             fallback_url=fallback_url,
             rule_id=rule.id,
         ),
-        completion_flashes=[("success", "Rule file uploaded!")],
+        completion_flashes=[("success", "Rule registered!")],
     )
 
 
@@ -779,61 +672,6 @@ def _process_job_hashfile_upload(payload: dict[str, object], reporter) -> None:
         title="Hashfile ready.",
         detail=f'Shared hashfile "{hashfile.name}" was attached to job "{job_name}".',
         completion_flashes=flashes,
-    )
-
-
-def _process_hibp_ntlm_dataset_upload(payload: dict[str, object], reporter) -> None:
-    staged_dataset_path = os.path.abspath(
-        str(payload.get("staged_dataset_path") or "").strip()
-    )
-    version_label = str(payload.get("version_label") or "").strip() or None
-    source_filename = str(payload.get("source_filename") or "").strip() or None
-    audit_actor = payload.get("audit_actor")
-
-    try:
-        reporter.update(
-            percent=4,
-            title="Preparing offline dataset...",
-            detail="Checking the uploaded HIBP NTLM dataset before indexing.",
-        )
-        load_result = load_hibp_ntlm_dataset_from_source(
-            staged_dataset_path,
-            version_label=version_label,
-            source_filename=source_filename,
-            progress_callback=_make_hibp_dataset_progress_callback(reporter),
-            persist_source_copy=True,
-        )
-    except ValueError as exc:
-        db.session.rollback()
-        reporter.fail(
-            title="Offline dataset load failed.",
-            detail=str(exc),
-        )
-        return
-    except (lmdb.MapFullError, OSError, MemoryError) as exc:
-        db.session.rollback()
-        current_app.logger.exception("Failed processing queued offline HIBP dataset upload")
-        reporter.fail(
-            title="Offline dataset load failed.",
-            detail=_hibp_dataset_failure_detail(exc),
-        )
-        return
-    except Exception:
-        db.session.rollback()
-        current_app.logger.exception("Failed processing queued offline HIBP dataset upload")
-        reporter.fail(
-            title="Offline dataset load failed.",
-            detail="The server hit an unexpected error while processing the offline dataset.",
-        )
-        return
-    finally:
-        _remove_staged_hashfile_file(staged_dataset_path)
-
-    _complete_hibp_ntlm_dataset_load(
-        load_result,
-        reporter,
-        audit_actor=audit_actor,
-        load_method="upload",
     )
 
 
@@ -1111,23 +949,17 @@ def process_upload_operation(
         raise RuntimeError("Upload worker payload must be a JSON object.")
 
     normalized_type = str(operation_type or "").strip().lower()
-    if normalized_type == "wordlist_upload":
-        _process_wordlist_upload(payload, reporter)
-        return
     if normalized_type == "wordlist_external_register":
         _process_wordlist_external_register(payload, reporter)
         return
-    if normalized_type == "rule_upload":
-        _process_rule_upload(payload, reporter)
+    if normalized_type == "rule_external_register":
+        _process_rule_external_register(payload, reporter)
         return
     if normalized_type == "hashfile_upload":
         _process_hashfile_upload(payload, reporter)
         return
     if normalized_type == "job_hashfile_upload":
         _process_job_hashfile_upload(payload, reporter)
-        return
-    if normalized_type == "hibp_ntlm_dataset_upload":
-        _process_hibp_ntlm_dataset_upload(payload, reporter)
         return
     if normalized_type == "hibp_ntlm_dataset_register":
         _process_hibp_ntlm_dataset_register(payload, reporter)

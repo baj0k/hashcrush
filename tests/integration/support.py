@@ -102,15 +102,6 @@ def _load_cli_module():
     return module
 
 
-def _load_bootstrap_module():
-    project_root = Path(__file__).resolve().parents[2]
-    script_path = project_root / "bootstrap_cli.py"
-    spec = importlib.util.spec_from_file_location("hashcrush_bootstrap_script", script_path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(module)
-    return module
-
 
 def _seed_admin_user() -> Users:
     valid_password_hash = bcrypt.generate_password_hash("test-admin-password").decode(

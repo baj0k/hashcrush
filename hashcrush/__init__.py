@@ -63,8 +63,8 @@ def _validate_runtime_directories(
     for runtime_dir in runtime_dirs:
         if not os.path.isdir(runtime_dir):
             raise RuntimeError(
-                "Runtime directory is missing. Run `python3 ./hashcrush.py setup` "
-                f"or create it manually: {runtime_dir}"
+                f"Runtime directory is missing: {runtime_dir}. "
+                "Ensure the bootstrap container has run or create it manually."
             )
         if not os.access(runtime_dir, os.W_OK):
             raise RuntimeError(
@@ -86,8 +86,8 @@ def _validate_storage_directories(storage_root: str | None) -> None:
     for storage_dir in storage_dirs:
         if not os.path.isdir(storage_dir):
             raise RuntimeError(
-                "Persistent storage directory is missing. Run `python3 ./hashcrush.py setup` "
-                f"or create it manually: {storage_dir}"
+                f"Persistent storage directory is missing: {storage_dir}. "
+                "Ensure the bootstrap container has run or create it manually."
             )
         if not os.access(storage_dir, os.W_OK):
                 raise RuntimeError(
@@ -104,9 +104,8 @@ def _ensure_database_schema(app: Flask) -> None:
         schema_status = get_schema_status()
         if not schema_status["has_user_tables"]:
             raise RuntimeError(
-                "Database schema is uninitialized. Run `hashcrush.py setup` for a "
-                "destructive bootstrap or `hashcrush.py upgrade` to initialize the "
-                "tracked schema."
+                "Database schema is uninitialized. Ensure the bootstrap container "
+                "has run, or run `hashcrush.py upgrade` to initialize the tracked schema."
             )
         if not schema_status["tracked"]:
             raise RuntimeError(str(schema_status["detail"]))
@@ -231,6 +230,7 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
     )
     app.config.setdefault("STORAGE_PATH", os.path.join("/var", "lib", "hashcrush"))
     app.config.setdefault("EXTERNAL_WORDLISTS_PATH", "/mnt/hashcrush-wordlists")
+    app.config.setdefault("EXTERNAL_RULES_PATH", "/mnt/hashcrush-rules")
     app.config.setdefault("HIBP_DATASETS_PATH", "/mnt/hashcrush-hibp")
     app.config.setdefault("UPLOAD_OPERATION_RETENTION_SECONDS", 3600)
     app.config.setdefault("UPLOAD_OPERATION_LEASE_SECONDS", 300)
@@ -277,6 +277,15 @@ def create_app(testing: bool = False, config_overrides: dict | None = None):
 
     if (not app.config.get("TESTING")) and (not app.config.get("SKIP_RUNTIME_BOOTSTRAP")):
         _ensure_database_schema(app)
+
+        with app.app_context():
+            from hashcrush.wordlists.service import rescan_external_wordlist_files
+            from hashcrush.rules.service import rescan_external_rule_files
+            from hashcrush.hibp.service import rescan_mounted_hibp_ntlm_dataset_files
+
+            rescan_external_wordlist_files()
+            rescan_external_rule_files()
+            rescan_mounted_hibp_ntlm_dataset_files()
 
     csrf = CSRFProtect()
     csrf.init_app(app)

@@ -857,7 +857,7 @@ def _unsupported_legacy_schema_message() -> str:
     return (
         "Detected a non-empty database without schema version tracking. "
         "In-place upgrades are supported only for tracked schemas created from this "
-        "release onward. Rebuild with `hashcrush.py setup` or migrate the database "
+        "release onward. Rebuild the database or migrate it "
         "manually before using `hashcrush.py upgrade`."
     )
 
@@ -940,8 +940,8 @@ def get_schema_status() -> dict[str, object]:
         else:
             mode = "Uninitialized schema"
             detail = (
-                "Run `hashcrush.py setup` for a destructive bootstrap or "
-                "`hashcrush.py upgrade` to initialize the tracked schema."
+                "Run `hashcrush.py upgrade` to initialize the tracked schema, "
+                "or re-run the bootstrap container."
             )
     else:
         mode = f"Managed upgrades (schema {current_version}/{CURRENT_SCHEMA_VERSION})"

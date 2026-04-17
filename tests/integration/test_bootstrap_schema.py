@@ -1,8 +1,7 @@
-"""Integration tests for CLI bootstrap, setup, schema, and runtime bootstrap."""
+"""Integration tests for CLI bootstrap, schema, and runtime bootstrap."""
 # ruff: noqa: F403,F405
 import logging
 import ssl
-from pathlib import Path
 
 from sqlalchemy import text
 
@@ -32,38 +31,6 @@ def _build_sqlite_cli_app(tmp_path):
         },
     )
 
-
-@pytest.mark.security
-def test_cli_resolve_ssl_context_uses_configured_paths(tmp_path):
-    cli_module = _load_cli_module()
-    cert_path = tmp_path / "cert.pem"
-    key_path = tmp_path / "key.pem"
-    cert_path.write_text("certificate", encoding="utf-8")
-    key_path.write_text("private-key", encoding="utf-8")
-
-    class _App:
-        config = {
-            "SSL_CERT_PATH": str(cert_path),
-            "SSL_KEY_PATH": str(key_path),
-        }
-
-    resolved = cli_module._resolve_ssl_context(_App())
-    assert resolved == (str(cert_path.resolve()), str(key_path.resolve()))
-
-@pytest.mark.security
-def test_cli_resolve_ssl_context_rejects_missing_files(tmp_path):
-    cli_module = _load_cli_module()
-    missing_cert = tmp_path / "missing-cert.pem"
-    missing_key = tmp_path / "missing-key.pem"
-
-    class _App:
-        config = {
-            "SSL_CERT_PATH": str(missing_cert),
-            "SSL_KEY_PATH": str(missing_key),
-        }
-
-    with pytest.raises(RuntimeError, match="SSL certificate file not found"):
-        cli_module._resolve_ssl_context(_App())
 
 
 @pytest.mark.security
@@ -190,72 +157,6 @@ def test_validate_runtime_directories_uses_configured_runtime_root(tmp_path):
     _validate_runtime_directories(str(root_path), str(runtime_path))
 
 @pytest.mark.security
-def test_setup_parse_args_accepts_test_flag():
-    bootstrap_module = _load_bootstrap_module()
-    assert bootstrap_module.parse_args(["--test"]).test_mode is True
-
-
-@pytest.mark.security
-def test_write_config_atomic_omits_wordlist_and_rule_paths(tmp_path):
-    bootstrap_module = _load_bootstrap_module()
-    config_path = tmp_path / "config.conf"
-
-    bootstrap_module._write_config_atomic(
-        str(config_path),
-        "127.0.0.1",
-        "5432",
-        "hashcrush",
-        "hashcrush",
-        "secret-db-pass",
-        "secret-key",
-        TEST_DATA_ENCRYPTION_KEY,
-        "/usr/bin/hashcat",
-        5,
-        "/tmp/hashcrush-runtime",
-        "/var/lib/hashcrush",
-        "/etc/hashcrush/ssl/cert.pem",
-        "/etc/hashcrush/ssl/key.pem",
-    )
-
-    parser = ConfigParser(interpolation=None)
-    parser.read(config_path, encoding="utf-8")
-
-    assert parser.has_option("app", "hashcat_bin")
-    assert parser.has_option("app", "data_encryption_key")
-    assert parser.has_option("app", "runtime_path")
-    assert parser.has_option("app", "storage_path")
-    assert not parser.has_option("app", "wordlists_path")
-    assert not parser.has_option("app", "rules_path")
-
-@pytest.mark.security
-def test_hashcrush_cli_setup_subcommand_delegates_to_bootstrap(monkeypatch):
-    cli_module = _load_cli_module()
-    captured = {}
-
-    class _BootstrapModule:
-        @staticmethod
-        def main(argv=None):
-            captured["argv"] = argv
-            return 23
-
-    monkeypatch.setattr(cli_module, "_load_bootstrap_cli", lambda: _BootstrapModule())
-
-    result = cli_module.cli(["hashcrush.py", "setup", "--test"])
-
-    assert result == 23
-    assert captured["argv"] == ["--test"]
-
-
-@pytest.mark.security
-def test_hashcrush_cli_config_path_prefers_hashcrush_config_path_env(monkeypatch, tmp_path):
-    cli_module = _load_cli_module()
-    config_path = tmp_path / "hashcrush.conf"
-    monkeypatch.setenv("HASHCRUSH_CONFIG_PATH", str(config_path))
-
-    assert cli_module._config_path() == config_path
-
-
-@pytest.mark.security
 def test_hashcrush_cli_upgrade_subcommand_runs_schema_upgrade(monkeypatch):
     cli_module = _load_cli_module()
     from hashcrush.db_upgrade import (
@@ -332,60 +233,6 @@ def test_hashcrush_cli_worker_subcommand_runs_executor(tmp_path, monkeypatch):
 
 
 @pytest.mark.security
-def test_upgrade_bootstraps_missing_data_encryption_key_into_config(tmp_path, monkeypatch):
-    cli_module = _load_cli_module()
-    config_dir = tmp_path / "hashcrush"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    config_path = config_dir / "config.conf"
-    parser = ConfigParser(interpolation=None)
-    parser["database"] = {
-        "uri": "postgresql+psycopg://hashcrush:secret@127.0.0.1:5432/hashcrush",
-    }
-    parser["app"] = {
-        "secret_key": "existing-secret",
-        "hashcat_bin": "/usr/bin/hashcat",
-        "runtime_path": "/tmp/hashcrush-runtime",
-        "storage_path": "/tmp/hashcrush-storage",
-        "ssl_cert_path": "/tmp/cert.pem",
-        "ssl_key_path": "/tmp/key.pem",
-    }
-    with open(config_path, "w", encoding="utf-8") as handle:
-        parser.write(handle)
-
-    monkeypatch.setenv("HASHCRUSH_CONFIG_PATH", str(config_path))
-    monkeypatch.delenv("HASHCRUSH_DATA_ENCRYPTION_KEY", raising=False)
-
-    changed = cli_module._ensure_upgrade_data_encryption_key()
-
-    assert changed is True
-    persisted = ConfigParser(interpolation=None)
-    persisted.read(config_path, encoding="utf-8")
-    generated = persisted.get("app", "data_encryption_key", fallback="").strip()
-    assert generated
-
-
-@pytest.mark.security
-def test_hashcrush_cli_serve_refuses_missing_runtime_bootstrap_state(monkeypatch, capsys):
-    cli_module = _load_cli_module()
-    app = _build_app()
-    with app.app_context():
-        db.create_all()
-
-    monkeypatch.setattr(cli_module, "ensure_flask_bcrypt", lambda: None)
-    monkeypatch.setattr(
-        cli_module,
-        "_load_create_app",
-        lambda: (lambda config_overrides=None: app),
-    )
-
-    result = cli_module._run_serve(cli_module._parse_serve_args([]))
-
-    captured = capsys.readouterr()
-    assert result == 1
-    assert "Admin account is missing" in captured.err
-
-
-@pytest.mark.security
 def test_hashcrush_cli_worker_refuses_missing_runtime_bootstrap_state(
     tmp_path, monkeypatch, capsys
 ):
@@ -433,44 +280,6 @@ def test_hashcrush_cli_rejects_unknown_root_command():
 
     assert exc_info.value.code == 2
 
-
-@pytest.mark.security
-def test_setup_seed_test_environment_creates_dummy_fixture_set(tmp_path, monkeypatch):
-    bootstrap_module = _load_bootstrap_module()
-    app = _build_app()
-    runtime_path = tmp_path / "runtime"
-    storage_path = tmp_path / "storage"
-    env_path = tmp_path / ".env.test"
-
-    with app.app_context():
-        db.create_all()
-
-    monkeypatch.setattr(bootstrap_module, "_build_seed_app", lambda: app)
-
-    values = bootstrap_module._seed_test_environment(
-        str(runtime_path),
-        str(storage_path),
-        str(env_path),
-    )
-
-    with app.app_context():
-        assert _count_rows(Users, username=bootstrap_module.E2E_ADMIN_USERNAME) == 1
-        assert _count_rows(Users, username=bootstrap_module.E2E_SECOND_USERNAME) == 1
-        assert _count_rows(Domains, name=bootstrap_module.E2E_DOMAIN_NAME) == 1
-        assert _count_rows(Hashfiles, name=bootstrap_module.E2E_SAMPLE_HASHFILE_NAME) == 1
-        assert _count_rows(Tasks, name=bootstrap_module.E2E_DICTIONARY_TASK_NAME) == 1
-        assert _count_rows(Tasks, name=bootstrap_module.E2E_DICTIONARY_RULE_TASK_NAME) == 1
-        assert _count_rows(Jobs, name=bootstrap_module.E2E_SAMPLE_JOB_NAME) == 1
-        assert _count_rows(Wordlists, name=bootstrap_module.E2E_WORDLIST_NAME) == 1
-        assert _count_rows(Rules, name=bootstrap_module.E2E_RULE_NAME) == 1
-
-    env_text = env_path.read_text(encoding="utf-8")
-    assert "HASHCRUSH_E2E_USERNAME=\"admin\"" in env_text
-    assert bootstrap_module.E2E_ADMIN_PASSWORD in env_text
-    assert values["HASHCRUSH_E2E_DOMAIN_NAME"] == bootstrap_module.E2E_DOMAIN_NAME
-    assert values["HASHCRUSH_E2E_TASK_NAME"] == bootstrap_module.E2E_MASK_TASK_NAME
-    assert values["wordlist_path"].startswith(str((storage_path / "wordlists").resolve()))
-    assert values["rule_path"].startswith(str((storage_path / "rules").resolve()))
 
 @pytest.mark.security
 def test_upgrade_database_initializes_empty_schema_and_tracks_version():
@@ -792,31 +601,6 @@ def test_add_default_tasks_no_longer_depend_on_admin_id():
         task_group = _first_row(TaskGroups, name=default_mask_task_group_name())
         assert task_group is not None
         assert json.loads(task_group.tasks) == [task.id for task in seeded_tasks]
-
-@pytest.mark.security
-def test_seed_initial_runtime_state_creates_admin_and_default_tasks(
-    monkeypatch,
-):
-    bootstrap_module = _load_bootstrap_module()
-    app = _build_app()
-
-    with app.app_context():
-        db.create_all()
-
-    monkeypatch.setattr(bootstrap_module, "_build_seed_app", lambda: app)
-    bootstrap_module._seed_initial_runtime_state(
-        "bootstrap-admin",
-        "LongEnoughBootstrapPassword!",
-    )
-
-    with app.app_context():
-        admin = _first_row(Users, username="bootstrap-admin", admin=True)
-        assert admin is not None
-        assert bcrypt.check_password_hash(admin.password, "LongEnoughBootstrapPassword!")
-        assert _count_rows(Tasks) == 10
-        from hashcrush.setup import default_mask_task_group_name
-
-        assert _first_row(TaskGroups, name=default_mask_task_group_name()) is not None
 
 
 @pytest.mark.security
@@ -1185,65 +969,6 @@ def test_settings_page_renders_without_csrf_template_failure():
         assert b"Save HashCrush Config" not in response.data
         assert b"Deployment configuration is managed through environment variables and config files" in response.data
 
-@pytest.mark.security
-def test_config_prefers_database_uri_from_config(tmp_path, monkeypatch):
-    config_path = tmp_path / "config.conf"
-    config_path.write_text(
-        "[database]\n"
-        "uri = postgresql+psycopg://config-user:config-pass@db.example:5432/hashcrush\n\n"
-        "[app]\n"
-        "secret_key = test-secret\n"
-        "data_encryption_key = test-data-key\n",
-        encoding="utf-8",
-    )
-
-    monkeypatch.delenv("HASHCRUSH_DATABASE_URI", raising=False)
-    monkeypatch.setenv("HASHCRUSH_CONFIG_PATH", str(config_path))
-
-    project_root = Path(__file__).resolve().parents[2]
-    script_path = project_root / "hashcrush" / "config.py"
-    spec = importlib.util.spec_from_file_location(
-        "hashcrush_config_uri_test_module", script_path
-    )
-    config_module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(config_module)
-
-    assert config_module.build_config()["SQLALCHEMY_DATABASE_URI"] == (
-        "postgresql+psycopg://config-user:config-pass@db.example:5432/hashcrush"
-    )
-
-@pytest.mark.security
-def test_config_builds_postgresql_uri_from_discrete_fields(tmp_path, monkeypatch):
-    config_path = tmp_path / "config.conf"
-    config_path.write_text(
-        "[database]\n"
-        "host = db.internal\n"
-        "port = 5433\n"
-        "name = hashcrush_app\n"
-        "username = app-user\n"
-        "password = app-pass\n\n"
-        "[app]\n"
-        "secret_key = test-secret\n"
-        "data_encryption_key = test-data-key\n",
-        encoding="utf-8",
-    )
-
-    monkeypatch.delenv("HASHCRUSH_DATABASE_URI", raising=False)
-    monkeypatch.setenv("HASHCRUSH_CONFIG_PATH", str(config_path))
-
-    project_root = Path(__file__).resolve().parents[2]
-    script_path = project_root / "hashcrush" / "config.py"
-    spec = importlib.util.spec_from_file_location(
-        "hashcrush_config_discrete_test_module", script_path
-    )
-    config_module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(config_module)
-
-    assert config_module.build_config()["SQLALCHEMY_DATABASE_URI"] == (
-        "postgresql+psycopg://app-user:app-pass@db.internal:5433/hashcrush_app"
-    )
 
 
 @pytest.mark.security
@@ -1272,29 +997,6 @@ def test_create_app_uses_fixed_external_wordlists_path(tmp_path):
     assert app.config["EXTERNAL_WORDLISTS_PATH"] == "/mnt/hashcrush-wordlists"
 
 
-@pytest.mark.security
-def test_postgres_test_backend_prefers_configured_app_database_uri(tmp_path, monkeypatch):
-    import tests.db_runtime as db_runtime
-
-    config_path = tmp_path / "config.conf"
-    config_path.write_text(
-        "[database]\n"
-        "host = db.internal\n"
-        "port = 5432\n"
-        "name = hashcrush_app\n"
-        "username = app-user\n"
-        "password = app-pass\n",
-        encoding="utf-8",
-    )
-
-    monkeypatch.delenv("HASHCRUSH_TEST_POSTGRES_URI", raising=False)
-    monkeypatch.delenv("HASHCRUSH_DATABASE_URI", raising=False)
-    monkeypatch.setenv("HASHCRUSH_CONFIG_PATH", str(config_path))
-
-    assert (
-        db_runtime._postgres_base_uri()
-        == "postgresql+psycopg://app-user:app-pass@db.internal:5432/hashcrush_app"
-    )
 
 
 @pytest.mark.security
@@ -1336,41 +1038,6 @@ def test_create_managed_postgres_database_prefers_schema_isolation(monkeypatch):
         "postgresql+psycopg://app-user:app-pass@db.internal:5432/hashcrush_app?"
     )
 
-@pytest.mark.security
-def test_bootstrap_local_postgres_invokes_psql(monkeypatch):
-    bootstrap_module = _load_bootstrap_module()
-    captured = {}
-
-    def fake_run(command, *, input=None, check=None):
-        captured["command"] = command
-        captured["input"] = input.decode("utf-8")
-        captured["check"] = check
-        return None
-
-    monkeypatch.setattr(bootstrap_module.subprocess, "run", fake_run)
-
-    bootstrap_module._bootstrap_local_postgres(
-        "hashcrush",
-        "hashcrush",
-        "strong-password",
-        "5432",
-    )
-
-    assert captured["command"] == [
-        "sudo",
-        "-u",
-        "postgres",
-        "psql",
-        "-v",
-        "ON_ERROR_STOP=1",
-        "-p",
-        "5432",
-        "-d",
-        "postgres",
-    ]
-    assert 'DROP DATABASE IF EXISTS "hashcrush";' in captured["input"]
-    assert 'CREATE ROLE "hashcrush" LOGIN PASSWORD \'strong-password\';' in captured["input"]
-    assert captured["check"] is True
 
 @pytest.mark.security
 def test_get_linecount_handles_newline_edge_cases(tmp_path):

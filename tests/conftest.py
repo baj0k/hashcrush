@@ -10,7 +10,6 @@ from urllib.request import urlopen
 import pytest
 from werkzeug.serving import make_server
 
-from hashcrush.utils.paths import iter_test_env_paths
 from tests.db_runtime import (
     create_managed_postgres_database,
     sqlalchemy_engine_options,
@@ -42,8 +41,11 @@ def load_dotenv(path: Path) -> None:
         if key and key not in os.environ:
             os.environ[key] = value
 
-for dotenv_path in iter_test_env_paths():
-    load_dotenv(dotenv_path)
+_tests_dir = Path(__file__).resolve().parent
+for _dotenv_name in (".env.test",):
+    _candidate = _tests_dir / _dotenv_name
+    load_dotenv(_candidate)
+    load_dotenv(_candidate.parent / _dotenv_name)
 
 
 def _external_e2e_enabled() -> bool:
@@ -357,7 +359,7 @@ def ensure_external_setup(request):
     if "/setup/" in page.url:
         pytest.skip(
             "Live host is in a legacy removed setup flow state; rerun "
-            "`python3 ./hashcrush.py setup` on the current code before external smoke tests."
+            "the bootstrap container on the current code before external smoke tests."
         )
 
     _SETUP_COMPLETED = True

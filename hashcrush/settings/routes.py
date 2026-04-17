@@ -26,9 +26,13 @@ from hashcrush.hibp.service import (
     rescan_mounted_hibp_ntlm_dataset_files,
     validate_mounted_hibp_ntlm_dataset_path,
 )
-from hashcrush.utils.file_ops import save_file
 from hashcrush.utils.formatting import format_bytes as _format_bytes
 from hashcrush.utils.storage_paths import get_runtime_subdir
+from hashcrush.rules.service import (
+    get_external_rule_cache_snapshot,
+    get_external_rule_root,
+    rescan_external_rule_files,
+)
 from hashcrush.wordlists.service import (
     get_external_wordlist_cache_snapshot,
     get_external_wordlist_root,
@@ -115,6 +119,7 @@ def settings_list():
         tmp_folder_size_human = _format_bytes(tmp_folder_size)
         schema_status = get_schema_status()
         wordlist_cache_snapshot = get_external_wordlist_cache_snapshot()
+        rule_cache_snapshot = get_external_rule_cache_snapshot()
         hibp_cache_snapshot = get_mounted_hibp_ntlm_dataset_cache_snapshot()
 
         return render_template(
@@ -130,6 +135,9 @@ def settings_list():
             external_wordlist_root=get_external_wordlist_root(),
             external_wordlist_cache_count=len(wordlist_cache_snapshot.files),
             external_wordlist_cache_refreshed_at=wordlist_cache_snapshot.refreshed_at,
+            external_rule_root=get_external_rule_root(),
+            external_rule_cache_count=len(rule_cache_snapshot.files),
+            external_rule_cache_refreshed_at=rule_cache_snapshot.refreshed_at,
             hibp_dataset_mount_root=get_hibp_ntlm_dataset_mount_root(),
             hibp_cache_count=len(hibp_cache_snapshot.files),
             hibp_cache_refreshed_at=hibp_cache_snapshot.refreshed_at,
@@ -214,11 +222,13 @@ def rescan_mounted_folders():
         abort(403)
 
     wordlist_snapshot = rescan_external_wordlist_files()
+    rule_snapshot = rescan_external_rule_files()
     hibp_snapshot = rescan_mounted_hibp_ntlm_dataset_files()
     flash(
         (
             "Rescanned mounted folders. "
-            f"Cached {len(wordlist_snapshot.files)} wordlist file(s) and "
+            f"Cached {len(wordlist_snapshot.files)} wordlist file(s), "
+            f"{len(rule_snapshot.files)} rule file(s), and "
             f"{len(hibp_snapshot.files)} HIBP dataset file(s)."
         ),
         "success",
@@ -230,53 +240,14 @@ def rescan_mounted_folders():
         details={
             "external_wordlist_root": wordlist_snapshot.root,
             "external_wordlist_count": len(wordlist_snapshot.files),
+            "external_rule_root": rule_snapshot.root,
+            "external_rule_count": len(rule_snapshot.files),
             "hibp_root": hibp_snapshot.root,
             "hibp_count": len(hibp_snapshot.files),
         },
     )
     return redirect(url_for("settings.settings_list") + "#nav-data")
 
-
-@settings.route("/settings/hibp_ntlm_dataset", methods=["POST"])
-@login_required
-def load_hibp_ntlm_dataset():
-    """Queue an offline HIBP NTLM dataset load from the admin UI."""
-
-    if not current_user.admin:
-        abort(403)
-
-    dataset_file = request.files.get("dataset_file")
-    if dataset_file is None or not (dataset_file.filename or "").strip():
-        message = "Choose an offline HIBP NTLM dataset file to upload."
-        if _is_async_upload_request():
-            return _async_error_response("Dataset upload failed.", message)
-        flash(message, "danger")
-        return redirect(url_for("settings.breach_intelligence"))
-
-    version_label = (request.form.get("version_label") or "").strip() or None
-    runtime_tmp_dir = get_runtime_subdir("tmp")
-    os.makedirs(runtime_tmp_dir, exist_ok=True)
-    staged_dataset_path = save_file(runtime_tmp_dir, dataset_file)
-    operation = current_app.extensions["upload_operations"].start_operation(
-        owner_user_id=getattr(current_user, "id", None),
-        operation_type="hibp_ntlm_dataset_upload",
-        redirect_url=url_for("settings.breach_intelligence"),
-        payload={
-            "staged_dataset_path": staged_dataset_path,
-            "version_label": version_label or "",
-            "source_filename": dataset_file.filename or "",
-            "audit_actor": capture_audit_actor(),
-        },
-    )
-
-    if _is_async_upload_request():
-        return _async_operation_response(operation)
-
-    flash(
-        "Offline HIBP NTLM dataset upload queued. Processing will continue in the background.",
-        "info",
-    )
-    return redirect(url_for("settings.breach_intelligence"))
 
 
 @settings.route("/settings/hibp_ntlm_dataset/mounted", methods=["POST"])

@@ -8,8 +8,6 @@ import os
 import signal
 import sys
 import traceback
-from configparser import ConfigParser
-from pathlib import Path
 
 from sqlalchemy import select
 
@@ -47,130 +45,16 @@ def _load_create_app():
     return create_app
 
 
-def _load_bootstrap_cli():
-    repo_root = Path(__file__).resolve().parent
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
-    return importlib.import_module("bootstrap_cli")
-
-
-def _config_path() -> Path:
-    from hashcrush.utils.paths import get_default_config_path
-
-    return get_default_config_path()
-
-
-def _write_config_parser_atomic(config_path: Path, parser: ConfigParser) -> None:
-    config_dir = config_path.parent
-    config_dir.mkdir(parents=True, exist_ok=True)
-    if hasattr(os, "chmod"):
-        try:
-            os.chmod(config_dir, 0o700)
-        except OSError:
-            pass
-
-    tmp_path = config_path.with_name(f".{config_path.name}.tmp")
-    with open(tmp_path, "w", encoding="utf-8", newline="\n") as handle:
-        parser.write(handle)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(tmp_path, config_path)
-    if hasattr(os, "chmod"):
-        try:
-            os.chmod(config_path, 0o600)
-        except OSError:
-            pass
-
-
-def _ensure_upgrade_data_encryption_key() -> bool:
-    """Bootstrap the data encryption key into config for tracked upgrades only."""
-    if str(os.getenv("HASHCRUSH_DATA_ENCRYPTION_KEY") or "").strip():
-        return False
-
-    config_path = _config_path()
-    if not config_path.exists():
-        return False
-
-    parser = ConfigParser()
-    parser.read(config_path, encoding="utf-8")
-    configured_key = parser.get("app", "data_encryption_key", fallback="").strip()
-    if configured_key:
-        return False
-
-    from hashcrush.utils.crypto import generate_data_encryption_key
-
-    if not parser.has_section("app"):
-        parser.add_section("app")
-    parser.set("app", "data_encryption_key", generate_data_encryption_key())
-    _write_config_parser_atomic(config_path, parser)
-    print(
-        "Bootstrapped missing data_encryption_key into config for upgrade compatibility."
-    )
-    return True
-
-
-def _resolve_ssl_context(app) -> tuple[str, str]:
-    """Return validated SSL cert/key paths from app configuration."""
-    cert_path = os.path.abspath(
-        os.path.expanduser(str(app.config.get("SSL_CERT_PATH", "")).strip())
-    )
-    key_path = os.path.abspath(
-        os.path.expanduser(str(app.config.get("SSL_KEY_PATH", "")).strip())
-    )
-
-    if not cert_path:
-        raise RuntimeError("SSL is enabled but SSL_CERT_PATH is not configured.")
-    if not key_path:
-        raise RuntimeError("SSL is enabled but SSL_KEY_PATH is not configured.")
-    if not os.path.isfile(cert_path):
-        raise RuntimeError(f"SSL certificate file not found: {cert_path}")
-    if not os.path.isfile(key_path):
-        raise RuntimeError(f"SSL private key file not found: {key_path}")
-
-    try:
-        with open(cert_path, "rb"):
-            pass
-    except OSError as exc:
-        raise RuntimeError(
-            f"SSL certificate file is not readable: {cert_path}"
-        ) from exc
-
-    try:
-        with open(key_path, "rb"):
-            pass
-    except OSError as exc:
-        raise RuntimeError(
-            f"SSL private key file is not readable: {key_path}"
-        ) from exc
-
-    return cert_path, key_path
-
-
 def _runtime_bootstrap_errors(db) -> list[str]:
     from hashcrush.setup import admin_user_needs_added
 
     errors: list[str] = []
     if admin_user_needs_added(db):
         errors.append(
-            "Admin account is missing. Run `python3 ./hashcrush.py setup` to bootstrap the instance."
+            "Admin account is missing. Check HASHCRUSH_INITIAL_ADMIN_USERNAME and "
+            "HASHCRUSH_INITIAL_ADMIN_PASSWORD environment variables and re-run the bootstrap container."
         )
     return errors
-
-
-def _can_run_break_glass(config_path: Path) -> bool:
-    """Allow break-glass reset for root or config owner."""
-    if not hasattr(os, "geteuid"):
-        return True
-
-    try:
-        owner_uid = config_path.stat().st_uid
-    except FileNotFoundError:
-        return True
-    except OSError:
-        return False
-
-    euid = os.geteuid()
-    return (euid == 0) or (euid == owner_uid)
 
 
 def reset_admin_password_cli(db, bcrypt, admin_username: str | None = None) -> int:
@@ -182,14 +66,6 @@ def reset_admin_password_cli(db, bcrypt, admin_username: str | None = None) -> i
     if not sys.stdin.isatty():
         print(
             "Error: --reset-admin-password requires an interactive terminal.",
-            file=sys.stderr,
-        )
-        return 1
-
-    config_path = _config_path()
-    if not _can_run_break_glass(config_path):
-        print(
-            "Error: run this command as root or as the config owner account.",
             file=sys.stderr,
         )
         return 1
@@ -263,28 +139,13 @@ def _build_root_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=("serve", "worker", "upload-worker", "setup", "upgrade"),
-        help="command to run (default: serve)",
+        choices=("worker", "upload-worker", "upgrade", "reset-admin-password"),
+        help="command to run",
     )
     parser.add_argument(
         "command_args",
         nargs=argparse.REMAINDER,
         help=argparse.SUPPRESS,
-    )
-    return parser
-
-
-def _build_serve_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(allow_abbrev=False)
-    parser.add_argument("--debug", action="store_true", help="increase output verbosity")
-    parser.add_argument(
-        "--reset-admin-password",
-        action="store_true",
-        help="reset an admin password locally and exit",
-    )
-    parser.add_argument(
-        "--admin-username",
-        help="admin username to target with --reset-admin-password",
     )
     return parser
 
@@ -321,23 +182,26 @@ def _build_upload_worker_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_reset_admin_password_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(allow_abbrev=False)
+    parser.add_argument(
+        "--admin-username",
+        help="admin username to target",
+    )
+    return parser
+
+
 def _normalize_cli_args(args: list[str]) -> list[str]:
     if not args:
         return []
     try:
+        from pathlib import Path
+
         if Path(__file__).resolve() == Path(args[0]).resolve():
             return args[1:]
     except OSError:
         pass
     return args
-
-
-def _parse_serve_args(args: list[str]) -> argparse.Namespace:
-    parser = _build_serve_parser()
-    parsed_args = parser.parse_args(args)
-    if parsed_args.admin_username and (not parsed_args.reset_admin_password):
-        parser.error("--admin-username requires --reset-admin-password")
-    return parsed_args
 
 
 def _parse_upgrade_args(args: list[str]) -> argparse.Namespace:
@@ -352,55 +216,8 @@ def _parse_upload_worker_args(args: list[str]) -> argparse.Namespace:
     return _build_upload_worker_parser().parse_args(args)
 
 
-def _run_serve(parsed_args: argparse.Namespace) -> int:
-    ensure_flask_bcrypt()
-
-    create_app = _load_create_app()
-    app = create_app(
-        config_overrides={
-            "ENABLE_LOCAL_EXECUTOR": False,
-        }
-    )
-    with app.app_context():
-        from hashcrush.models import db
-        from hashcrush.users.routes import bcrypt
-
-        if parsed_args.reset_admin_password:
-            return reset_admin_password_cli(db, bcrypt, parsed_args.admin_username)
-
-        bootstrap_errors = _runtime_bootstrap_errors(db)
-        if bootstrap_errors:
-            for error in bootstrap_errors:
-                print(f"Error: {error}", file=sys.stderr)
-            return 1
-
-        print("Done! Running HashCrush! Enjoy.")
-        print(
-            "Warning: `hashcrush.py serve` uses Flask's built-in HTTPS server and is supported for local use only.",
-            file=sys.stderr,
-        )
-        print(
-            "Production topology: run the web app behind a reverse proxy and WSGI server, "
-            "and run `python3 ./hashcrush.py worker` plus "
-            "`python3 ./hashcrush.py upload-worker` separately.",
-            file=sys.stderr,
-        )
-
-    if parsed_args.debug:
-        app_state.debug = True
-    else:
-        app_state.debug = False
-        werkzeug_logger = logging.getLogger("werkzeug")
-        werkzeug_logger.setLevel(logging.ERROR)
-
-    ssl_context = _resolve_ssl_context(app)
-    app.run(
-        host="0.0.0.0",
-        port=8443,
-        ssl_context=ssl_context,
-        debug=parsed_args.debug,
-    )
-    return 0
+def _parse_reset_admin_password_args(args: list[str]) -> argparse.Namespace:
+    return _build_reset_admin_password_parser().parse_args(args)
 
 
 def _run_worker(parsed_args: argparse.Namespace) -> int:
@@ -493,13 +310,7 @@ def _run_upload_worker(parsed_args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_setup(args: list[str]) -> int:
-    bootstrap_cli = _load_bootstrap_cli()
-    return bootstrap_cli.main(args)
-
-
 def _run_upgrade(parsed_args: argparse.Namespace) -> int:
-    _ensure_upgrade_data_encryption_key()
     create_app = _load_create_app()
     app = create_app(
         config_overrides={
@@ -535,30 +346,44 @@ def _run_upgrade(parsed_args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_reset_admin_password(parsed_args: argparse.Namespace) -> int:
+    ensure_flask_bcrypt()
+
+    create_app = _load_create_app()
+    app = create_app(
+        config_overrides={
+            "ENABLE_LOCAL_EXECUTOR": False,
+            "SKIP_RUNTIME_BOOTSTRAP": True,
+        }
+    )
+    with app.app_context():
+        from hashcrush.models import db
+        from hashcrush.users.routes import bcrypt
+
+        return reset_admin_password_cli(db, bcrypt, parsed_args.admin_username)
+
+
 def cli(args) -> int:
     """Process command line args and return an exit code."""
     try:
         argv = _normalize_cli_args(list(args))
 
         if not argv:
-            return _run_serve(_parse_serve_args([]))
+            _build_root_parser().print_help()
+            return 0
 
         first = argv[0]
         if first in {"-h", "--help", "help"}:
             _build_root_parser().print_help()
             return 0
-        if first == "setup":
-            return _run_setup(argv[1:])
         if first == "upgrade":
             return _run_upgrade(_parse_upgrade_args(argv[1:]))
         if first == "worker":
             return _run_worker(_parse_worker_args(argv[1:]))
         if first == "upload-worker":
             return _run_upload_worker(_parse_upload_worker_args(argv[1:]))
-        if first == "serve":
-            return _run_serve(_parse_serve_args(argv[1:]))
-        if first.startswith("-"):
-            return _run_serve(_parse_serve_args(argv))
+        if first == "reset-admin-password":
+            return _run_reset_admin_password(_parse_reset_admin_password_args(argv[1:]))
 
         _build_root_parser().error(f"unknown command: {first}")
         return 2

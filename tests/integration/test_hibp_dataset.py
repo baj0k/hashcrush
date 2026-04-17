@@ -26,18 +26,17 @@ from tests.integration.support import (
 )
 
 
-def _dataset_upload_payload():
-    dataset_text = (
-        "31D6CFE0D16AE931B73C59D7E0C089C0\n"
-        "8846F7EAEE8FB117AD06BDD830B7586C\n"
-    )
-    return {
-        "version_label": "HIBP NTLM April 2026",
-        "dataset_file": (
-            io.BytesIO(dataset_text.encode("utf-8")),
-            "hibp-ntlm.txt",
-        ),
-    }
+_DATASET_TEXT = (
+    "31D6CFE0D16AE931B73C59D7E0C089C0\n"
+    "8846F7EAEE8FB117AD06BDD830B7586C\n"
+)
+
+
+def _write_mounted_dataset(mounted_root):
+    mounted_root.mkdir(parents=True, exist_ok=True)
+    dataset_path = mounted_root / "hibp-ntlm.txt"
+    dataset_path.write_text(_DATASET_TEXT, encoding="utf-8")
+    return dataset_path
 
 
 def _hashfile_upload_payload():
@@ -59,11 +58,15 @@ def _hashfile_upload_payload():
 
 
 def test_admin_can_load_offline_hibp_dataset_and_scan_new_hashfile(tmp_path):
+    mounted_root = tmp_path / "mounted-hibp"
+    dataset_path = _write_mounted_dataset(mounted_root)
+
     app = _build_app(
         {
             "RUNTIME_PATH": str(tmp_path / "runtime"),
             "STORAGE_PATH": str(tmp_path / "storage"),
             "ENABLE_INLINE_UPLOAD_WORKER": True,
+            "HIBP_DATASETS_PATH": str(mounted_root),
         }
     )
 
@@ -75,9 +78,11 @@ def test_admin_can_load_offline_hibp_dataset_and_scan_new_hashfile(tmp_path):
         _login_client_as_user(client, admin)
 
         dataset_response = client.post(
-            "/settings/hibp_ntlm_dataset",
-            data=_dataset_upload_payload(),
-            content_type="multipart/form-data",
+            "/settings/hibp_ntlm_dataset/mounted",
+            data={
+                "version_label": "HIBP NTLM April 2026",
+                "mounted_dataset_path": str(dataset_path),
+            },
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
         assert dataset_response.status_code == 202
@@ -153,11 +158,15 @@ def test_admin_can_load_offline_hibp_dataset_and_scan_new_hashfile(tmp_path):
 
 
 def test_loading_dataset_does_not_backfill_existing_hashes_until_requested(tmp_path):
+    mounted_root = tmp_path / "mounted-hibp"
+    dataset_path = _write_mounted_dataset(mounted_root)
+
     app = _build_app(
         {
             "RUNTIME_PATH": str(tmp_path / "runtime"),
             "STORAGE_PATH": str(tmp_path / "storage"),
             "ENABLE_INLINE_UPLOAD_WORKER": True,
+            "HIBP_DATASETS_PATH": str(mounted_root),
         }
     )
 
@@ -188,9 +197,11 @@ def test_loading_dataset_does_not_backfill_existing_hashes_until_requested(tmp_p
         assert len(matched_exposures) == 0
 
         dataset_response = client.post(
-            "/settings/hibp_ntlm_dataset",
-            data=_dataset_upload_payload(),
-            content_type="multipart/form-data",
+            "/settings/hibp_ntlm_dataset/mounted",
+            data={
+                "version_label": "HIBP NTLM April 2026",
+                "mounted_dataset_path": str(dataset_path),
+            },
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
         assert dataset_response.status_code == 202

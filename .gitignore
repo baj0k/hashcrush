@@ -29,3 +29,10 @@ hashcrush/ssl/
 .vscode/
 *.code-workspace
 .DS_Store
+
+# AI tooling artifacts
+.codex
+.codex/
+.claude/
+.cursor/
+.aider*

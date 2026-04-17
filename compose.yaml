@@ -62,7 +62,7 @@ services:
       HASHCRUSH_STORAGE_PATH: /var/lib/hashcrush
       HASHCRUSH_SSL_CERT_PATH: /etc/hashcrush/ssl/cert.pem
       HASHCRUSH_SSL_KEY_PATH: /etc/hashcrush/ssl/key.pem
-      HASHCRUSH_TRUST_X_FORWARDED_FOR: ${HASHCRUSH_TRUST_X_FORWARDED_FOR:-1}
+      HASHCRUSH_TRUST_X_FORWARDED_FOR: "1"
       HASHCRUSH_INITIAL_ADMIN_USERNAME: ${HASHCRUSH_INITIAL_ADMIN_USERNAME:-admin}
       HASHCRUSH_INITIAL_ADMIN_PASSWORD: ${HASHCRUSH_INITIAL_ADMIN_PASSWORD:?Set HASHCRUSH_INITIAL_ADMIN_PASSWORD in .env}
       HASHCRUSH_BOOTSTRAP_DB_WAIT_SECONDS: ${HASHCRUSH_BOOTSTRAP_DB_WAIT_SECONDS:-60}
@@ -82,12 +82,16 @@ services:
       - hashcrush-storage:/var/lib/hashcrush
       - hashcrush-runtime:/tmp/hashcrush-runtime
       - type: bind
-        source: ${HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH:-./external-wordlists}
+        source: ${HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH:?Set HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH in .env}
         target: /mnt/hashcrush-wordlists
         read_only: true
       - type: bind
-        source: ${HASHCRUSH_HIBP_DATASETS_HOST_PATH:-./hibp-datasets}
+        source: ${HASHCRUSH_HIBP_DATASETS_HOST_PATH:?Set HASHCRUSH_HIBP_DATASETS_HOST_PATH in .env}
         target: /mnt/hashcrush-hibp
+        read_only: true
+      - type: bind
+        source: ${HASHCRUSH_RULES_HOST_PATH:?Set HASHCRUSH_RULES_HOST_PATH in .env}
+        target: /mnt/hashcrush-rules
         read_only: true
       - hashcrush-ssl:/etc/hashcrush/ssl
 
@@ -118,12 +122,16 @@ services:
       - hashcrush-storage:/var/lib/hashcrush
       - hashcrush-runtime:/tmp/hashcrush-runtime
       - type: bind
-        source: ${HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH:-./external-wordlists}
+        source: ${HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH:?Set HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH in .env}
         target: /mnt/hashcrush-wordlists
         read_only: true
       - type: bind
-        source: ${HASHCRUSH_HIBP_DATASETS_HOST_PATH:-./hibp-datasets}
+        source: ${HASHCRUSH_HIBP_DATASETS_HOST_PATH:?Set HASHCRUSH_HIBP_DATASETS_HOST_PATH in .env}
         target: /mnt/hashcrush-hibp
+        read_only: true
+      - type: bind
+        source: ${HASHCRUSH_RULES_HOST_PATH:?Set HASHCRUSH_RULES_HOST_PATH in .env}
+        target: /mnt/hashcrush-rules
         read_only: true
 
   nginx:
@@ -178,12 +186,16 @@ services:
       - hashcrush-storage:/var/lib/hashcrush
       - hashcrush-runtime:/tmp/hashcrush-runtime
       - type: bind
-        source: ${HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH:-./external-wordlists}
+        source: ${HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH:?Set HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH in .env}
         target: /mnt/hashcrush-wordlists
         read_only: true
       - type: bind
-        source: ${HASHCRUSH_HIBP_DATASETS_HOST_PATH:-./hibp-datasets}
+        source: ${HASHCRUSH_HIBP_DATASETS_HOST_PATH:?Set HASHCRUSH_HIBP_DATASETS_HOST_PATH in .env}
         target: /mnt/hashcrush-hibp
+        read_only: true
+      - type: bind
+        source: ${HASHCRUSH_RULES_HOST_PATH:?Set HASHCRUSH_RULES_HOST_PATH in .env}
+        target: /mnt/hashcrush-rules
         read_only: true
 
   nginx-test:
@@ -240,12 +252,16 @@ services:
       - hashcrush-storage:/var/lib/hashcrush
       - hashcrush-runtime:/tmp/hashcrush-runtime
       - type: bind
-        source: ${HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH:-./external-wordlists}
+        source: ${HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH:?Set HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH in .env}
         target: /mnt/hashcrush-wordlists
         read_only: true
       - type: bind
-        source: ${HASHCRUSH_HIBP_DATASETS_HOST_PATH:-./hibp-datasets}
+        source: ${HASHCRUSH_HIBP_DATASETS_HOST_PATH:?Set HASHCRUSH_HIBP_DATASETS_HOST_PATH in .env}
         target: /mnt/hashcrush-hibp
+        read_only: true
+      - type: bind
+        source: ${HASHCRUSH_RULES_HOST_PATH:?Set HASHCRUSH_RULES_HOST_PATH in .env}
+        target: /mnt/hashcrush-rules
         read_only: true
 
   worker:
@@ -277,12 +293,16 @@ services:
       - hashcrush-storage:/var/lib/hashcrush
       - hashcrush-runtime:/tmp/hashcrush-runtime
       - type: bind
-        source: ${HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH:-./external-wordlists}
+        source: ${HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH:?Set HASHCRUSH_EXTERNAL_WORDLISTS_HOST_PATH in .env}
         target: /mnt/hashcrush-wordlists
         read_only: true
       - type: bind
-        source: ${HASHCRUSH_HIBP_DATASETS_HOST_PATH:-./hibp-datasets}
+        source: ${HASHCRUSH_HIBP_DATASETS_HOST_PATH:?Set HASHCRUSH_HIBP_DATASETS_HOST_PATH in .env}
         target: /mnt/hashcrush-hibp
+        read_only: true
+      - type: bind
+        source: ${HASHCRUSH_RULES_HOST_PATH:?Set HASHCRUSH_RULES_HOST_PATH in .env}
+        target: /mnt/hashcrush-rules
         read_only: true
     deploy:
       resources:

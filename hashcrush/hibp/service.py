@@ -33,6 +33,10 @@ from hashcrush.utils.mounted_file_cache import (
     rescan_mounted_files,
 )
 from hashcrush.utils.secret_storage import decode_ciphertext_from_storage
+from hashcrush.utils.paths import (
+    is_path_within_root as _is_path_within_root,
+    normalize_path as _normalize_path,
+)
 from hashcrush.utils.storage_paths import get_storage_subdir
 
 HIBP_NTLM_KIND = "hibp_ntlm"
@@ -44,23 +48,6 @@ _PREFIX_WIDTH = 5
 _PREFIX_SPACE = 16**_PREFIX_WIDTH
 _PREFIX_OFFSET_VERSION = 1
 _LMDB_DATASET_VERSION = 1
-
-
-def _normalize_path(value: str | None) -> str:
-    return os.path.realpath(
-        os.path.abspath(os.path.expanduser(str(value or "").strip()))
-    )
-
-
-def _is_path_within_root(path: str | None, root: str | None) -> bool:
-    normalized_path = _normalize_path(path)
-    normalized_root = _normalize_path(root)
-    if not normalized_path or not normalized_root:
-        return False
-    try:
-        return os.path.commonpath([normalized_path, normalized_root]) == normalized_root
-    except ValueError:
-        return False
 
 
 def get_hibp_ntlm_dataset_mount_root() -> str:

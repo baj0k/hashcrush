@@ -2,25 +2,15 @@
 {% block header %}
 <div class="hc-page-header">
     <h1>Add Wordlist</h1>
-    <p class="text-muted">Upload a managed plaintext wordlist or register a large mounted file without copying it into app storage.</p>
+    <p class="text-muted">Register a mounted read-only wordlist file.</p>
 </div>
 {% endblock header %}
 {% block content %}
 <div class="content-section">
-    <form method="POST" action="" enctype="multipart/form-data" data-upload-progress-form="true" data-upload-progress-no-file="true">
+    <form method="POST" action="" data-upload-progress-form="true" data-upload-progress-no-file="true">
         {{ form.hidden_tag() }}
         <input type="hidden" name="next" value="{{ next_url }}">
         <fieldset class="form-group">
-            <div class="form-group">
-                {{ form.source_mode.label(class="form-control-label") }}
-                {{ form.source_mode(
-                    class="form-control form-control-lg",
-                    **{
-                        "data-toggle-group": "wordlist-source",
-                    }
-                ) }}
-                <small class="text-muted d-block">Use uploads for normal shared lists and mounted-file registration for very large static lists.</small>
-            </div>
             <div class="form-group">
                 {{ form.name.label(class="form-control-label") }}
                 {% if form.name.errors %}
@@ -35,54 +25,39 @@
                 {% endif %}
                 <small class="text-muted d-block">Optional. If left blank, the selected filename will be used.</small>
             </div>
-            <div data-toggle-group-section="wordlist-source" data-toggle-values="upload">
-                <div class="form-group">
-                    {{ form.upload.label(class="form-control-label") }}
-                    {{ form.upload(class="hc-file-input hc-file-input--wide") }}
-                    <small class="text-muted d-block">Upload a newline-delimited <code>.txt</code> wordlist file into managed app storage.</small>
-                    {% if form.upload.errors %}
-                        {% for error in form.upload.errors %}
-                            <span class="text-danger d-block">{{ error }}</span>
+            <div class="form-group">
+                {{ form.external_path.label(class="form-control-label") }}
+                {% if external_wordlist_files %}
+                    <select id="{{ form.external_path.id }}" name="{{ form.external_path.name }}" class="form-control form-control-lg{% if form.external_path.errors %} is-invalid{% endif %}">
+                        {% if external_wordlist_files|length != 1 %}
+                        <option value="">Choose a mounted wordlist file</option>
+                        {% endif %}
+                        {% for mounted_path in external_wordlist_files %}
+                        <option value="{{ mounted_path }}" {% if mounted_path == selected_external_path %}selected{% endif %}>{{ mounted_path }}</option>
                         {% endfor %}
-                    {% endif %}
-                </div>
-            </div>
-            <div data-toggle-group-section="wordlist-source" data-toggle-values="external">
-                <div class="form-group">
-                    {{ form.external_path.label(class="form-control-label") }}
-                    {% if external_wordlist_files %}
-                        <select id="{{ form.external_path.id }}" name="{{ form.external_path.name }}" class="form-control form-control-lg{% if form.external_path.errors %} is-invalid{% endif %}">
-                            {% if external_wordlist_files|length != 1 %}
-                            <option value="">Choose a mounted wordlist file</option>
-                            {% endif %}
-                            {% for mounted_path in external_wordlist_files %}
-                            <option value="{{ mounted_path }}" {% if mounted_path == selected_external_path %}selected{% endif %}>{{ mounted_path }}</option>
+                    </select>
+                    {% if form.external_path.errors %}
+                        <div class="invalid-feedback">
+                            {% for error in form.external_path.errors %}
+                                <span>{{ error }}</span>
                             {% endfor %}
-                        </select>
-                        {% if form.external_path.errors %}
-                            <div class="invalid-feedback">
-                                {% for error in form.external_path.errors %}
-                                    <span>{{ error }}</span>
-                                {% endfor %}
-                            </div>
-                        {% endif %}
-                    {% else %}
-                        {{ form.external_path(class="form-control form-control-lg", placeholder=(external_root ~ "/example.txt") if external_root else "/mnt/hashcrush-wordlists/example.txt") }}
-                        <small class="text-muted d-block">
-                            No cached readable files were found under <code>{{ external_root }}</code>. You can still enter a mounted path manually or use <a href="{{ url_for('settings.settings_list') }}#nav-data">Settings</a> to rescan mounted folders.
-                        </small>
+                        </div>
                     {% endif %}
+                {% else %}
+                    {{ form.external_path(class="form-control form-control-lg", placeholder=(external_root ~ "/example.txt") if external_root else "/mnt/hashcrush-wordlists/example.txt") }}
                     <small class="text-muted d-block">
-                        Register a mounted read-only file instead of uploading it.
-                        {% if external_root %}
-                        Allowed path prefix: <code>{{ external_root }}</code>
-                        {% endif %}
+                        No cached readable files were found under <code>{{ external_root }}</code>. You can still enter a mounted path manually or use <a href="{{ url_for('settings.settings_list') }}#nav-data">Settings</a> to rescan mounted folders.
                     </small>
-                </div>
-                <div class="alert alert-light border">
-                    <strong>Mounted-file mode</strong>
-                    <div class="mt-2">HashCrush stores the container path and reads the file in place. Deleting the wordlist here only unregisters it from the app; it does not remove the mounted file from disk.</div>
-                </div>
+                {% endif %}
+                <small class="text-muted d-block">
+                    {% if external_root %}
+                    Allowed path prefix: <code>{{ external_root }}</code>
+                    {% endif %}
+                </small>
+            </div>
+            <div class="alert alert-light border">
+                <strong>Mounted-file mode</strong>
+                <div class="mt-2">HashCrush stores the container path and reads the file in place. Deleting the wordlist here only unregisters it from the app; it does not remove the mounted file from disk.</div>
             </div>
         </fieldset>
         <div class="hc-upload-status hc-hidden" data-upload-status aria-live="polite">
@@ -93,7 +68,7 @@
             <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
                 <div class="progress-bar" data-upload-progress-bar style="width: 0%" aria-valuenow="0">0%</div>
             </div>
-            <small class="text-muted d-block mt-2">Large uploads and mounted-file scans continue processing after you move to another page.</small>
+            <small class="text-muted d-block mt-2">Large mounted-file scans continue processing after you move to another page.</small>
         </div>
         <div class="hc-form-actions">
             <a class="btn btn-secondary" href="{{ next_url }}">Back</a>

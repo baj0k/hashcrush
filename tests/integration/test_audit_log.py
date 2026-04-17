@@ -347,10 +347,16 @@ def test_jobs_start_records_audit_event():
 
 @pytest.mark.security
 def test_rules_add_records_audit_event(tmp_path):
+    external_root = tmp_path / "mounted-rules"
+    external_root.mkdir(parents=True, exist_ok=True)
+    external_path = external_root / "best.rule"
+    external_path.write_text(":\n", encoding="utf-8")
+
     app = _build_app(
         {
             "RUNTIME_PATH": str(tmp_path / "runtime"),
             "STORAGE_PATH": str(tmp_path / "storage"),
+            "EXTERNAL_RULES_PATH": str(external_root),
         }
     )
     with app.app_context():
@@ -365,7 +371,7 @@ def test_rules_add_records_audit_event(tmp_path):
             "/rules/add",
             data={
                 "name": "audit-rule",
-                "upload": (io.BytesIO(b":\n"), "best.rule"),
+                "external_path": str(external_path),
             },
         )
 

@@ -1,4 +1,4 @@
-"""Shared helpers for managed and externally mounted wordlists."""
+"""Shared helpers for externally mounted wordlists."""
 
 from __future__ import annotations
 
@@ -13,32 +13,7 @@ from hashcrush.utils.mounted_file_cache import (
     load_mounted_file_cache,
     rescan_mounted_files,
 )
-from hashcrush.utils.storage_paths import get_storage_subdir
-
-
-def _normalize_path(value: str | None) -> str:
-    return os.path.realpath(
-        os.path.abspath(os.path.expanduser(str(value or "").strip()))
-    )
-
-
-def is_path_within_root(path: str | None, root: str | None) -> bool:
-    """Return True when path resolves under root."""
-    normalized_path = _normalize_path(path)
-    normalized_root = _normalize_path(root)
-    if not normalized_path or not normalized_root:
-        return False
-    try:
-        return os.path.commonpath([normalized_path, normalized_root]) == normalized_root
-    except ValueError:
-        return False
-
-
-def managed_wordlists_dir() -> str:
-    """Return the managed storage directory for uploaded wordlists."""
-    path = get_storage_subdir("wordlists")
-    os.makedirs(path, exist_ok=True)
-    return path
+from hashcrush.utils.paths import is_path_within_root, normalize_path as _normalize_path
 
 
 def get_external_wordlist_root() -> str:
@@ -81,14 +56,9 @@ def rescan_external_wordlist_files() -> MountedFileCacheSnapshot:
     )
 
 
-def is_managed_wordlist_path(stored_path: str | None) -> bool:
-    """Return True when a stored wordlist path lives under managed storage."""
-    return is_path_within_root(stored_path, managed_wordlists_dir())
-
-
 def is_external_wordlist_path(stored_path: str | None) -> bool:
     """Return True when a stored wordlist path lives under an external root."""
-    if not stored_path or is_managed_wordlist_path(stored_path):
+    if not stored_path:
         return False
     root = get_external_wordlist_root()
     if not root:
@@ -101,23 +71,9 @@ def get_wordlist_source(wordlist: Wordlists) -> str:
     normalized_type = str(wordlist.type or "").strip().lower()
     if normalized_type == "dynamic":
         return "dynamic"
-    if is_managed_wordlist_path(wordlist.path):
-        return "managed"
     if is_external_wordlist_path(wordlist.path):
         return "external"
     return "static"
-
-
-def remove_managed_wordlist_file(stored_path: str) -> None:
-    """Delete only managed uploaded wordlist files."""
-    if not is_managed_wordlist_path(stored_path):
-        return
-    resolved_path = _normalize_path(stored_path)
-    if os.path.isfile(resolved_path):
-        try:
-            os.remove(resolved_path)
-        except OSError:
-            pass
 
 
 def derive_wordlist_name(form_name: str | None, fallback_path: str | None) -> str:

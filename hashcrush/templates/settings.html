@@ -52,6 +52,18 @@
                             </td>
                         </tr>
                         <tr>
+                            <td>Mounted Rules Cache</td>
+                            <td>
+                                {{ external_rule_cache_count }} file(s)
+                                {% if external_rule_cache_refreshed_at %}
+                                <div class="text-muted small">Last refreshed: {{ external_rule_cache_refreshed_at }}</div>
+                                {% else %}
+                                <div class="text-muted small">Not scanned yet.</div>
+                                {% endif %}
+                                <div class="text-muted small">Root: <code>{{ external_rule_root }}</code></div>
+                            </td>
+                        </tr>
+                        <tr>
                             <td>Mounted HIBP Cache</td>
                             <td>
                                 {{ hibp_cache_count }} file(s)

@@ -6,13 +6,10 @@ import atexit
 import os
 import secrets
 import threading
-from configparser import ConfigParser
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.pool import NullPool
-
-from hashcrush.utils.paths import get_default_config_path
 
 TEST_POSTGRES_URI_ENV = "HASHCRUSH_TEST_POSTGRES_URI"
 TEST_POSTGRES_ADMIN_URI_ENV = "HASHCRUSH_TEST_POSTGRES_ADMIN_URI"
@@ -67,29 +64,6 @@ def _postgres_base_uri() -> str:
     runtime_uri = (os.getenv("HASHCRUSH_DATABASE_URI") or "").strip()
     if runtime_uri:
         return runtime_uri
-
-    config_path = get_default_config_path()
-    parser = ConfigParser(interpolation=None)
-    parser.read(config_path)
-
-    config_uri = parser.get("database", "uri", fallback="").strip()
-    if config_uri:
-        return config_uri
-
-    host = parser.get("database", "host", fallback="").strip()
-    port = parser.get("database", "port", fallback="5432").strip()
-    name = parser.get("database", "name", fallback="").strip()
-    username = parser.get("database", "username", fallback="").strip()
-    password = parser.get("database", "password", fallback="").strip()
-    if host and port and name and username and password:
-        return URL.create(
-            "postgresql+psycopg",
-            username=username,
-            password=password,
-            host=host,
-            port=int(port),
-            database=name,
-        ).render_as_string(hide_password=False)
 
     return DEFAULT_LOCAL_TEST_POSTGRES_URI
 

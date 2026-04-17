@@ -99,11 +99,15 @@ def test_task_groups_add_handles_integrity_error_cleanly(monkeypatch):
         assert _count_rows(TaskGroups) == 0
 
 @pytest.mark.security
-def test_wordlists_add_uploads_static_wordlist_to_managed_runtime(tmp_path):
+def test_wordlists_add_registers_mounted_wordlist(tmp_path):
+    external_root = tmp_path / "mounted-wordlists"
+    external_root.mkdir(parents=True, exist_ok=True)
+    external_path = external_root / "registered.txt"
+    external_path.write_text("password\nletmein\n", encoding="utf-8")
+
     app = _build_app(
         {
-            "RUNTIME_PATH": str(tmp_path / "runtime"),
-            "STORAGE_PATH": str(tmp_path / "storage"),
+            "EXTERNAL_WORDLISTS_PATH": str(external_root),
         }
     )
     with app.app_context():
@@ -117,27 +121,31 @@ def test_wordlists_add_uploads_static_wordlist_to_managed_runtime(tmp_path):
         response = client.post(
             "/wordlists/add",
             data={
-                "name": "uploaded-wordlist",
-                "upload": (io.BytesIO(b"password\nletmein\n"), "uploaded.txt"),
+                "name": "registered-wordlist",
+                "external_path": str(external_path),
             },
         )
 
         assert response.status_code == 302
-        wordlist = _first_row(Wordlists, name="uploaded-wordlist")
+        wordlist = _first_row(Wordlists, name="registered-wordlist")
         assert wordlist is not None
         assert wordlist.type == "static"
-        assert wordlist.path.startswith(
-            str((tmp_path / "storage" / "wordlists").resolve())
-        )
-        assert Path(wordlist.path).read_text(encoding="utf-8") == "password\nletmein\n"
+        assert wordlist.path == str(external_path.resolve())
+        assert external_path.exists()
 
 
 @pytest.mark.security
 def test_wordlists_add_supports_async_processing_progress(tmp_path):
+    external_root = tmp_path / "mounted-wordlists"
+    external_root.mkdir(parents=True, exist_ok=True)
+    external_path = external_root / "async.txt"
+    external_path.write_text("password\nletmein\n", encoding="utf-8")
+
     app = _build_app(
         {
             "RUNTIME_PATH": str(tmp_path / "runtime"),
             "STORAGE_PATH": str(tmp_path / "storage"),
+            "EXTERNAL_WORDLISTS_PATH": str(external_root),
         }
     )
     with app.app_context():
@@ -152,7 +160,7 @@ def test_wordlists_add_supports_async_processing_progress(tmp_path):
             "/wordlists/add",
             data={
                 "name": "async-wordlist",
-                "upload": (io.BytesIO(b"password\nletmein\n"), "async.txt"),
+                "external_path": str(external_path),
             },
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
@@ -170,7 +178,7 @@ def test_wordlists_add_supports_async_processing_progress(tmp_path):
 
         final_payload = _wait_for_upload_operation(client, start_payload["status_url"])
         assert final_payload["success"] is True
-        assert final_payload["redirect_url"] == "/wordlists"
+        assert final_payload["redirect_url"].startswith("/wordlists")
 
         db.session.expire_all()
         persisted_operation = db.session.get(UploadOperations, operation_id)
@@ -179,7 +187,7 @@ def test_wordlists_add_supports_async_processing_progress(tmp_path):
 
         wordlist = _first_row(Wordlists, name="async-wordlist")
         assert wordlist is not None
-        assert Path(wordlist.path).read_text(encoding="utf-8") == "password\nletmein\n"
+        assert wordlist.path == str(external_path.resolve())
 
         entry = _latest_audit_entry()
         assert entry is not None
@@ -202,8 +210,7 @@ def test_wordlists_add_form_includes_upload_progress_status_panel():
         assert response.status_code == 200
         assert b'data-upload-progress-form="true"' in response.data
         assert b'data-upload-progress-no-file="true"' in response.data
-        assert b"Large uploads and mounted-file scans continue processing" in response.data
-        assert b"Register Mounted File" in response.data
+        assert b"Register Wordlist" in response.data
 
 
 @pytest.mark.security
@@ -265,7 +272,6 @@ def test_wordlists_add_registers_external_wordlist_without_copying(tmp_path):
         response = client.post(
             "/wordlists/add",
             data={
-                "source_mode": "external",
                 "name": "mounted-wordlist",
                 "external_path": str(external_path),
             },
@@ -303,7 +309,6 @@ def test_wordlists_add_rejects_external_path_outside_allowed_roots(tmp_path):
         response = client.post(
             "/wordlists/add",
             data={
-                "source_mode": "external",
                 "name": "outside-wordlist",
                 "external_path": str(disallowed_path),
             },
@@ -339,7 +344,6 @@ def test_wordlists_add_supports_async_external_registration(tmp_path):
         response = client.post(
             "/wordlists/add",
             data={
-                "source_mode": "external",
                 "name": "async-mounted-wordlist",
                 "external_path": str(external_path),
             },
@@ -457,11 +461,15 @@ def test_wordlist_detail_page_shows_usage_and_dynamic_delete_notice():
 
 
 @pytest.mark.security
-def test_rules_add_uploads_rule_to_managed_runtime(tmp_path):
+def test_rules_add_registers_mounted_rule(tmp_path):
+    external_root = tmp_path / "mounted-rules"
+    external_root.mkdir(parents=True, exist_ok=True)
+    external_path = external_root / "registered.rule"
+    external_path.write_text(":\n", encoding="utf-8")
+
     app = _build_app(
         {
-            "RUNTIME_PATH": str(tmp_path / "runtime"),
-            "STORAGE_PATH": str(tmp_path / "storage"),
+            "EXTERNAL_RULES_PATH": str(external_root),
         }
     )
     with app.app_context():
@@ -475,24 +483,30 @@ def test_rules_add_uploads_rule_to_managed_runtime(tmp_path):
         response = client.post(
             "/rules/add",
             data={
-                "name": "uploaded-rule",
-                "upload": (io.BytesIO(b":\n"), "uploaded.rule"),
+                "name": "registered-rule",
+                "external_path": str(external_path),
             },
         )
 
         assert response.status_code == 302
-        rule = _first_row(Rules, name="uploaded-rule")
+        rule = _first_row(Rules, name="registered-rule")
         assert rule is not None
-        assert rule.path.startswith(str((tmp_path / "storage" / "rules").resolve()))
-        assert Path(rule.path).read_text(encoding="utf-8") == ":\n"
+        assert rule.path == str(external_path.resolve())
+        assert external_path.exists()
 
 
 @pytest.mark.security
 def test_rules_add_supports_async_processing_progress(tmp_path):
+    external_root = tmp_path / "mounted-rules"
+    external_root.mkdir(parents=True, exist_ok=True)
+    external_path = external_root / "async.rule"
+    external_path.write_text(":\n", encoding="utf-8")
+
     app = _build_app(
         {
             "RUNTIME_PATH": str(tmp_path / "runtime"),
             "STORAGE_PATH": str(tmp_path / "storage"),
+            "EXTERNAL_RULES_PATH": str(external_root),
         }
     )
     with app.app_context():
@@ -507,7 +521,7 @@ def test_rules_add_supports_async_processing_progress(tmp_path):
             "/rules/add",
             data={
                 "name": "async-rule",
-                "upload": (io.BytesIO(b":\n"), "async.rule"),
+                "external_path": str(external_path),
             },
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
@@ -519,11 +533,11 @@ def test_rules_add_supports_async_processing_progress(tmp_path):
 
         final_payload = _wait_for_upload_operation(client, start_payload["status_url"])
         assert final_payload["success"] is True
-        assert final_payload["redirect_url"] == "/rules"
+        assert final_payload["redirect_url"].startswith("/rules")
 
         rule = _first_row(Rules, name="async-rule")
         assert rule is not None
-        assert Path(rule.path).read_text(encoding="utf-8") == ":\n"
+        assert rule.path == str(external_path.resolve())
 
         entry = _latest_audit_entry()
         assert entry is not None
@@ -622,10 +636,16 @@ def test_task_group_assignment_page_uses_natural_task_ordering():
 
 @pytest.mark.security
 def test_wordlists_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
+    external_root = tmp_path / "mounted-wordlists"
+    external_root.mkdir(parents=True, exist_ok=True)
+    external_path = external_root / "wordlist.txt"
+    external_path.write_text("password\n", encoding="utf-8")
+
     app = _build_app(
         {
             "RUNTIME_PATH": str(tmp_path / "runtime"),
             "STORAGE_PATH": str(tmp_path / "storage"),
+            "EXTERNAL_WORDLISTS_PATH": str(external_root),
         }
     )
     with app.app_context():
@@ -637,7 +657,7 @@ def test_wordlists_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
         _login_client_as_user(client, admin)
 
         monkeypatch.setattr(
-            "hashcrush.wordlists.routes.db.session.commit",
+            "hashcrush.wordlists.service.db.session.commit",
             lambda: (_ for _ in ()).throw(_integrity_error()),
         )
 
@@ -645,7 +665,7 @@ def test_wordlists_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
             "/wordlists/add",
             data={
                 "name": "conflict-wordlist",
-                "upload": (io.BytesIO(b"password\n"), "wordlist.txt"),
+                "external_path": str(external_path),
             },
         )
         assert response.status_code == 200
@@ -654,10 +674,16 @@ def test_wordlists_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
 
 @pytest.mark.security
 def test_rules_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
+    external_root = tmp_path / "mounted-rules"
+    external_root.mkdir(parents=True, exist_ok=True)
+    external_path = external_root / "best.rule"
+    external_path.write_text(":\n", encoding="utf-8")
+
     app = _build_app(
         {
             "RUNTIME_PATH": str(tmp_path / "runtime"),
             "STORAGE_PATH": str(tmp_path / "storage"),
+            "EXTERNAL_RULES_PATH": str(external_root),
         }
     )
     with app.app_context():
@@ -669,7 +695,7 @@ def test_rules_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
         _login_client_as_user(client, admin)
 
         monkeypatch.setattr(
-            "hashcrush.rules.routes.db.session.commit",
+            "hashcrush.rules.service.db.session.commit",
             lambda: (_ for _ in ()).throw(_integrity_error()),
         )
 
@@ -677,11 +703,11 @@ def test_rules_add_handles_integrity_error_cleanly(tmp_path, monkeypatch):
             "/rules/add",
             data={
                 "name": "conflict-rule",
-                "upload": (io.BytesIO(b":\n"), "best.rule"),
+                "external_path": str(external_path),
             },
         )
         assert response.status_code == 200
-        assert b"Rule file could not be uploaded" in response.data
+        assert b"Rule could not be saved" in response.data
         assert _count_rows(Rules) == 0
 
 @pytest.mark.security
@@ -1196,11 +1222,17 @@ def test_tasks_edit_prefills_selected_wordlist_and_rule_from_query_params():
 
 
 @pytest.mark.security
-def test_wordlists_add_redirects_back_to_tasks_add_with_selected_wordlist():
+def test_wordlists_add_redirects_back_to_tasks_add_with_selected_wordlist(tmp_path):
+    external_root = tmp_path / "mounted-wordlists"
+    external_root.mkdir(parents=True, exist_ok=True)
+    external_path = external_root / "return-wordlist.txt"
+    external_path.write_text("password\n", encoding="utf-8")
+
     app = _build_app(
         {
-            "RUNTIME_PATH": "/tmp/hashcrush-runtime-wordlist-return",
-            "STORAGE_PATH": "/tmp/hashcrush-storage-wordlist-return",
+            "RUNTIME_PATH": str(tmp_path / "runtime"),
+            "STORAGE_PATH": str(tmp_path / "storage"),
+            "EXTERNAL_WORDLISTS_PATH": str(external_root),
         }
     )
     with app.app_context():
@@ -1227,7 +1259,7 @@ def test_wordlists_add_redirects_back_to_tasks_add_with_selected_wordlist():
             },
             data={
                 "name": "return-wordlist",
-                "upload": (io.BytesIO(b"password\n"), "return-wordlist.txt"),
+                "external_path": str(external_path),
             },
         )
 
@@ -1243,11 +1275,17 @@ def test_wordlists_add_redirects_back_to_tasks_add_with_selected_wordlist():
 
 
 @pytest.mark.security
-def test_wordlists_add_redirects_back_to_tasks_edit_with_selected_wordlist():
+def test_wordlists_add_redirects_back_to_tasks_edit_with_selected_wordlist(tmp_path):
+    external_root = tmp_path / "mounted-wordlists"
+    external_root.mkdir(parents=True, exist_ok=True)
+    external_path = external_root / "edit-return-wordlist.txt"
+    external_path.write_text("password\n", encoding="utf-8")
+
     app = _build_app(
         {
-            "RUNTIME_PATH": "/tmp/hashcrush-runtime-wordlist-edit-return",
-            "STORAGE_PATH": "/tmp/hashcrush-storage-wordlist-edit-return",
+            "RUNTIME_PATH": str(tmp_path / "runtime"),
+            "STORAGE_PATH": str(tmp_path / "storage"),
+            "EXTERNAL_WORDLISTS_PATH": str(external_root),
         }
     )
     with app.app_context():
@@ -1290,7 +1328,7 @@ def test_wordlists_add_redirects_back_to_tasks_edit_with_selected_wordlist():
             },
             data={
                 "name": "edit-return-wordlist",
-                "upload": (io.BytesIO(b"password\n"), "edit-return-wordlist.txt"),
+                "external_path": str(external_path),
             },
         )
 
@@ -1306,11 +1344,17 @@ def test_wordlists_add_redirects_back_to_tasks_edit_with_selected_wordlist():
 
 
 @pytest.mark.security
-def test_rules_add_redirects_back_to_tasks_add_with_selected_rule():
+def test_rules_add_redirects_back_to_tasks_add_with_selected_rule(tmp_path):
+    external_root = tmp_path / "mounted-rules"
+    external_root.mkdir(parents=True, exist_ok=True)
+    external_path = external_root / "return.rule"
+    external_path.write_text(":\n", encoding="utf-8")
+
     app = _build_app(
         {
-            "RUNTIME_PATH": "/tmp/hashcrush-runtime-rule-return",
-            "STORAGE_PATH": "/tmp/hashcrush-storage-rule-return",
+            "RUNTIME_PATH": str(tmp_path / "runtime"),
+            "STORAGE_PATH": str(tmp_path / "storage"),
+            "EXTERNAL_RULES_PATH": str(external_root),
         }
     )
     with app.app_context():
@@ -1338,7 +1382,7 @@ def test_rules_add_redirects_back_to_tasks_add_with_selected_rule():
             },
             data={
                 "name": "return-rule",
-                "upload": (io.BytesIO(b":\n"), "return.rule"),
+                "external_path": str(external_path),
             },
         )
 
@@ -1354,11 +1398,17 @@ def test_rules_add_redirects_back_to_tasks_add_with_selected_rule():
 
 
 @pytest.mark.security
-def test_rules_add_redirects_back_to_tasks_edit_with_selected_rule():
+def test_rules_add_redirects_back_to_tasks_edit_with_selected_rule(tmp_path):
+    external_root = tmp_path / "mounted-rules"
+    external_root.mkdir(parents=True, exist_ok=True)
+    external_path = external_root / "edit-return.rule"
+    external_path.write_text(":\n", encoding="utf-8")
+
     app = _build_app(
         {
-            "RUNTIME_PATH": "/tmp/hashcrush-runtime-rule-edit-return",
-            "STORAGE_PATH": "/tmp/hashcrush-storage-rule-edit-return",
+            "RUNTIME_PATH": str(tmp_path / "runtime"),
+            "STORAGE_PATH": str(tmp_path / "storage"),
+            "EXTERNAL_RULES_PATH": str(external_root),
         }
     )
     with app.app_context():
@@ -1401,7 +1451,7 @@ def test_rules_add_redirects_back_to_tasks_edit_with_selected_rule():
             },
             data={
                 "name": "edit-return-rule",
-                "upload": (io.BytesIO(b":\n"), "edit-return.rule"),
+                "external_path": str(external_path),
             },
         )
 
